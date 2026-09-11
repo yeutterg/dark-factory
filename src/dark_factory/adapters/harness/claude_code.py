@@ -183,6 +183,12 @@ class ClaudeCodeHarness:
                         initialized = True
                     if kind == "assistant":
                         msg = item.get("message", {})
+                        if item.get("is_api_error_message") is True:
+                            detail = " ".join(
+                                p.get("text", "") for p in msg.get("content", [])
+                                if p.get("type") == "text"
+                            )
+                            raise ValueError("Claude provider error: " + detail[:1000])
                         if terminal is not None or msg.get("model") != route["model"]:
                             raise ValueError(
                                 "Claude output differs from approved model"

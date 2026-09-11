@@ -263,3 +263,15 @@ def test_worker_pins_claude_version(tmp_path):
     )
     with pytest.raises(RuntimeError, match="version differs"):
         worker._harness({"harness": "claude-code", "harness_version": "wrong"})
+
+
+def test_native_provider_error_is_preserved_without_accepting_synthetic_output(tmp_path):
+    events = stream()
+    events[1]["is_api_error_message"] = True
+    events[1]["message"] = {
+        "model": "<synthetic>",
+        "content": [{"type": "text", "text": "API Error: DNS ENOTFOUND"}],
+    }
+    result = run(tmp_path, events)
+    assert not result.ok
+    assert "Claude provider error: API Error: DNS ENOTFOUND" in result.error

@@ -91,6 +91,11 @@ class NativeEnvironment:
             lines.append(f"(deny file-write* (subpath {json.dumps(str(path))}))")
         if network:
             lines.append("(allow network-outbound (remote tcp))")
+            # macOS resolves hostnames through this system Unix socket. TCP
+            # access alone permits numeric hosts but fails DNS with ENOTFOUND.
+            lines.append(
+                '(allow network-outbound (remote unix-socket (path "/private/var/run/mDNSResponder")))'
+            )
         policy = runtime / "sandbox.sb"
         policy.write_text("\n".join(lines))
         return ["/usr/bin/sandbox-exec", "-f", str(policy)]
