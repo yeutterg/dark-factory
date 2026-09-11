@@ -1,0 +1,38 @@
+{
+  "root": "/var/folders/dg/fkd8bpgj21n2rc7bxz32ldgm0000gn/T/df-bootstrap-coverage-7ungjnd6",
+  "work_item_id": "wi_caa7e1b1c53d",
+  "candidate": "9682f07954eb399c9acb17626dbe7bacdd67048b",
+  "state": "accepted simulation",
+  "backup_restore": "passed",
+  "wheel_sha256": "9f4d7512741dd5f7370ce3d3db2d5a34e62b10f1fcac272e72c6c03fa5500bc6",
+  "date": "2026-09-11",
+  "tests_passed": 72,
+  "lint": "ruff check src tests passed",
+  "pi_version": "0.82.1",
+  "pi_test_provider": "deterministic loopback HTTP fixture; no inference",
+  "live_github_observation": "github:yeutterg/dark-factory:issue:1",
+  "real_model_run": "pending operator route/geography/budget selection",
+  "criteria": [
+    {
+      "id": "AC-01",
+      "description": "message() returns ready",
+      "checks": [
+        "fixture-check"
+      ],
+      "manual_gates": [],
+      "status": "verified",
+      "missing_evidence": []
+    },
+    {
+      "id": "AC-02",
+      "description": "Canonical verification passes",
+      "checks": [
+        "fixture-check"
+      ],
+      "manual_gates": [],
+      "status": "verified",
+      "missing_evidence": []
+    }
+  ],
+  "completion_contract": "Omitted criteria, unverified criteria, fabricated check references, missing persisted evidence and simulation/live substitution block progression or acceptance"
+}

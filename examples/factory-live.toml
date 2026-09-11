@@ -1,0 +1,63 @@
+# Template only: no live route is approved or enabled by this file.
+schema_version = 1
+repositories = ["owner/repository"]
+skills = ["@archive-before-delete", "@redesign"]
+
+[project]
+name = "my-project"
+state_dir = "./isolated-factory-state"
+
+[geography_policy]
+blocked_regions = ["CN", "CHINA", "PRC"]
+
+[budgets]
+root_cents = 1000
+planning_cents = 100
+account_cents = 1000
+
+[runtime]
+worker_token_env = "FACTORY_WORKER_TOKEN"
+operator_token_env = "FACTORY_OPERATOR_TOKEN"
+api_host = "127.0.0.1"
+api_port = 8745
+max_output_bytes = 2000000
+
+[execution]
+profile = "macos-sandbox"
+pi_binary = "/opt/homebrew/bin/pi"
+max_seconds = 7200
+
+[routes.primary]
+model = "REPLACE_WITH_EXACT_MODEL_ID"
+harness = "pi"
+evidence_kind = "live"
+harness_version = "0.82.1"
+provider = "REPLACE_WITH_PROVIDER_ID"
+endpoint = "REPLACE_WITH_VERIFIED_ENDPOINT"
+billing_account = "REPLACE_WITH_APPROVED_ACCOUNT_REFERENCE"
+region = "UNKNOWN" # Deliberately blocks dispatch until verified.
+geography_evidence = "REPLACE_WITH_PROVIDER_POLICY_REFERENCE_AND_VERIFICATION_DATE"
+auth_env = "REPLACE_WITH_PROVIDER_API_KEY_ENV_NAME"
+role = "coder" # One route may cover all roles; contexts remain separate.
+max_cents = 200
+
+[sources."owner/repository"]
+path = "/absolute/path/to/source-checkout"
+revision = "REPLACE_WITH_BASE_COMMIT"
+require_live_evidence = true
+checks = ["verify"]
+allowed_paths = ["src"]
+protected_paths = ["tests", "pyproject.toml", "AGENTS.md"]
+manual_acceptance = ["Inspect candidate diff", "Confirm authorized human merge"]
+
+[commands.verify]
+argv = ["/opt/homebrew/bin/python3.12", "-m", "unittest", "discover", "-s", "tests"]
+timeout_seconds = 300
+
+[commands.tracking]
+argv = ["python3", "-m", "dark_factory.adapters.projects.github"]
+timeout_seconds = 60
+
+[commands.code_host]
+argv = ["python3", "-m", "dark_factory.adapters.git.github"]
+timeout_seconds = 60

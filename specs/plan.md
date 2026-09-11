@@ -1,35 +1,22 @@
 # Plan: bootstrap structure
 
-## Package
+The package remains under `src/dark_factory/`. One controller owns one local state directory. One local worker executes a fixed bounded graph for a single repository. Multi-repo execution and fallback are increment A; remote workers, UI and attachment are not bootstrap scaffolding.
 
-Conventional layout under `src/dark_factory/`.
-
-| Module | Role |
+| Module | Responsibility |
 | --- | --- |
-| `config.py` | Load, validate, snapshot `factory.toml` |
-| `models.py` | Work item, job, attempt, evidence, cost, audit |
-| `store.py` | SQLite schema, claims, leases, audit |
-| `contracts.py` | Versioned JSON for integration commands |
-| `runner.py` | Argument-array command execution, limits, validation |
-| `controller.py` | Graph validation, approval, dispatch policy, packets |
-| `worker.py` | prepare → execute → capture → archive → clean |
-| `api.py` | Authenticated claim/heartbeat/result HTTP surface |
-| `cli.py` | Operator commands |
+| `config.py` | Strict TOML, explicit asset/source/command references, route validation |
+| `models.py` | Normalized job/graph and record definitions |
+| `store.py` | SQLite schema, process lock, transactions, audit and restored path resolution |
+| `contracts.py`, `runner.py` | Versioned JSON and bounded process supervision |
+| `controller.py` | Proposal versions, approval, budgets, leases, packets, external intentions and human acceptance |
+| `worker.py` | Prepare, execute, capture, archive, cleanup |
+| `artifacts.py` | Hash manifests, filesystem synchronization, backup/restore |
+| `api.py`, `cli.py` | Local worker/operator surfaces; separate decision credential |
 
-Adapters: `adapters/harness/` (protocol + fake + Pi), `adapters/env/` (native), `adapters/projects/` and `adapters/git/` (GitHub JSON commands). Prompts live in `agents/prompts/`; skills in `agents/skills/`.
+Exactly two lifecycle protocols remain: Harness and Environment. Pi emits JSON events with native provider configuration; the macOS environment enforces file/network/process policy. FakeHarness is limited to deterministic tests and explicitly labeled demonstrations. GitHub tracker/code-host modules are named command adapters; local Git operations are helpers rather than another integration protocol.
 
-## Data
+Roots retain selected intent, versioned proposals, approved scope/budgets/assets/command bindings, the pinned base and candidate commits. Each attempt has fresh Git state and harness context, immutable inputs, an enforced deadline, a renewable lease, usage and durable evidence. Checks reconstruct the candidate from its verified archive. Review receives approved requirements, exact diff and canonical evidence, with implementer narration omitted. Canonical checks cannot be waived by model output.
 
-Four main records: work item, job, attempt, evidence. Supporting tables: workers, costs, audit, pending external actions, pauses/drains.
+The single worker can run synchronously through CLI or within the local controller service. Operator CLI calls use the service API while the state directory is owned. No remote/shared-filesystem worker protocol is claimed by bootstrap.
 
-Approval digest covers plan text, graph, acceptance, limits, pinned command bindings, and permitted routes. Implementation jobs are blocked until that digest is recorded.
-
-## Execution
-
-Workers authenticate and claim the next ready job if window, capabilities, concurrency, dependencies, and reserved budget allow. Bootstrap allows one heavy job per worker and stops on failure without fallback.
-
-Trusted tracking/merge commands run on the controller, not in the coding sandbox.
-
-## Tests
-
-Behavior tests: config errors, graph validation, approval gate, runner invalid output/timeout, archive-before-cleanup, cancel, restart, geography policy, prompt override, adapter swap.
+Backup includes SQLite, pinned source snapshots, evidence and retained workspaces. Restore uses a new directory, verifies data and resolves historical state-owned paths without changing evidence or approval digests. Failed attempts stop; operators reconcile saved work and create a new proposal version when appropriate. No automatic fallback, merge or installation upgrade.

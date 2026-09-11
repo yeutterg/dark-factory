@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import sqlite3
+import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -130,33 +134,151 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
+_OWNERS: dict[str, tuple[int, Any, int]] = {}
+_OWNER_LOCK = threading.Lock()
+
+
 class Store:
     def __init__(self, state_dir: Path) -> None:
+        self._lock = threading.RLock()
+        self._transaction_depth = 0
         self.state_dir = Path(state_dir)
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._owner_key = str(self.state_dir.resolve())
+        with _OWNER_LOCK:
+            existing = _OWNERS.get(self._owner_key)
+            if existing and existing[0] == os.getpid():
+                _OWNERS[self._owner_key] = (existing[0], existing[1], existing[2] + 1)
+            else:
+                lock = (self.state_dir / "controller.lock").open("a+")
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    lock.close()
+                    raise RuntimeError("state directory already has a controller owner")
+                _OWNERS[self._owner_key] = (os.getpid(), lock, 1)
         (self.state_dir / "artifacts").mkdir(exist_ok=True)
         (self.state_dir / "archives").mkdir(exist_ok=True)
         self.db_path = self.state_dir / "factory.sqlite"
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        existing_tables = {
+            r[0]
+            for r in self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if "meta" in existing_tables:
+            version = self.conn.execute(
+                "SELECT value FROM meta WHERE key='schema_version'"
+            ).fetchone()
+            if version and version[0] != "2":
+                self.close()
+                raise RuntimeError(
+                    "incompatible state schema; restore with its pinned controller version"
+                )
+        if "work_items" in existing_tables:
+            columns = {r[1] for r in self.conn.execute("PRAGMA table_info(work_items)")}
+            if (
+                "snapshot_json" not in columns
+                and self.conn.execute("SELECT 1 FROM work_items LIMIT 1").fetchone()
+            ):
+                self.close()
+                raise RuntimeError(
+                    "legacy scaffold state has no pinned inputs; preserve it and use a new bootstrap state directory"
+                )
         self.conn.executescript(SCHEMA)
+        for table, columns in {
+            "work_items": {
+                "snapshot_json": "TEXT",
+                "created_at": "TEXT",
+                "accepted_at": "TEXT",
+            },
+            "attempts": {
+                "inputs_json": "TEXT",
+                "result_json": "TEXT",
+                "heartbeat_at": "TEXT",
+                "deadline": "TEXT",
+                "pid": "INTEGER",
+                "pid_identity": "TEXT",
+                "cleanup_status": "TEXT",
+            },
+        }.items():
+            existing = {
+                row[1] for row in self.conn.execute(f"PRAGMA table_info({table})")
+            }
+            for column, kind in columns.items():
+                if column not in existing:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+        self.conn.executescript("""
+        CREATE TABLE IF NOT EXISTS proposals (
+            root_id TEXT NOT NULL, version INTEGER NOT NULL, payload_json TEXT NOT NULL,
+            approved_digest TEXT, actor TEXT, approved_at TEXT,
+            PRIMARY KEY(root_id, version));
+        CREATE TABLE IF NOT EXISTS manual_gates (
+            root_id TEXT NOT NULL, candidate TEXT NOT NULL, name TEXT NOT NULL,
+            actor TEXT NOT NULL, at TEXT NOT NULL, passed INTEGER NOT NULL,
+            evidence TEXT NOT NULL, PRIMARY KEY(root_id, candidate, name));
+        """)
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta(key,value) VALUES ('schema_version','2')"
+        )
         self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
+        with _OWNER_LOCK:
+            owner = _OWNERS.get(self._owner_key)
+            if owner and owner[2] == 1:
+                owner[1].close()
+                del _OWNERS[self._owner_key]
+            elif owner:
+                _OWNERS[self._owner_key] = (owner[0], owner[1], owner[2] - 1)
+
+    @contextmanager
+    def transaction(self):
+        """Serialize a complete policy decision, including across SQLite connections."""
+        with self._lock:
+            outer = self._transaction_depth == 0
+            if outer:
+                self.conn.execute("BEGIN IMMEDIATE")
+            self._transaction_depth += 1
+            try:
+                yield
+                if outer:
+                    self.conn.commit()
+            except BaseException:
+                if outer:
+                    self.conn.rollback()
+                raise
+            finally:
+                self._transaction_depth -= 1
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
-        cur = self.conn.execute(sql, params)
-        self.conn.commit()
-        return cur
+        with self._lock:
+            cur = self.conn.execute(sql, params)
+            if not self._transaction_depth:
+                self.conn.commit()
+            return cur
 
     def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
-        return list(self.conn.execute(sql, params))
+        with self._lock:
+            return list(self.conn.execute(sql, params))
 
     def one(self, sql: str, params: tuple[Any, ...] = ()) -> Optional[sqlite3.Row]:
-        row = self.conn.execute(sql, params).fetchone()
-        return row
+        with self._lock:
+            return self.conn.execute(sql, params).fetchone()
+
+    def resolve_path(self, value: str | Path) -> Path:
+        path = Path(value)
+        row = self.one("SELECT value FROM meta WHERE key='restore_origins'")
+        if row and path.is_absolute():
+            for original_value in json.loads(row["value"]):
+                original = Path(original_value)
+                if path.is_relative_to(original):
+                    return self.state_dir.resolve() / path.relative_to(original)
+        return path
 
     def audit(self, actor: str, action: str, payload: dict[str, Any]) -> None:
         self.execute(
@@ -182,5 +304,7 @@ class Store:
         )
 
     def last_valid_config(self) -> Optional[str]:
-        row = self.one("SELECT body FROM config_revisions WHERE valid=1 ORDER BY loaded_at DESC LIMIT 1")
+        row = self.one(
+            "SELECT body FROM config_revisions WHERE valid=1 ORDER BY loaded_at DESC LIMIT 1"
+        )
         return row["body"] if row else None

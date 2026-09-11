@@ -23,7 +23,7 @@ What changed / What to review / What to test. Link diffs, evidence, and remainin
 - JSON command runner with GitHub tracking and PR/check adapters.
 - Replaceable role prompts and skills.
 - CLI: intake, plan, critique, approve, run, review, pause/drain, cancel.
-- Fake harness for tests; Pi adapter qualified when the binary is present.
+- Fake harness for tests; qualify Pi against pinned invocation, route binding, geography, credentials, cancellation, usage, and independent review. Binary presence alone is not qualification.
 - Native macOS execution profile for bootstrap.
 - Cancellation, timeouts, restart from durable state, archive-before-cleanup.
 
@@ -38,6 +38,9 @@ Out of scope for bootstrap: web UI, TUI, settings editor, multi-repo graphs, aut
 5. Persist costs, attempts, and durable artifacts after workspace cleanup.
 6. Cancel and timeout stop work without fallback. Restart resumes from durable records, not late unpublished results.
 7. An unrelated tracking command can replace the bundled GitHub adapter without controller code changes.
+
+8. Every approved acceptance criterion binds checks or manual gates and receives an explicit independent assessment. Missing or stale evidence blocks acceptance even when all jobs report success. The critic compares the criteria with the original request; scope changes require new approval.
+9. Simulation evidence cannot satisfy an operator-declared live-evidence requirement.
 
 ## Presentation stages
 

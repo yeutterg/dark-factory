@@ -3,8 +3,8 @@ schema_version = 1
 repositories = ["yeutterg/dark-factory"]
 
 skills = [
-  "src/dark_factory/agents/skills/archive-before-delete",
-  "src/dark_factory/agents/skills/redesign",
+  "@archive-before-delete",
+  "@redesign",
 ]
 
 date_exceptions = []
@@ -25,6 +25,7 @@ root_cents = 2000
 
 [runtime]
 worker_token = "bootstrap-dev-token"
+operator_token = "bootstrap-operator-dev-token"
 api_host = "127.0.0.1"
 api_port = 8745
 default_timeout_seconds = 3600

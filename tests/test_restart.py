@@ -15,7 +15,15 @@ def test_restart_resumes_from_sqlite(tmp_path: Path) -> None:
     store = Store(cfg.state_dir)
     ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))
     ids = ctrl.intake_issues(
-        [{"repo": "yeutterg/dark-factory", "number": 9, "title": "Restart", "body": "", "is_root": True}]
+        [
+            {
+                "repo": "yeutterg/dark-factory",
+                "number": 9,
+                "title": "Restart",
+                "body": "",
+                "is_root": True,
+            }
+        ]
     )
     ctrl.start_planning(ids[0])
     store.close()

@@ -1,13 +1,18 @@
 # Tasks: bootstrap (v0.1)
 
-1. Package skeleton, constitution, spec, README, example profile.
-2. Config schema and atomic reload with last-valid retention.
-3. SQLite store for the four main records, costs, audit, pauses, pending actions.
-4. JSON command runner and contract tests (invalid JSON, timeout, missing evidence).
-5. GitHub tracking and code-host command adapters.
-6. Harness protocol, fake harness, Pi adapter, native environment.
-7. Controller: graph validate, plan/critique workflow, approve, dispatch, packets.
-8. Worker lifecycle with archive-before-cleanup.
-9. HTTP claim API and CLI.
-10. End-to-end fake-harness single-repo demonstration in tests.
-11. GitHub issues for factory-built increments A–C; do not implement them here.
+Implementation authority remains the [specification](spec.md) and [constitution](../.specify/memory/constitution.md). [Qualification](qualification.md) separates automated proof from the pending live-model run.
+
+- [x] Python package, CLI, constitution, specification, examples and packaged assets.
+- [x] Strict TOML schema, relative/packaged asset resolution, atomic reload and last-valid retention.
+- [x] SQLite records, exclusive process ownership, transactions, approvals, costs, operational state and pending external actions.
+- [x] Versioned JSON command contracts; bounded output, timeout/process cleanup and ambiguous-write recovery tests.
+- [x] GitHub selected issue reads, draft PR creation/reconciliation/read-back and PR/check inspection commands. No automatic merge.
+- [x] Real Git source snapshots and isolated attempt workspaces; native macOS policy and supervised Pi JSON harness.
+- [x] Structured planning/critique, exact proposal approval, implementation, canonical checks, independent review and candidate-bound manual acceptance.
+- [x] Per-criterion completion contract, independent coverage review, candidate-bound evidence ledger and simulation/live qualification boundary.
+- [x] Archive verification and synchronization before cleanup, failed-archive preservation, cleanup retry and cancellation/lease fencing.
+- [x] Local authenticated API, separate operator credential, CLI and one local service worker.
+- [x] Real-repository fixture loop, alternate tracker command, prompt override, installed-Pi loopback contract test and restorable-state tests.
+- [x] Retained increment issues: [A #2](https://github.com/yeutterg/dark-factory/issues/2), [B #3](https://github.com/yeutterg/dark-factory/issues/3), [C #4](https://github.com/yeutterg/dark-factory/issues/4); [self-development process #1](https://github.com/yeutterg/dark-factory/issues/1).
+- [ ] Run the bounded real-model outcome using the operator-approved route/geography/account and spending limit; review the actual plan and result packets. No route is approved by the example profile or fixture tests.
+- [ ] Human review of bootstrap revision and explicit merge/installation decision. Never upgrade a running controller automatically.
