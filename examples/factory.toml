@@ -1,0 +1,59 @@
+schema_version = 1
+
+repositories = ["yeutterg/dark-factory"]
+
+skills = [
+  "src/dark_factory/agents/skills/archive-before-delete",
+  "src/dark_factory/agents/skills/redesign",
+]
+
+date_exceptions = []
+
+[project]
+name = "dark-factory"
+state_dir = "./state"
+
+[labels]
+selected = "factory"
+iteration = "sprint"
+
+[geography_policy]
+blocked_regions = ["CN", "CHINA", "PRC"]
+
+[budgets]
+root_cents = 2000
+
+[runtime]
+worker_token = "bootstrap-dev-token"
+api_host = "127.0.0.1"
+api_port = 8745
+default_timeout_seconds = 3600
+max_output_bytes = 2000000
+
+[[windows]]
+days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+start = "00:00"
+end = "23:59"
+timezone = "America/Los_Angeles"
+
+[routes.fake-coder]
+model = "fake-local"
+harness = "fake"
+harness_version = "0.1"
+provider = "none"
+endpoint = "local"
+billing_account = "local"
+region = "US"
+role = "coder"
+max_cents = 500
+
+[commands.tracking]
+argv = ["python3", "-m", "dark_factory.adapters.projects.github"]
+timeout_seconds = 30
+
+[commands.code_host]
+argv = ["python3", "-m", "dark_factory.adapters.git.github"]
+timeout_seconds = 30
+
+[prompts]
+# omit roles to use packaged defaults
