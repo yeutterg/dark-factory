@@ -49,3 +49,28 @@ Claude's `total_cost_usd` is an API-equivalent client estimate, not proof of a s
 `tests/test_claude_code.py` exercises authentication selection, output contracts, identity, budgets and process termination. `tests/test_claude_code_native.py` runs the installed binary against a local dummy OAuth provider: a workspace read succeeds, a symlink to a private fixture does not leak its contents, and the native stream completes. No real credential or paid inference is used. This establishes local adapter/isolation behavior, not live model quality, subscription allowance, geography or a completed factory outcome.
 
 For an independent comparison, give Claude the selected root requirements, all required children and the pinned source bundle, without the earlier model's proposal. Consolidation and fresh-context critique remain separate assignments. A root needing unsupported child-graph execution stays blocked rather than being replaced with a child.
+
+## Proposed model defaults
+
+Keep reusable tier selections in `factory.toml`, referencing complete named routes rather than bare model names. A job role (planner, critic, coder, reviewer) is separate from its capability tier. This is a proposed schema, not an accepted runtime configuration yet:
+
+```toml
+# Proposed only; current schema rejects model_defaults.
+[model_defaults.frontier]
+primary = "frontier-primary"
+fallback = "frontier-fallback"
+
+[model_defaults.workhorse]
+primary = "workhorse-primary"
+fallback = "workhorse-fallback"
+
+[model_defaults.cheap]
+primary = "cheap-primary"
+# Omit fallback to stop on failure.
+```
+
+Frontier covers difficult planning and independent judgment. Workhorse covers ordinary implementation and repairs. Cheap covers bounded diagnosis, classification and summaries; required test/build commands still determine check results, and a cheap model cannot waive a gate or replace a required independent frontier review.
+
+Resolve defaults to exact routes before plan approval and snapshot the selection. A new default cannot reroute approved work. Validate both routes for the role, harness capabilities, geography, billing and budget. Permit at most one fresh fallback for an availability/provider failure, with shared limits and archived prior output. Cancellation, repeated incorrect work, failed required checks and policy failures do not automatically trigger fallback. Bootstrap currently stops on failure; adding a route named fallback alone does not implement this policy.
+
+For the current subscription planning request, the selected primary is `claude-fable-5-1`, with `claude-opus-5` as the requested availability fallback. Workhorse and cheap routes remain unselected. The [Fable plan documentation](https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan) describes included Max usage and credit overage. [Claude Code model configuration](https://code.claude.com/docs/en/model-config) explains that unattended Fable requests can bill credits without a consent prompt. Subscription credentials alone therefore do not enforce a zero-overage policy. Verify account-level controls before a subscription-only run.
