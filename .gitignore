@@ -18,3 +18,8 @@ artifacts/
 web/node_modules/
 web/dist/
 evals/tmp/
+
+# Local operator settings and generated packages
+/factory.toml
+/factory.local.toml
+/build/

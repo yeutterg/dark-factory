@@ -6,7 +6,7 @@
   "backup_restore": "passed",
   "wheel_sha256": "9f4d7512741dd5f7370ce3d3db2d5a34e62b10f1fcac272e72c6c03fa5500bc6",
   "date": "2026-09-11",
-  "tests_passed": 72,
+  "tests_passed": 76,
   "lint": "ruff check src tests passed",
   "pi_version": "0.82.1",
   "pi_test_provider": "deterministic loopback HTTP fixture; no inference",
@@ -34,5 +34,6 @@
       "missing_evidence": []
     }
   ],
-  "completion_contract": "Omitted criteria, unverified criteria, fabricated check references, missing persisted evidence and simulation/live substitution block progression or acceptance"
+  "completion_contract": "Omitted criteria, unverified criteria, fabricated check references, missing persisted evidence and simulation/live substitution block progression or acceptance",
+  "development_stop_hook": "4 tests passed against isolated Git repositories"
 }

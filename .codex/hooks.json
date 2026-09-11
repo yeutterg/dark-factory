@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/stop_commit_push.py\"",
+            "timeout": 240,
+            "statusMessage": "Committing and pushing Dark Factory changes"
+          }
+        ]
+      }
+    ]
+  }
+}
