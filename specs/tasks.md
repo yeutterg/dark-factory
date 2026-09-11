@@ -20,3 +20,5 @@ Implementation authority remains the [specification](spec.md) and [constitution]
 - [x] Root-scope guards: observed GitHub hierarchy, strict normalized scope metadata, atomic rejection of unsupported child graphs, and checks at planning/approval/dispatch/acceptance; regression-tested without expanding bootstrap capability.
 
 - [x] Claude Code read-only subscription adapter, native OAuth credential reference, worker/config integration, stream/accounting contracts and installed-CLI local-provider isolation test. Live subscription route/allowance/geography qualification remains pending.
+
+- [ ] Bounded automatic fallback and frontier/workhorse/cheap defaults: [#5](https://github.com/yeutterg/dark-factory/issues/5), part of increment A; subscription exhaustion must never enable paid credits.
