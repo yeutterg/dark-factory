@@ -16,3 +16,5 @@ Implementation authority remains the [specification](spec.md) and [constitution]
 - [x] Retained increment issues: [A #2](https://github.com/yeutterg/dark-factory/issues/2), [B #3](https://github.com/yeutterg/dark-factory/issues/3), [C #4](https://github.com/yeutterg/dark-factory/issues/4); [self-development process #1](https://github.com/yeutterg/dark-factory/issues/1).
 - [ ] Run the bounded real-model outcome using the operator-approved route/geography/account and spending limit; review the actual plan and result packets. No route is approved by the example profile or fixture tests.
 - [ ] Human review of bootstrap revision and explicit merge/installation decision. Never upgrade a running controller automatically.
+
+- [x] Root-scope guards: observed GitHub hierarchy, strict normalized scope metadata, atomic rejection of unsupported child graphs, and checks at planning/approval/dispatch/acceptance; regression-tested without expanding bootstrap capability.

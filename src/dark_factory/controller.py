@@ -233,6 +233,25 @@ class Controller:
         ids = []
         with self.store.transaction():
             for item in result["items"]:
+                if (
+                    "parent_id" not in item
+                    or item.get("parent_id") is not None
+                    or item.get("is_root") is not True
+                ):
+                    raise ControllerError(
+                        "select the root outcome, not a child issue; "
+                        f"parent: {item.get('parent_id') or 'resolve in the tracker'}"
+                    )
+                child_count = item.get("required_child_count")
+                if type(child_count) is not int or child_count < 0:
+                    raise ControllerError(
+                        "tracking result needs a non-negative required_child_count"
+                    )
+                if child_count:
+                    raise ControllerError(
+                        "bootstrap cannot execute roots with required child issues; "
+                        "preserve the complete root for child-graph execution, do not select a child instead"
+                    )
                 if item.get("repo") not in self.cfg.repositories:
                     raise ControllerError("intake repository is not configured")
                 if (
@@ -269,7 +288,9 @@ class Controller:
                     ),
                 )
                 ids.append(wid)
-            self.store.audit(actor, "intake", {"ids": ids})
+            self.store.audit(
+                actor, "intake", {"ids": ids, "evidence": result.get("evidence", {})}
+            )
         return ids
 
     def _assets(self) -> dict:
@@ -361,6 +382,17 @@ class Controller:
             "geography": self.cfg.geography_policy,
         }
 
+    def _require_root_scope(self, row):
+        if row["parent_id"] is not None or row["is_root"] != 1:
+            raise ControllerError("select the root outcome, not a child issue")
+        if self.store.one(
+            "SELECT id FROM work_items WHERE parent_id IN (?,?) LIMIT 1",
+            (row["id"], row["external_id"]),
+        ):
+            raise ControllerError(
+                "bootstrap cannot execute roots with required child issues; preserve the complete root"
+            )
+
     @atomic
     def start_planning(self, work_item_id: str, actor="operator") -> PlanGraph:
         import sys
@@ -370,6 +402,7 @@ class Controller:
         row = self.store.one("SELECT * FROM work_items WHERE id=?", (work_item_id,))
         if not row:
             raise ControllerError("work item not found")
+        self._require_root_scope(row)
         if self.store.one(
             "SELECT a.id FROM attempts a JOIN jobs j ON a.job_id=j.id WHERE j.work_item_id=? AND a.status IN ('leased','running')",
             (work_item_id,),
@@ -519,6 +552,7 @@ class Controller:
         row = self.store.one("SELECT * FROM work_items WHERE id=?", (work_item_id,))
         if not row or row["status"] != "awaiting_approval":
             raise ControllerError("cannot approve before planning and critique succeed")
+        self._require_root_scope(row)
         if not actor.strip():
             raise ControllerError("approver is required")
         if any(
@@ -624,6 +658,11 @@ class Controller:
         for root in self.store.query(
             "SELECT * FROM work_items WHERE status IN ('planning','approved','running') ORDER BY created_at,id"
         ):
+            try:
+                self._require_root_scope(root)
+            except ControllerError as exc:
+                self._fail_root(root["id"], str(exc))
+                continue
             snapshot = json.loads(root["snapshot_json"])
             if datetime.fromisoformat(snapshot["deadline"]) <= datetime.now(
                 timezone.utc
@@ -1406,6 +1445,7 @@ class Controller:
         row = self.store.one("SELECT * FROM work_items WHERE id=?", (work_item_id,))
         if not row or row["status"] != "awaiting_review":
             raise ControllerError("work item is not awaiting review")
+        self._require_root_scope(row)
         if row["approved_digest"] != _digest(self._approval_payload(work_item_id)):
             raise ControllerError("approved inputs changed; cannot accept")
         if any(j["status"] != "succeeded" for j in self._jobs(work_item_id)):

@@ -232,8 +232,22 @@ def test_macos_denies_host_data_and_protected_writes(tmp_path):
 def test_github_intake_reads_selected_remote_issue(monkeypatch):
     calls = []
 
-    def fake(path):
+    def fake(path, method="GET", payload=None):
         calls.append(path)
+        if path == "graphql":
+            assert method == "POST"
+            assert payload["variables"] == {
+                "owner": "acme",
+                "name": "tool",
+                "number": 3,
+            }
+            return {
+                "data": {
+                    "repository": {
+                        "issue": {"parent": None, "subIssues": {"totalCount": 0}}
+                    }
+                }
+            }
         return {
             "title": "Live observed title",
             "body": "requirements",
@@ -248,7 +262,7 @@ def test_github_intake_reads_selected_remote_issue(monkeypatch):
             "action",
         )
     )
-    assert calls == ["repos/acme/tool/issues/3"]
+    assert calls == ["repos/acme/tool/issues/3", "graphql"]
     assert result["items"][0]["title"] == "Live observed title"
     assert result["evidence"]["observations"][0]["source"] == "github-api"
 

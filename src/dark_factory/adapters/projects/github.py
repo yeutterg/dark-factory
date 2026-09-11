@@ -9,6 +9,46 @@ from dark_factory.adapters.git.github import api, repository
 from dark_factory.contracts import ContractError, validate_request
 
 
+def relationships(repo, number):
+    """Read hierarchy explicitly; missing/partial API data is not a root."""
+    owner, name = repo.split("/")
+    result = api(
+        "graphql",
+        "POST",
+        {
+            "query": """query($owner:String!,$name:String!,$number:Int!) {
+              repository(owner:$owner,name:$name) {
+                issue(number:$number) {
+                  parent { number url repository { nameWithOwner } }
+                  subIssues { totalCount }
+                }
+              }
+            }""",
+            "variables": {"owner": owner, "name": name, "number": number},
+        },
+    )
+    try:
+        if result.get("errors"):
+            raise ValueError("partial GraphQL response")
+        issue = result["data"]["repository"]["issue"]
+        parent = issue["parent"]
+        count = issue["subIssues"]["totalCount"]
+        if type(count) is not int or count < 0:
+            raise ValueError("invalid child count")
+        parent_id = None
+        if parent is not None:
+            parent_repo = repository(parent["repository"]["nameWithOwner"])
+            parent_number = parent["number"]
+            if type(parent_number) is not int or parent_number <= 0:
+                raise ValueError("invalid parent number")
+            parent_id = f"github:{parent_repo}:issue:{parent_number}"
+        return parent_id, count
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ContractError(
+            "GitHub issue relationships are incomplete; cannot establish root scope"
+        ) from exc
+
+
 def handle(request):
     validate_request(request)
     op = request["operation"]
@@ -31,6 +71,13 @@ def handle(request):
         issue = selected if fixture else api(f"repos/{repo}/issues/{number}")
         if "pull_request" in issue:
             raise ContractError("selected tracker item is a PR, not an issue")
+        if fixture:
+            parent_id = selected.get("parent_id")
+            is_root = selected.get("is_root", parent_id is None)
+            child_count = selected.get("required_child_count", 0)
+        else:
+            parent_id, child_count = relationships(repo, number)
+            is_root = parent_id is None
         items.append(
             {
                 "external_id": f"github:{repo}:issue:{number}",
@@ -38,8 +85,9 @@ def handle(request):
                 "title": issue.get("title", ""),
                 "body": issue.get("body") or "",
                 "repo": repo,
-                "parent_id": selected.get("parent_id"),
-                "is_root": selected.get("is_root", True),
+                "parent_id": parent_id,
+                "is_root": is_root,
+                "required_child_count": child_count,
                 "iteration": selected.get("iteration"),
             }
         )
@@ -47,6 +95,8 @@ def handle(request):
             {
                 "external_id": items[-1]["external_id"],
                 "source": "provided-fixture" if fixture else "github-api",
+                "parent_id": parent_id,
+                "required_child_count": child_count,
             }
         )
     return {

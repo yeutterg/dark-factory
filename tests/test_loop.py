@@ -135,7 +135,7 @@ def test_adapter_swap_without_controller_change(tmp_path: Path) -> None:
             [
                 "import json,sys",
                 "req=json.loads(sys.stdin.read())",
-                "print(json.dumps({'contract_version': 1, 'request_id': req['request_id'], 'ok': True, 'operation': req['operation'], 'evidence': {'alt': True}, 'items': [{'external_id': 'alt:1', 'url': '', 'title': 'alt', 'body': '', 'repo': 'yeutterg/dark-factory', 'parent_id': None, 'is_root': True, 'iteration': None}]}))",
+                "print(json.dumps({'contract_version': 1, 'request_id': req['request_id'], 'ok': True, 'operation': req['operation'], 'evidence': {'alt': True}, 'items': [{'external_id': 'alt:1', 'url': '', 'title': 'alt', 'body': '', 'repo': 'yeutterg/dark-factory', 'parent_id': None, 'is_root': True, 'required_child_count': 0, 'iteration': None}]}))",
             ]
         ),
         encoding="utf-8",

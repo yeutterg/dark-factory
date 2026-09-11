@@ -32,7 +32,7 @@ Out of scope for bootstrap: web UI, TUI, settings editor, multi-repo graphs, aut
 ## Acceptance
 
 1. Load and strictly validate `factory.toml`; retain last valid revision on failed reload.
-2. Intake selected issues into work items without choosing the backlog.
+2. Intake selected root outcomes without choosing the backlog. Verify GitHub parent/child relationships rather than trusting a caller's root flag. Reject child-only selection and roots requiring unsupported child graphs; never shrink a root to fit bootstrap. Unknown relationship observations fail closed. Planning, approval, dispatch and acceptance reject known child records or roots with stored children.
 3. Produce a plan job and a fresh-context critique job; require approval before implementation.
 4. Run one bounded single-repo outcome through implementation, checks, and independent review using a disposable workspace.
 5. Persist costs, attempts, and durable artifacts after workspace cleanup.

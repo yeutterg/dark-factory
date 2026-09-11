@@ -23,6 +23,8 @@ Use [the annotated live profile](../examples/factory-live.toml) as a template. S
 
 Only `macos-sandbox` admits live Pi. The qualified native profile denies reads of user/private data, writes outside the owned workspace/runtime, protected-file changes, and model shell/extension execution. Model roles get read tools; only the coder gets edit/write tools. Canonical check processes have no network access or controller/model credentials. This is macOS native isolation, not a VM. Toolchains under system/Homebrew paths are supported; a toolchain in a private home directory needs a separately qualified execution profile.
 
+Select the complete root outcome. The GitHub adapter reads parent relationships and child counts; caller flags cannot turn a live child into a root. Bootstrap rejects child-only selection and roots with required children because child-graph execution is not implemented yet. Preserve the root and use an appropriate orchestration path; do not substitute one child to fit bootstrap. Standalone single-repository outcomes remain supported. Custom tracker commands must supply truthful `parent_id`, `is_root` and `required_child_count` metadata; unresolved relationships must fail rather than imply a root.
+
 Supply selected issues as JSON. With `repo` and `number`, the GitHub adapter reads the real issue. A supplied `title` explicitly selects caller-provided fixture data and is labeled in intake evidence.
 
 ```bash
