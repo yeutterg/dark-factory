@@ -36,6 +36,7 @@ class Route:
     geography_evidence: str = ""
     api: str = ""
     evidence_kind: str = "simulation"
+    effort: str = "high"
 
 
 @dataclass
@@ -220,6 +221,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
                 "geography_evidence",
                 "api",
                 "evidence_kind",
+                "effort",
             },
             "route",
         )
@@ -231,6 +233,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             "auth_env",
             "geography_evidence",
             "api",
+            "effort",
         ):
             if key in item:
                 _require(item, key, str)
@@ -269,6 +272,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             geography_evidence=str(item.get("geography_evidence", "")),
             api=str(item.get("api", "")),
             evidence_kind=evidence_kind,
+            effort=str(item.get("effort", "high")),
         )
     if not routes:
         raise ConfigError("at least one route is required")
@@ -455,18 +459,56 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     execution = raw.get("execution", {})
     if not isinstance(execution, dict):
         raise ConfigError("execution must be a table")
-    _fields(execution, {"profile", "pi_binary", "max_seconds"}, "execution")
+    _fields(
+        execution, {"profile", "pi_binary", "claude_binary", "max_seconds"}, "execution"
+    )
     _integer(execution, "max_seconds", 7200, 1)
+    if "claude_binary" in execution:
+        binary = _require(execution, "claude_binary", str)
+        if not binary.strip():
+            raise ConfigError("claude_binary must not be empty")
+        if "/" in binary:
+            execution["claude_binary"] = _resolve(source_path.parent, binary)
     profile = execution.get("profile", "native")
     if profile not in {"native", "macos-sandbox"}:
         raise ConfigError("unsupported execution profile")
     for route in routes.values():
-        if route.harness not in {"fake", "pi"}:
+        if route.harness not in {"fake", "pi", "claude-code"}:
             raise ConfigError("unsupported harness")
-        if route.harness == "pi":
+        if route.harness != "claude-code" and "effort" in routes_raw[route.id]:
+            raise ConfigError(
+                "explicit effort is supported only by the Claude Code adapter"
+            )
+        if route.effort not in {"low", "medium", "high", "xhigh", "max"}:
+            raise ConfigError("invalid route effort")
+        if route.harness == "claude-code":
+            if route.role not in {"planner", "critic", "reviewer"}:
+                raise ConfigError("Claude Code subscription routes are read-only")
+            if (
+                route.provider != "claude-subscription"
+                or route.endpoint != "https://api.anthropic.com"
+            ):
+                raise ConfigError(
+                    "Claude Code requires the first-party subscription route"
+                )
+            if (
+                not route.auth_env
+                or route.auth_env in {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
+                or route.api
+            ):
+                raise ConfigError(
+                    "Claude Code requires a subscription OAuth token reference, never an API key"
+                )
+            if not re.fullmatch(
+                r"claude-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]+(?:-[0-9]+)*", route.model
+            ):
+                raise ConfigError(
+                    "Claude Code requires an explicit model ID, not an alias"
+                )
+        if route.harness in {"pi", "claude-code"}:
             if profile != "macos-sandbox" or not normalized_sources:
                 raise ConfigError(
-                    "live Pi requires sources and macos-sandbox execution"
+                    "live harness requires sources and macos-sandbox execution"
                 )
             if route.region.upper() not in {
                 "US",

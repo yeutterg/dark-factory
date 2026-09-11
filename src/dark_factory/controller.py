@@ -696,10 +696,18 @@ class Controller:
                 role = spec.get("role")
                 route = None
                 if role:
-                    candidates = [r for r in self.cfg.routes.values() if r.role == role]
-                    route = (candidates or list(self.cfg.routes.values()))[0]
+                    eligible = [
+                        r
+                        for r in self.cfg.routes.values()
+                        if r.harness != "claude-code"
+                        or role in {"planner", "critic", "reviewer"}
+                    ]
+                    if not eligible:
+                        continue
+                    candidates = [r for r in eligible if r.role == role]
+                    route = (candidates or eligible)[0]
                     if (
-                        route.harness == "pi"
+                        route.harness in {"pi", "claude-code"}
                         and self.cfg.execution.get("profile") != "macos-sandbox"
                     ):
                         raise ControllerError("live execution is not qualified")

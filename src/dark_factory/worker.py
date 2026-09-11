@@ -11,6 +11,7 @@ from pathlib import Path
 from dark_factory import artifacts
 from dark_factory.adapters.env.native import NativeEnvironment, process_environment
 from dark_factory.adapters.git.local import capture, git
+from dark_factory.adapters.harness.claude_code import ClaudeCodeHarness
 from dark_factory.adapters.harness.fake import FakeHarness
 from dark_factory.adapters.harness.pi import PiHarness
 from dark_factory.runner import CommandRunner
@@ -35,6 +36,14 @@ class Worker:
             if actual[0] or actual[1].strip() != route["harness_version"]:
                 raise RuntimeError("Pi version differs from pinned route")
             return PiHarness(binary)
+        if route and route["harness"] == "claude-code":
+            binary = self.cfg.execution.get("claude_binary", "claude")
+            actual = CommandRunner(self.cfg.source_path.parent).run_plain(
+                [binary, "--version"], 10
+            )
+            if actual[0] or actual[1].strip() != route["harness_version"]:
+                raise RuntimeError("Claude Code version differs from pinned route")
+            return ClaudeCodeHarness(binary)
         if route is None or route["harness"] == "fake":
             return FakeHarness()
         raise RuntimeError("unsupported route; no fallback permitted")
@@ -93,6 +102,10 @@ class Worker:
         caps = ["native", "fake"]
         if PiHarness.available(self.cfg.execution.get("pi_binary", "pi")):
             caps.append("pi")
+        if ClaudeCodeHarness.available(
+            self.cfg.execution.get("claude_binary", "claude")
+        ):
+            caps.append("claude-code")
         claimed = self.controller.claim_job(self.worker_id, caps)
         if not claimed:
             return False
@@ -169,6 +182,10 @@ class Worker:
             live = self.cfg.execution.get("profile") == "macos-sandbox"
             role = spec.get("role")
             prefix = []
+            readable_files = []
+            if role and claimed["inputs"]["route"]["harness"] == "claude-code":
+                binary = self.cfg.execution.get("claude_binary", "claude")
+                readable_files = [Path(shutil.which(binary) or binary).resolve()]
             if live:
                 prefix = self.env.prefix(
                     prepared,
@@ -178,6 +195,7 @@ class Worker:
                     if role == "coder"
                     else (["."] if not role else []),
                     protected=snapshot["source"].get("protected_paths", []),
+                    readable_files=readable_files,
                     private_paths=[
                         self.cfg.source_path,
                         Path(snapshot["source"]["path"]),
@@ -187,7 +205,7 @@ class Worker:
                 raise RuntimeError("attempt cancelled")
             if role:
                 route = claimed["inputs"]["route"]
-                if route["harness"] == "pi":
+                if route["harness"] in {"pi", "claude-code"}:
                     secret = os.environ.get(route["auth_env"])
                     if not secret:
                         raise RuntimeError(
@@ -232,8 +250,9 @@ class Worker:
                 error = answer.error
                 result["usage"] = answer.usage
                 result["session_id"] = answer.session_id
-                result["cost_status"] = (
-                    "reported" if answer.usage.get("reported_cost") else "estimated"
+                result["cost_status"] = answer.usage.get(
+                    "cost_status",
+                    "reported" if answer.usage.get("reported_cost") else "estimated",
                 )
                 result["prompt_sha256"] = artifacts.digest(runtime / "prompt.txt")
                 if job["kind"] == "implement":

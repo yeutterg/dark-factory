@@ -4,7 +4,7 @@ Implementation and automated qualification are complete for the single-repositor
 
 ## Verified
 
-- **76 tests passed** under Python 3.11 on this Mac. The suite exercises real Git source/candidate/check flow, structured roles, approval invalidation, command replacement, prompt overrides, manual gates, atomic claims, duplicate/late results, process deadlines, preserved work after archival failure, and separate API decision credentials.
+- **113 tests passed** under Python 3.11 on this Mac after the root-scope and Claude subscription additions. The suite exercises real Git source/candidate/check flow, structured roles, approval invalidation, command replacement, prompt overrides, manual gates, atomic claims, duplicate/late results, process deadlines, preserved work after archival failure, and separate API decision credentials.
 - **Installed Pi 0.82.1:** four fresh sessions completed planning, critique, coding and independent review against a deterministic loopback HTTP provider. Pi actually issued its file-write tool; a canonical command checked the resulting commit. This tests harness/protocol/tool/isolation integration, not model judgment or external processing geography.
 - **Native macOS isolation:** approved writes succeeded; protected and read-only-role writes failed; host-private data was inaccessible. Check recipes run without network or inference/controller credentials.
 - **Completion contract:** every approved criterion binds checks/manual gates and receives an independent assessment. Regression cases reject omitted criteria, unverified criteria, invented check references and missing persisted evidence even when jobs report success. An operator-required live outcome cannot use simulation evidence; the real-Pi fixture is explicitly simulation.
@@ -35,3 +35,11 @@ python -m pytest
 The original review identified a simulation-only scaffold. Those implementation findings are addressed by the code and tests above; the historical [implementation review](implementation-review.md) remains as a record of why the changes were needed. No fixture output should be represented as a frontier-model evaluation.
 
 Verified wheel: `dist/dark_factory-0.1.0-py3-none-any.whl`, SHA-256 `9f4d7512741dd5f7370ce3d3db2d5a34e62b10f1fcac272e72c6c03fa5500bc6`. This is a review artifact, not an installed-controller upgrade.
+
+## Claude Code subscription addition
+
+Claude Code 2.1.268 is integrated for read-only planner/critic/reviewer roles. The local native-binary test uses a dummy subscription OAuth token and a loopback provider; it verifies the stream contract, allowed source reading and denial of a symlink to private data. Separate tests cover API-key rejection, identity/model mismatches, failed/missing/duplicate results, budget estimates, cancellation, timeouts and version pinning. Native OAuth sends a bearer token and no API-key header.
+
+The ordinary Max keychain login is visible outside the sandbox but unavailable inside it. The adapter therefore uses the supported inference-only token from `claude setup-token`, supplied through an external environment reference. It does not expose the operator home/keychain or extract native credentials. No real token was generated, stored or used during these tests, and no live inference was performed.
+
+A live subscription pass still needs that credential, the exact model and processing geography, approved limits and account usage-policy verification. No comparison/consolidation workflow or multi-repository controller execution is implied. See [subscription setup](../docs/claude-subscription.md). The wheel hash above belongs to the earlier bootstrap artifact and does not contain this addition; no running installation was upgraded.

@@ -52,6 +52,10 @@ dark-factory --config factory.toml accept <work-item-id> --actor greg
 
 Acceptance does not perform a merge or release. Projects that require merge before acceptance must declare and record that manual gate. Bootstrap leaves Git publishing, merge authorization and installation upgrades with the operator. To create a draft PR for an already published candidate branch, `create-pr <work-item-id> --payload-json pr.json --actor greg` uses an exact `repo`, `head`, `base`, `head_sha`, `title` and `body`. The action is recorded before writing, reconciled after ambiguous failures, and verified by read-back. Changed PR heads require a new decision. `inspect_pr` returns observed checks/statuses and explicitly leaves branch/ruleset requirements to the human merger; it cannot waive them.
 
+## Claude subscription planning
+
+The [Claude Code subscription adapter](claude-subscription.md) supports planner, critic and reviewer assignments using a subscription OAuth token from `claude setup-token`. API-key fallback is prohibited. It does not enable child-graph execution or automatic plan comparisons.
+
 ## Operate one controller
 
 For interactive cancellation/approval while the worker runs, start the local service:

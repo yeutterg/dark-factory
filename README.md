@@ -6,7 +6,7 @@ Run coding agents through a complete, reviewable workflow:
 
 You select the work and approve the plan. Dark Factory runs the jobs in isolated workspaces, checks the changes, and saves the code and evidence for review. Missing acceptance evidence keeps the work incomplete.
 
-The current bootstrap is a Python CLI for one repository and one worker, with a Pi adapter. Live-model qualification is still pending. Multi-repository work, a web UI and previews come later.
+The current bootstrap is a Python CLI for one repository and one worker, with Pi for coding and a [Claude Code subscription adapter](docs/claude-subscription.md) for read-only planning and review. Live-model qualification is still pending. Multi-repository work, a web UI and previews come later.
 
 ## Try it
 

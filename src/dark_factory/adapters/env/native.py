@@ -41,6 +41,7 @@ class NativeEnvironment:
         writable: list[str],
         protected: list[str],
         private_paths: list[Path] | None = None,
+        readable_files: list[Path] | None = None,
     ) -> list[str]:
         if platform.system() != "Darwin" or not Path("/usr/bin/sandbox-exec").exists():
             raise RuntimeError("macos-sandbox requires sandbox-exec on macOS")
@@ -65,12 +66,25 @@ class NativeEnvironment:
             f"(allow file-read-data file-write* (subpath {json.dumps(str(runtime))}))",
             '(allow file-write* (literal "/dev/null"))',
         ]
+        for path in readable_files or []:
+            if not path.is_file():
+                raise ValueError("harness read grant must name an existing file")
+            lines.append(
+                f"(allow file-read-data (literal {json.dumps(str(path.resolve()))}))"
+            )
         for name in writable:
             path = (workspace / name).resolve()
             if not path.is_relative_to(workspace):
                 raise ValueError("write path escapes workspace")
             lines.append(f"(allow file-write* (subpath {json.dumps(str(path))}))")
-        for name in protected + [".git", ".pi", ".agents", ".github"]:
+        for name in protected + [
+            ".git",
+            ".pi",
+            ".claude",
+            ".mcp.json",
+            ".agents",
+            ".github",
+        ]:
             path = (workspace / name).resolve()
             if not path.is_relative_to(workspace):
                 raise ValueError("protected path escapes workspace")

@@ -18,3 +18,5 @@ Implementation authority remains the [specification](spec.md) and [constitution]
 - [ ] Human review of bootstrap revision and explicit merge/installation decision. Never upgrade a running controller automatically.
 
 - [x] Root-scope guards: observed GitHub hierarchy, strict normalized scope metadata, atomic rejection of unsupported child graphs, and checks at planning/approval/dispatch/acceptance; regression-tested without expanding bootstrap capability.
+
+- [x] Claude Code read-only subscription adapter, native OAuth credential reference, worker/config integration, stream/accounting contracts and installed-CLI local-provider isolation test. Live subscription route/allowance/geography qualification remains pending.

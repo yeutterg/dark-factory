@@ -25,9 +25,10 @@ What changed / What to review / What to test. Link diffs, evidence, and remainin
 - CLI: intake, plan, critique, approve, run, review, pause/drain, cancel.
 - Fake harness for tests; qualify Pi against pinned invocation, route binding, geography, credentials, cancellation, usage, and independent review. Binary presence alone is not qualification.
 - Native macOS execution profile for bootstrap.
+- Claude Code subscription OAuth adapter for read-only planning/critique/review: explicit model/effort, isolated credentials, no API fallback, native stream evidence and bounded cancellation. Live route qualification remains separate.
 - Cancellation, timeouts, restart from durable state, archive-before-cleanup.
 
-Out of scope for bootstrap: web UI, TUI, settings editor, multi-repo graphs, automatic model fallback, preview/merge automation, DORA, arena, extra harnesses.
+Out of scope for bootstrap: web UI, TUI, settings editor, multi-repo graphs, automatic model fallback, preview/merge automation, DORA, arena, further harnesses and Claude coding/session takeover.
 
 ## Acceptance
 
