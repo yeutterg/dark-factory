@@ -25,6 +25,8 @@ evals/tmp/
 /build/
 
 # Machine-local authentication and session material
+.codex/
+.claude/
 credentials/
 secrets/
 sessions/

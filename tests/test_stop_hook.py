@@ -128,7 +128,7 @@ def test_clean_checkout_does_not_push_private_intermediate_commit(repo):
     assert git(remote, "rev-parse", "main") == before
 
 
-@pytest.mark.parametrize("name", ["docs/auth.json", "examples/credentials/provider.json", "docs/factory.local.toml"])
+@pytest.mark.parametrize("name", ["docs/auth.json", "examples/credentials/provider.json", "docs/factory.local.toml", ".codex/hooks.json", ".claude/settings.json", "docs/.codex/settings.json", "docs/.claude/settings.json"])
 def test_nested_private_files_are_not_automatically_staged(repo, name):
     source, remote = repo
     path = source / name
@@ -151,3 +151,18 @@ def test_web_source_is_published_without_dependency_artifacts(repo):
     tracked = git(source, "ls-files")
     assert "web/src/App.tsx" in tracked
     assert "node_modules" not in tracked
+
+
+def test_untracking_old_agent_settings_keeps_local_copy(repo):
+    source, remote = repo
+    path = source / ".codex" / "hooks.json"
+    path.parent.mkdir()
+    path.write_text("{}\n")
+    git(source, "add", ".")
+    git(source, "commit", "-m", "Previously tracked settings")
+    git(source, "push", "-u", "origin", "main")
+    git(source, "rm", "--cached", ".codex/hooks.json")
+    hook.checkpoint(source, {str(remote)})
+    assert path.read_text() == "{}\n"
+    assert ".codex/hooks.json" not in git(source, "ls-files")
+    assert git(source, "rev-parse", "HEAD") == git(remote, "rev-parse", "main")

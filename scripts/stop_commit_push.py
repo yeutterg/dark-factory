@@ -97,6 +97,8 @@ def allowed(name):
             "credentials",
             "secrets",
             "sessions",
+            ".codex",
+            ".claude",
         }
         or part.startswith(".env")
         for part in path.parts
@@ -122,7 +124,6 @@ def allowed(name):
     return (
         name in ROOT_FILES
         or path.parts[0] in DIRECTORIES
-        or name == ".codex/hooks.json"
     )
 
 
@@ -163,7 +164,7 @@ def checkpoint(repo, remotes=REMOTES):
             names.update(os.fsdecode(n) for n in git(repo, *args).split(b"\0") if n)
         staged = {
             os.fsdecode(n)
-            for n in git(repo, "diff", "--cached", "--name-only", "-z").split(b"\0")
+            for n in git(repo, "diff", "--cached", "--diff-filter=d", "--name-only", "-z").split(b"\0")
             if n
         }
         if any(not allowed(n) for n in staged):
