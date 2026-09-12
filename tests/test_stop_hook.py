@@ -93,3 +93,61 @@ def test_staged_local_profile_is_not_published(repo):
     git(source, "add", "factory.toml")
     with pytest.raises(RuntimeError, match="outside development scope"):
         hook.checkpoint(source, {str(remote)})
+
+
+@pytest.mark.parametrize("payload", [
+    "ghp_" + "a" * 36,
+    "/" + "Users" + "/test-person/private-project/",
+    "eyJ" + "a" * 24 + "." + "b" * 24 + "." + "c" * 24,
+])
+def test_private_content_is_not_committed_or_echoed(repo, payload):
+    source, remote = repo
+    hook.checkpoint(source, {str(remote)})
+    before = git(source, "rev-parse", "HEAD")
+    (source / "README.md").write_text(payload)
+    with pytest.raises(RuntimeError) as error:
+        hook.checkpoint(source, {str(remote)})
+    assert payload not in str(error.value)
+    assert git(source, "rev-parse", "HEAD") == before
+    assert git(remote, "rev-parse", "main") == before
+
+
+def test_clean_checkout_does_not_push_private_intermediate_commit(repo):
+    source, remote = repo
+    hook.checkpoint(source, {str(remote)})
+    before = git(remote, "rev-parse", "main")
+    (source / "README.md").write_text("ghp_" + "b" * 36)
+    git(source, "add", "README.md")
+    git(source, "commit", "-m", "Unsafe local commit")
+    (source / "README.md").write_text("Clean tip does not clean history\n")
+    git(source, "add", "README.md")
+    git(source, "commit", "-m", "Remove from tip")
+    assert not git(source, "status", "--porcelain")
+    with pytest.raises(RuntimeError, match="credential"):
+        hook.checkpoint(source, {str(remote)})
+    assert git(remote, "rev-parse", "main") == before
+
+
+@pytest.mark.parametrize("name", ["docs/auth.json", "examples/credentials/provider.json", "docs/factory.local.toml"])
+def test_nested_private_files_are_not_automatically_staged(repo, name):
+    source, remote = repo
+    path = source / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("private fixture")
+    hook.checkpoint(source, {str(remote)})
+    assert name not in git(source, "ls-files")
+    git(source, "add", name)
+    with pytest.raises(RuntimeError, match="outside development scope"):
+        hook.checkpoint(source, {str(remote)})
+
+
+def test_web_source_is_published_without_dependency_artifacts(repo):
+    source, remote = repo
+    (source / "web" / "src").mkdir(parents=True)
+    (source / "web" / "src" / "App.tsx").write_text("export const title = 'Factory';\n")
+    (source / "web" / "node_modules").mkdir()
+    (source / "web" / "node_modules" / "installed.js").write_text("generated")
+    hook.checkpoint(source, {str(remote)})
+    tracked = git(source, "ls-files")
+    assert "web/src/App.tsx" in tracked
+    assert "node_modules" not in tracked

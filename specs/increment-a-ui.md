@@ -13,14 +13,14 @@ Issues own the completion checklists: [Pi qualification #6](https://github.com/y
 - Baseline source: `6584f45712b9286c7f3ef671f5062050127900e3`.
 - Isolated candidate branch: `feat/increment-a-ui`. Existing controller installation and state are unchanged.
 - Fresh Python 3.11 environment: **114 tests passed in 69.62 seconds** on 2026-09-12. This includes the installed Pi 0.85.1 deterministic loopback test. It is not a live provider or model-quality test.
-- Pi currently accepts explicit API-key routes in the factory adapter. Native Pi documents ChatGPT OAuth, but the factory does not yet provision or preserve that isolated subscription credential lifecycle.
+- Pi currently accepts explicit API-key routes in the factory adapter. Each harness must receive only its own explicitly configured credential; native support for another authentication method is not authorization to use it.
 - No live Pi coder route/account/limits are configured. Claude Code is read-only in the current worker; direct Codex assignments are outside the controller.
 - No web client, sprint snapshot store or takeover CLI exists. The authenticated local API exposes basic status and operator decisions.
-- Prior Wind Down coding checkouts remain clean and retained for review. They were host-access worktrees, not automatically archived/cleaned controller attempts. Do not apply factory-owned teardown to those checkouts implicitly.
+- Developer review checkouts and controller-owned execution workspaces have different lifecycles. Only verified, archived controller-owned resources qualify for automatic teardown.
 
 ## Ordered work
 
-1. **Qualify Pi.** Select the native account/provider, exact model/version, processing-region basis, credential reference and limits. Add native subscription provisioning/refresh support if needed. Keep a provider-only credential store outside candidate source, exclude credentials from logs and archives, prohibit paid fallback, and test filesystem denial/cancellation/refresh behavior. Use ordinary bootstrap tools for a missing bootstrap capability; identify this explicitly. Qualify the resulting controller revision in new state before selecting it for later runs.
+1. **Qualify Pi.** Select an approved provider, exact model/version, processing-region basis, harness-specific credential reference and limits through private configuration. Keep a provider-only credential store outside candidate source, exclude credentials from logs and archives, prohibit paid fallback, and test filesystem denial/cancellation/refresh behavior. Use ordinary bootstrap tools for a missing bootstrap capability; identify this explicitly. Qualify the resulting controller revision in new state before selecting it for later runs.
 2. **Multi-repo records and graph.** Keep roots as the unit of approval and budget; normalize children/dependencies and pin each source. Extend the validated graph and attempt inputs rather than maintaining a parallel multi-repo workflow. Reconstruct combined candidates for integration checks; include all required child and parent acceptance gates.
 3. **Dispatch and recovery.** Add per-repository writer exclusion, worker capacity and route/machine availability to transactional claims. Implement explicit failure classes, one shared repair allowance and one approved fresh availability fallback. Fence old attempts; preserve unknown costs and unique work; reconcile pending external actions before replacement.
 4. **Tracking and qualification.** Read cross-repo relationships and reconcile configured status writes through command adapters. Prove a real bounded two-repo outcome plus isolated cancellation, stale result, restart, provider denial, lease expiry and archival-failure cases. Close A only when its entire issue checklist has evidence.
@@ -34,6 +34,10 @@ Planned changes include configuration schema, controller/store/worker, Pi authen
 
 ## Decisions and limits
 
-The operator selected the overall A-plus-UI scope and Pi. An asynchronous question requests the account/provider and API-equivalent ceiling; no response or elapsed time is treated as approval. Recommended connection is the existing ChatGPT subscription/workhorse through Pi, with no cash purchases or API-key fallback. Availability of that model on the account must be verified, not assumed.
+The selected scope is A followed by the UI, retaining Pi. Deployment-specific account choices, harness restrictions and limits remain in private operator records. A supported authentication mechanism must not be inferred as permission to transfer credentials between harnesses. Public examples use placeholders; installed credentials and elapsed time do not authorize a route or budget.
 
-No numerical budget, new route, fallback route, processing-region attestation, or installation upgrade is granted by this document. A live proposal must record these along with acceptance/graph/command digests before approval and implementation dispatch. Human review, merges and installation decisions remain explicit. No Restful product types belong in the factory core.
+No numerical budget, new route, fallback route, processing-region attestation, or installation upgrade is granted by this document. A live proposal must record these along with acceptance/graph/command digests before approval and implementation dispatch. Human review, merges and installation decisions remain explicit. No project-specific product types belong in the factory core.
+
+## Adapter and configuration boundaries
+
+Keep exactly two lifecycle interfaces, Harness and Environment. Integrations outside those lifecycles use named commands. Route/model/tier selection, credential references and limits live in explicit project configuration, not the controller, frontend or prompts. Snapshot resolved bindings before dispatch; defaults and fallback cannot expand an existing approval. Keep live profiles, account identifiers, local paths and raw evidence outside public source.

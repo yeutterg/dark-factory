@@ -23,3 +23,13 @@ evals/tmp/
 /factory.toml
 /factory.local.toml
 /build/
+
+# Machine-local authentication and session material
+credentials/
+secrets/
+sessions/
+auth.json
+credentials.json
+secrets.json
+factory*.toml
+!examples/factory*.toml
