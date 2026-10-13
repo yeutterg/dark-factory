@@ -32,6 +32,10 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status")
+    sub.add_parser(
+        "preflight",
+        help="Read-only installation/configuration checks; no inference or state access",
+    )
     p_intake = sub.add_parser("intake")
     p_intake.add_argument(
         "--issues-json", required=True, help="JSON file of selected issues"
@@ -104,6 +108,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _dispatch(args: argparse.Namespace) -> int:
+    if args.cmd == "preflight":
+        from dark_factory.preflight import inspect_configuration
+
+        result = inspect_configuration(load_config(args.config))
+        print(json.dumps(result, indent=2))
+        return 0 if result["preflight_passed"] else 2
     if args.cmd == "adapter":
         if args.name == "github-tracking":
             from dark_factory.adapters.projects.github import main as tracking_main

@@ -30,6 +30,8 @@ humans = ["reviewer-name"]
 
 Native execution is the default when `workflow` is absent. Repairs default to zero; setting `max_repairs = 1` adds an explicit conditional repair/check/review branch to the proposal before approval. Runtime selection does not select a model, discover an account or authorize billing. Changing the engine, code, dependency lock, human identity list or repair policy invalidates prior approval.
 
+Run `dark-factory --config /path/to/private/factory.toml preflight` after installation. The worker checks the pinned packages, Node minimum and actual engine import before claiming any attempt. An installation failure leaves eligible work unleased with no attempt cost or reservation; install the selected dependencies and retry, without switching engines or opening a different state directory. The scheduler's probes inherit no credentials or Node hooks.
+
 `run-worker`, `demo` and `serve --worker` use the selected runtime. No model calls occur inside the durable runtime itself. It receives only dispatch identity and observed status over bounded local pipes, with no model or operator credentials. SQLite uses FULL synchronization and a single owner lock; each attempt has a separate database so opening one cannot resume unrelated work.
 
 ## Continue to a concrete human gate
@@ -47,6 +49,8 @@ The local operator credential authenticates the decision channel; the identity a
 Pi retains its native provider configuration and scoped tools. Claude Code retains its subscription adapter for read-only planner/critic/reviewer roles. Codex CLI supports those roles plus coding, with a pinned native invocation, subscription authentication and OS-scoped writes. Each harness owns its route validation, authentication and event parsing; the controller does not interpret provider-specific events.
 
 Live Codex routes are currently blocked in configuration validation and again before adapter invocation. The outer CLI sandbox permits runtime reads for native authentication; the proposed inner tool-permission denial has not yet been qualified with the installed CLI. Do not interpret fixtures or this example as permission to expose real credentials to agent tools. Only explicitly classified simulation fixtures are admitted until a separate credential/tool-isolation qualification proves that boundary. Pi and Claude route admission is unchanged.
+
+Installed Codex 0.162.1 command-sandbox probes deny a dummy credential file while allowing a workspace read. This proves the command sandbox only. The factory's outer macOS sandbox rejects Codex's nested sandbox at startup; built-in tool isolation and complete native stream/live-account qualification remain unproven. A future environment adapter must qualify the complete boundary rather than remove the outer protection to obtain a successful exit. Private profiles should select an explicitly pinned native executable; a home-installed Node wrapper needs package reads that the current single-file grant does not provide. Current Codex rejects overrides of the built-in `openai` provider; native transport retries are bounded by the supervised attempt deadline, not disabled by invalid configuration. No factory/provider/account fallback is enabled.
 
 An illustrative Codex route (complete the private source, isolation and limits first):
 

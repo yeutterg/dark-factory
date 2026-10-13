@@ -19,6 +19,16 @@ dark-factory --config factory.toml demo
 
 `demo` uses explicit fake model routes but real disposable Git checkouts, a real candidate commit, and a canonical Python check. It auto-approves only this simulation, records `simulation-demo` as the actor, and stops at result review. It never calls a model provider, creates a PR or merges. Packaged skills use `@name`; project prompt/skill paths resolve relative to the profile.
 
+## Check a deployment before dispatch
+
+```bash
+dark-factory --config /path/to/private/factory.toml preflight
+```
+
+Preflight loads the strict profile, verifies source revisions, command executable presence, pinned CLI versions and available role coverage, and checks that the selected workflow runtime can load. Live profiles also need named human identities, distinct private random worker/operator credentials of at least 32 characters, native isolation and live-evidence policy. It returns JSON and exits 2 on a failed check. It never opens/locks/migrates controller state, invokes project verification commands, extracts native logins or calls a model provider. It can therefore run while a controller owns its state directory. Credential diagnostics report environment presence only, not token validity; no credential values are printed.
+
+A passing preflight is not live qualification, plan approval, acceptance or an installation decision. It does not validate the behavior of canonical commands, model quality, account processing policy or subscription overage controls. Read [operational readiness](../specs/operational-readiness.md) before treating a deployment as ready for real work.
+
 ## Run selected work with Pi
 
 If Pi is already logged into Together on this Mac (`pi auth check --provider together`), the worker reuses that login. See [Pi + Together](pi-together.md). Use [the annotated live profile](../examples/factory-live.toml) as a template. Supply an explicit source repository/revision, allowed paths, protected verification files, canonical commands, external credential references, exact Pi/model/provider/account/endpoint/region, and budgets. The template intentionally fails validation until those decisions are provided. Region labels are operator assertions backed by the required evidence reference; they are not inferred from model origin. Verify the provider's processing policy before approving a route.

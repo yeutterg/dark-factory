@@ -1,0 +1,25 @@
+# Operational readiness
+
+## Completion contract
+
+The goal is a factory that can carry complete selected real outcomes through all authorized automated work to the first genuine human review/testing gate. A merged PR, green tests, a successful simulation, an agent exit or a working CLI binary does not meet that contract alone. Preserve task-selected CLI adapters and clean workflow/harness/environment boundaries. Strong assumptions are allowed inside approved scope and appear in the result summary; scope, account, permissions, spending and human attestations are not inferred.
+
+## Current audit
+
+The merged base is `35f91807e3ca123936bdca12e791d355745d7e8b`. Its single-repository controller supports exact proposal approval, independent checks/review, durable dispatch reconciliation and one optionally preapproved correctness repair. It does not support required-child graphs, cross-repository integration, bounded availability fallback or publishing/hosted-CI continuation. The existing private deployment profile does not load because its source checkout is absent. Do not redirect that outcome or reuse its account/root allowance for qualification.
+
+Pi retains its native provider adapter and installed local-provider/isolation tests. Claude Code subscription roles remain read-only and need explicit OAuth/model/region/allowance qualification. Live Codex is blocked. Installed Codex 0.162.1 denies dummy credentials in its command sandbox, but nested macOS sandboxing fails at startup. Built-in tools, native subscription stream/account behavior and the whole execution boundary still need qualification. Removing isolation or copying a host login is not a fix.
+
+## Execution sequence
+
+1. Complete state-free preflight and installed-package verification in a separate candidate checkout and fresh state. Prove absent workflow dependencies leave jobs unleased and unbilled. Keep the original controller/state/profile untouched.
+2. Obtain an explicit qualification route/account/processing basis and total spending or subscription allowance. Use issue #6's complete Pi qualification contract: native harness/version, exact model, isolated source/state, scoped access, bounded cancellation, accounting, planning, fresh critique, recorded human proposal approval, coding, canonical checks, independent review and durable result packet. A direct Codex run or fixture cannot close #6. The proposed new $5 Pi/Together qualification allowance is pending, not approved by this document.
+3. Present the actual plan packet/digest for human approval before implementation; present exact candidate, checks, assumptions, costs, retained artifacts and numbered manual steps for human review. Do not attest as the operator or record acceptance without their decision.
+4. Use the qualified, explicitly pinned factory against a separate candidate checkout to implement the full Increment A root (#2), including #8 and #5. Before approval, map every required child/criterion/dependency and required integration/build/hosted-CI gate to executable work or an explicit human gate. Do not select a child to fit bootstrap, close #8 based on the single-repository subset, or start UI #3 as a substitute.
+5. Prove a bounded two-repository outcome at exact candidate commit maps, omitted-child/criterion and missing-integration regressions, dropped handoff/restart/lease fencing, shared limits/writer exclusion, failed build and independent-review repair, exact pushed-revision hosted-CI continuation and archive/backup/restore behavior. All eligible next actions continue without a new user prompt; genuine limits yield a durable incomplete packet with a precise next decision.
+6. Qualify each desired CLI for its actual roles and processing/account policy. Codex needs a compatible environment boundary with installed credential/built-in-tool proofs before live admission. Subscription exhaustion cannot buy credits or migrate credentials to another harness. Qualify adapter changes independently of workflow selection.
+7. Review and explicitly select the controller revision and deployment profile. Only after separate installation authority, drain/back up any existing installation, install the pinned artifact and dependencies, verify its actual version/configuration/health, and start its worker on the selected state. A checkpoint or merge does not perform this cutover.
+
+## Evidence ledger
+
+Track tests and installation artifacts separately from live model and human decisions. Retain private configuration, credential references, state, logs and candidate archives outside versioned documentation. Public evidence contains only exact source/artifact identities, test outcomes and unresolved gates. Record actual downstream readback before checking any gate complete. Full readiness remains pending until the applicable execution, live qualification and human installation decisions are satisfied.

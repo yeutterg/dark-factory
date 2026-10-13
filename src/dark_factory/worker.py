@@ -113,6 +113,8 @@ class Worker:
     def run_once(self):
         self.controller.reconcile_continuations()
         runtime = runtime_for(self.cfg, self.store)
+        # Installation errors are not billable agent attempts. Keep jobs queued.
+        runtime.validate()
         caps = capabilities(self.cfg)
         for aid in runtime.pending_attempts():
             resumed = self.controller.resume_claim(aid, self.worker_id, caps)
