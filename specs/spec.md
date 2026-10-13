@@ -4,7 +4,7 @@
 
 Spend less time coordinating coding agents. A human selects work, approves a plan, and later reviews a result packet. The factory executes bounded jobs and records evidence.
 
-This specification covers **bootstrap**: one project, one machine, one worker, one harness, single-repo outcomes. Multi-repo, web UI, preview delivery, and automatic fallback are later increments.
+This specification covers **bootstrap**: one project, one machine, one worker and interchangeable per-task CLI harnesses for single-repo outcomes. The [durable extension](durable-runtime.md) adds optional dispatch checkpoints and one preapproved correctness repair. Multi-repo, web UI, preview delivery, and automatic provider fallback are later increments.
 
 ## User loop
 
@@ -15,6 +15,8 @@ Short Why / What / Assumption / Needs your input, then a complete proposal. Reco
 
 ### Packet 2 — review the result
 What changed / What to review / What to test. Link diffs, evidence, and remaining manual steps. Failed work uses the same packet and is not presented as ready to merge.
+
+Declare reasonable planning and implementation assumptions in the executive summary, alongside repair history and the exact candidate. Continue eligible automated work until a genuine human gate. Manual attestations require a configured human identity for live work, time, candidate and evidence; agents cannot satisfy human-only criteria or waive missing evidence.
 
 ## Scope
 
@@ -27,8 +29,10 @@ What changed / What to review / What to test. Link diffs, evidence, and remainin
 - Native macOS execution profile for bootstrap.
 - Claude Code subscription OAuth adapter for read-only planning/critique/review: explicit model/effort, isolated credentials, no API fallback, native stream evidence and bounded cancellation. Live route qualification remains separate.
 - Cancellation, timeouts, restart from durable state, archive-before-cleanup.
+- Native or Pi Durable dispatch runtime, independent of the selected CLI harness; Codex subscription adapter with live isolation qualification pending.
+- Optional original-approval-bound repair/check/review branch; no reset of root budgets or deadlines.
 
-Out of scope for bootstrap: web UI, TUI, settings editor, multi-repo graphs, automatic model fallback, preview/merge automation, DORA, arena, further harnesses and Claude coding/session takeover.
+Out of scope for bootstrap: web UI, TUI, settings editor, multi-repo graphs, automatic model fallback, preview/merge automation, DORA, arena and Claude coding/session takeover.
 
 ## Acceptance
 

@@ -10,10 +10,12 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Optional
 
+from dark_factory.adapters.harness.registry import adapter_for
 from dark_factory.config import FactoryConfig, load_prompt
 from dark_factory.models import JOB_KINDS, JobSpec, PlanGraph
 from dark_factory.runner import CommandRunner
 from dark_factory.store import Store, new_id, now_iso
+from dark_factory.workflow import runtime_policy
 
 
 class ControllerError(RuntimeError):
@@ -93,7 +95,7 @@ def _cycles(jobs: list[JobSpec]) -> bool:
 
 
 def default_bootstrap_graph(
-    root_id: str, repo: str, ceiling: int, route_ids: list[str]
+    root_id: str, repo: str, ceiling: int, route_ids: list[str], max_repairs: int = 0
 ) -> PlanGraph:
     jobs = [
         JobSpec(
@@ -141,6 +143,37 @@ def default_bootstrap_graph(
             timeout_seconds=600,
         ),
     ]
+    if max_repairs:
+        jobs += [
+            JobSpec(
+                "repair",
+                "implement",
+                role="coder",
+                repo=repo,
+                depends_on=["critique"],
+                budget_cents=200,
+                timeout_seconds=1800,
+                repair=True,
+            ),
+            JobSpec(
+                "repair-check",
+                "check",
+                repo=repo,
+                depends_on=["repair"],
+                timeout_seconds=300,
+                repair=True,
+            ),
+            JobSpec(
+                "repair-review",
+                "review",
+                role="reviewer",
+                repo=repo,
+                depends_on=["repair-check"],
+                budget_cents=50,
+                timeout_seconds=600,
+                repair=True,
+            ),
+        ]
     return PlanGraph(
         version=1,
         jobs=jobs,
@@ -370,6 +403,7 @@ class Controller:
         package = {
             str(p.relative_to(Path(__file__).parent)): digest(p)
             for p in sorted(Path(__file__).parent.rglob("*.py"))
+            if "node_modules" not in p.parts
         }
         return {
             "runner_code": package,
@@ -378,6 +412,9 @@ class Controller:
             "assets": self._assets(),
             "sources": self.cfg.sources,
             "execution": self.cfg.execution,
+            "workflow": runtime_policy(self.cfg),
+            "operators": self.cfg.raw.get("operators", {}),
+            "continuation": self.cfg.raw.get("continuation", {"max_repairs": 0}),
             "budgets": self.cfg.raw.get("budgets", {}),
             "geography": self.cfg.geography_policy,
         }
@@ -442,7 +479,11 @@ class Controller:
             }
         ceiling = self.cfg.raw.get("budgets", {}).get("root_cents", 1000)
         graph = default_bootstrap_graph(
-            work_item_id, row["repo"], ceiling, list(self.cfg.routes)
+            work_item_id,
+            row["repo"],
+            ceiling,
+            list(self.cfg.routes),
+            self.cfg.raw.get("continuation", {}).get("max_repairs", 0),
         )
         for job in graph.jobs:
             if job.kind == "implement":
@@ -451,6 +492,24 @@ class Controller:
                 job.check_names = list(source["checks"])
         validate_graph(graph, self.cfg)
         snapshot = {
+            "revision_feedback": [
+                {
+                    "at": event["at"],
+                    "actor": event["actor"],
+                    "decision": json.loads(event["payload_json"]),
+                }
+                for event in self.store.query(
+                    "SELECT * FROM audit WHERE action='reject' ORDER BY at,id"
+                )
+                if json.loads(event["payload_json"]).get("work_item_id") == work_item_id
+            ]
+            + [
+                {"attempt": attempt["id"], "findings": attempt["error"]}
+                for attempt in self.store.query(
+                    "SELECT a.id,a.error FROM attempts a JOIN jobs j ON a.job_id=j.id WHERE j.work_item_id=? AND j.kind IN ('critique','review') AND a.status='failed' ORDER BY a.started_at,a.id",
+                    (work_item_id,),
+                )
+            ],
             "source": dict(source),
             "base": base,
             "input_repo": str(inputs / "repo"),
@@ -475,7 +534,11 @@ class Controller:
                     f"{index}_{spec.job_id}_{work_item_id}_v{version}",
                     work_item_id,
                     spec.kind,
-                    "ready" if spec.kind in {"plan", "critique"} else "blocked",
+                    "standby"
+                    if spec.repair
+                    else "ready"
+                    if spec.kind in {"plan", "critique"}
+                    else "blocked",
                     json.dumps(
                         {**vars(spec), "logical_id": spec.job_id, "version": version}
                     ),
@@ -495,6 +558,12 @@ class Controller:
             "commands": bindings,
             "allowed_paths": source["allowed_paths"],
             "protected_paths": source.get("protected_paths", []),
+            "repair_policy": {
+                "max_repairs": self.cfg.raw.get("continuation", {}).get(
+                    "max_repairs", 0
+                ),
+                "shared_scope_budget_deadline": True,
+            },
             "decision": "Review the plan and critique, then approve this exact proposal.",
         }
         self.store.execute(
@@ -553,8 +622,7 @@ class Controller:
         if not row or row["status"] != "awaiting_approval":
             raise ControllerError("cannot approve before planning and critique succeed")
         self._require_root_scope(row)
-        if not actor.strip():
-            raise ControllerError("approver is required")
+        self._require_human(actor, row)
         if any(
             j["status"] != "succeeded"
             for j in self._jobs(work_item_id)
@@ -595,21 +663,26 @@ class Controller:
         self.store.audit(
             actor, "approve", {"work_item_id": work_item_id, "digest": digest}
         )
+        self.reconcile_continuations()
         return digest
 
     @atomic
     def reject(self, work_item_id, actor, reason):
-        row = self.store.one(
-            "SELECT status FROM work_items WHERE id=?", (work_item_id,)
-        )
-        if not row or row["status"] != "awaiting_approval":
-            raise ControllerError("only a pending proposal can be rejected")
+        row = self.store.one("SELECT * FROM work_items WHERE id=?", (work_item_id,))
+        if not row or row["status"] not in {"awaiting_approval", "awaiting_review"}:
+            raise ControllerError(
+                "only a pending proposal or reviewed candidate can be rejected"
+            )
+        self._require_human(actor, row)
+        if not isinstance(reason, str) or not reason.strip():
+            raise ControllerError("rejection reason is required")
         self.store.execute(
             "UPDATE work_items SET status='rejected' WHERE id=?", (work_item_id,)
         )
         self.store.audit(
             actor, "reject", {"work_item_id": work_item_id, "reason": reason}
         )
+        self.reconcile_continuations()
 
     def pause(self, actor):
         self.store.set_op("pause", "on", actor)
@@ -699,15 +772,14 @@ class Controller:
                     eligible = [
                         r
                         for r in self.cfg.routes.values()
-                        if r.harness != "claude-code"
-                        or role in {"planner", "critic", "reviewer"}
+                        if role in adapter_for(r.harness).roles
                     ]
                     if not eligible:
                         continue
                     candidates = [r for r in eligible if r.role == role]
                     route = (candidates or eligible)[0]
                     if (
-                        route.harness in {"pi", "claude-code"}
+                        route.harness != "fake"
                         and self.cfg.execution.get("profile") != "macos-sandbox"
                     ):
                         raise ControllerError("live execution is not qualified")
@@ -821,6 +893,56 @@ class Controller:
         return None
 
     @atomic
+    def resume_claim(self, attempt_id, worker_id, capabilities):
+        """Reacquire dispatch identity; active CLI work is never implicitly replayed."""
+        attempt = self.store.one("SELECT * FROM attempts WHERE id=?", (attempt_id,))
+        if not attempt or attempt["worker_id"] != worker_id:
+            return None
+        job = self.store.one("SELECT * FROM jobs WHERE id=?", (attempt["job_id"],))
+        root = self.store.one(
+            "SELECT * FROM work_items WHERE id=?", (job["work_item_id"],)
+        )
+        inputs = json.loads(attempt["inputs_json"])
+        snapshot = json.loads(root["snapshot_json"])
+        spec = json.loads(job["spec_json"])
+        if attempt["status"] in {"leased", "running", "cancelling"}:
+            if attempt["status"] != "leased" or attempt["pid"] or attempt["workspace"]:
+                return None
+            if not self.dispatch_allowed()[0] or root["status"] not in {
+                "planning",
+                "approved",
+                "running",
+            }:
+                return None
+            self._require_root_scope(root)
+            if min(
+                datetime.fromisoformat(attempt["deadline"]),
+                datetime.fromisoformat(job["lease_until"]),
+            ) <= datetime.now(timezone.utc):
+                return None
+            if snapshot["policy"] != self._policy():
+                raise ControllerError("resumed dispatch policy changed; replan")
+            if job["kind"] not in {"plan", "critique"} and root[
+                "approved_digest"
+            ] != _digest(self._approval_payload(root["id"])):
+                raise ControllerError("resumed dispatch approval changed; replan")
+            required = {"native"}
+            if inputs.get("route"):
+                required.add(inputs["route"]["harness"])
+            if not required <= set(capabilities):
+                return None
+        role = spec.get("role")
+        return {
+            "job": dict(job),
+            "spec": spec,
+            "attempt_id": attempt_id,
+            "work_item": dict(root),
+            "snapshot": snapshot,
+            "inputs": inputs,
+            "prompt": snapshot["policy"]["assets"].get(role, {}).get("body", ""),
+        }
+
+    @atomic
     def heartbeat(self, worker_id, attempt_id=None):
         self.store.execute(
             "UPDATE workers SET last_heartbeat=? WHERE id=?", (now_iso(), worker_id)
@@ -897,11 +1019,41 @@ class Controller:
         for candidate in candidate_map.values():
             candidate["archive"] = str(self.store.resolve_path(candidate["archive"]))
             candidate["diff"] = str(Path(candidate["archive"]) / "diff.patch")
+        assumptions = list(plan.get("proposal", {}).get("assumptions", []))
+        implementation_assumptions_recorded = False
+        if candidate_sha:
+            result_path = Path(candidate_map[row["repo"]]["archive"]) / "result.json"
+            if result_path.is_file():
+                implementation_result = json.loads(result_path.read_text())
+                assumptions += implementation_result.get("assumptions", [])
+                implementation_assumptions_recorded = implementation_result.get(
+                    "assumptions_recorded", False
+                )
         packet = {
             "kind": "result",
             "simulation": snapshot["simulation"],
             "ready_to_merge": False,
             "status": row["status"],
+            "exec_summary": {
+                "outcome": row["status"],
+                "changes": plan.get("proposal", {}).get("what", row["title"]),
+                "assumptions": list(dict.fromkeys(assumptions)),
+                "implementation_assumptions_recorded": implementation_assumptions_recorded,
+                "repairs": [
+                    dict(a)
+                    for a in self.store.query(
+                        "SELECT at,payload_json FROM audit WHERE action='repair.activate' ORDER BY at,id"
+                    )
+                    if json.loads(a["payload_json"]).get("root") == wid
+                ],
+                "candidate": candidate_map,
+                "next_action": self.continuation(wid)["next_action"],
+                "remaining_manual_steps": [
+                    name
+                    for name in snapshot["manual_acceptance"]
+                    if name not in completed_gates
+                ],
+            },
             "What changed": row["title"],
             "What to review": "Exact candidate diff, canonical checks and fresh independent review in the archives.",
             "What to test": [
@@ -931,6 +1083,16 @@ class Controller:
             },
             "candidate": candidate_map,
             "acceptance_coverage": self.coverage(wid),
+            "continuation": self.continuation(wid),
+            "ready_for_human_review": self.continuation(wid)["next_action"]["kind"]
+            == "human_review",
+            "manual_attestations": [
+                dict(gate)
+                for gate in self.store.query(
+                    "SELECT name,actor,at,candidate,passed,evidence FROM manual_gates WHERE root_id=? AND candidate=? ORDER BY name",
+                    (wid, candidate_sha),
+                )
+            ],
             "attempts": records,
             "spent_cents": row["spent_cents"],
             "reserved_cents": row["reserved_cents"],
@@ -1152,13 +1314,40 @@ class Controller:
                 (json.dumps(parsed), json.dumps(packet), root["id"]),
             )
         elif ok and job["kind"] == "review":
+            for optional in self._jobs(root["id"]):
+                if optional["status"] == "standby":
+                    self.store.execute(
+                        "UPDATE jobs SET status='not_needed' WHERE id=?",
+                        (optional["id"],),
+                    )
             self.store.execute(
                 "UPDATE work_items SET status='awaiting_review',presentation_stage='Review' WHERE id=?",
                 (root["id"],),
             )
             self._packet(root["id"])
         elif not ok:
-            self._fail_root(root["id"], error or output or status)
+            correctness_failure = (
+                archive_digest
+                and not timed_out
+                and not cancelled
+                and cost_cents <= json.loads(job["spec_json"])["budget_cents"]
+                and root["approved_digest"]
+                == _digest(self._approval_payload(root["id"]))
+                and (
+                    job["kind"] == "check"
+                    and any(
+                        c.get("exit_code", 0) != 0 for c in result.get("checks", [])
+                    )
+                    or job["kind"] == "review"
+                    and parsed is not None
+                    and not parsed["passed"]
+                    and parsed["findings"]
+                )
+            )
+            if not correctness_failure or not self._activate_repair(
+                root["id"], job, attempt_id
+            ):
+                self._fail_root(root["id"], error or output or status)
             if cancelled:
                 self.store.execute(
                     "UPDATE work_items SET status='cancelled' WHERE id=?", (root["id"],)
@@ -1168,6 +1357,64 @@ class Controller:
             "attempt.finish",
             {"attempt_id": attempt_id, "status": status, "archive": archive_path},
         )
+        self.reconcile_continuations()
+
+    def _activate_repair(self, wid, failed_job, attempt_id):
+        if json.loads(failed_job["spec_json"]).get("repair"):
+            return False
+        repairs = [
+            j for j in self._jobs(wid) if json.loads(j["spec_json"]).get("repair")
+        ]
+        if not repairs or any(j["status"] != "standby" for j in repairs):
+            return False
+        # Every repair and follow-up was in the original approved graph. Failed evidence
+        # stays archived; only a fresh candidate plus checks/review can satisfy acceptance.
+        for job in self._jobs(wid):
+            if job["kind"] in {"check", "review"} and not json.loads(
+                job["spec_json"]
+            ).get("repair"):
+                self.store.execute(
+                    "UPDATE jobs SET status='superseded_by_repair' WHERE id=?",
+                    (job["id"],),
+                )
+        for job in repairs:
+            self.store.execute(
+                "UPDATE jobs SET status='ready' WHERE id=?", (job["id"],)
+            )
+        self.store.execute(
+            "UPDATE work_items SET status='running',presentation_stage='Build' WHERE id=?",
+            (wid,),
+        )
+        self.store.audit(
+            "controller",
+            "repair.activate",
+            {
+                "root": wid,
+                "failed_attempt": attempt_id,
+                "repair_jobs": [j["id"] for j in repairs],
+            },
+        )
+        self._packet(wid)
+        return True
+
+    def required_jobs(self, wid):
+        jobs = self._jobs(wid)
+        repair_active = any(
+            json.loads(j["spec_json"]).get("repair")
+            and j["status"] not in {"standby", "not_needed"}
+            for j in jobs
+        )
+        return [
+            j
+            for j in jobs
+            if not (
+                json.loads(j["spec_json"]).get("repair")
+                and j["status"] in {"standby", "not_needed"}
+                or repair_active
+                and j["kind"] in {"check", "review"}
+                and j["status"] == "superseded_by_repair"
+            )
+        ]
 
     def _parse_role(self, kind, output, snapshot, proposal=None):
         text = output.strip()
@@ -1177,6 +1424,11 @@ class Controller:
         if not isinstance(parsed, dict):
             raise ValueError("expected JSON object")
         if kind == "plan":
+            assumptions = parsed.get("assumptions", [])
+            if not isinstance(assumptions, list) or not all(
+                isinstance(a, str) and a.strip() for a in assumptions
+            ):
+                raise ValueError("planning assumptions must be a list of strings")
             for key in ("why", "what"):
                 if not isinstance(parsed.get(key), str) or not parsed[key]:
                     raise ValueError(f"{key} required")
@@ -1349,6 +1601,110 @@ class Controller:
             )
         return coverage
 
+    def _require_human(self, actor, row):
+        if not isinstance(actor, str) or not actor.strip() or actor != actor.strip():
+            raise ControllerError("named human identity is required")
+        if actor.lower().startswith(("agent", "worker", "model")) or self.store.one(
+            "SELECT id FROM workers WHERE id=?", (actor,)
+        ):
+            raise ControllerError("worker identities cannot make human decisions")
+        humans = self.cfg.raw.get("operators", {}).get("humans", [])
+        simulation = json.loads(row["snapshot_json"])["simulation"]
+        if (humans or not simulation) and actor not in humans:
+            raise ControllerError(
+                "human identity is not configured in operators.humans"
+            )
+
+    def continuation(self, wid):
+        from dark_factory.continuation import describe
+
+        row = self.store.one("SELECT * FROM work_items WHERE id=?", (wid,))
+        if not row:
+            raise ControllerError("work item not found")
+        allowed, reason = self.dispatch_allowed()
+        if allowed:
+            reason = ""
+        if row["snapshot_json"]:
+            snapshot = json.loads(row["snapshot_json"])
+            if datetime.fromisoformat(snapshot["deadline"]) <= datetime.now(
+                timezone.utc
+            ):
+                reason = "root deadline expired"
+            elif row["approved_digest"] and row["approved_digest"] != _digest(
+                self._approval_payload(wid)
+            ):
+                reason = "approved inputs changed; a revised proposal is required"
+            elif (
+                row["spent_cents"] + row["reserved_cents"]
+                >= row["spending_ceiling_cents"]
+            ):
+                reason = "root allowance exhausted"
+        if not reason and row["status"] in {"approved", "running"}:
+            succeeded = {
+                json.loads(j["spec_json"])["logical_id"]
+                for j in self._jobs(wid)
+                if j["status"] == "succeeded"
+            }
+            eligible = [
+                j
+                for j in self.required_jobs(wid)
+                if j["status"] == "ready"
+                and set(json.loads(j["depends_on"])) <= succeeded
+            ]
+            if (
+                eligible
+                and min(json.loads(j["spec_json"])["budget_cents"] for j in eligible)
+                + row["spent_cents"]
+                + row["reserved_cents"]
+                > row["spending_ceiling_cents"]
+            ):
+                reason = "remaining root allowance cannot fund the next required task"
+        view = describe(
+            row,
+            self.required_jobs(wid),
+            self.coverage(wid) if row["snapshot_json"] else [],
+            reason if (reason or not allowed) else "",
+        )
+        if reason and row["status"] == "awaiting_review":
+            view["next_action"] = {
+                "kind": "blocked",
+                "reason": reason,
+                "next_step": "Revalidate the exact candidate and approved authority.",
+            }
+        return view
+
+    @atomic
+    def reconcile_continuations(self):
+        """Repair dropped status handoffs, never create new work or retry failed attempts."""
+        for row in self.store.query("SELECT * FROM work_items ORDER BY created_at,id"):
+            if row["status"] in {"approved", "running"} and row[
+                "approved_digest"
+            ] == _digest(self._approval_payload(row["id"])):
+                jobs = self._jobs(row["id"])
+                succeeded = {
+                    json.loads(j["spec_json"])["logical_id"]
+                    for j in jobs
+                    if j["status"] == "succeeded"
+                }
+                for job in jobs:
+                    if (
+                        job["status"] == "blocked"
+                        and set(json.loads(job["depends_on"])) <= succeeded
+                    ):
+                        self.store.execute(
+                            "UPDATE jobs SET status='ready' WHERE id=?", (job["id"],)
+                        )
+                        self.store.audit(
+                            "controller",
+                            "continuation.reconcile",
+                            {"root": row["id"], "job": job["id"]},
+                        )
+            view = self.continuation(row["id"])
+            value = json.dumps(view, sort_keys=True)
+            key = "continuation:" + row["id"]
+            if self.store.get_op(key, "") != value:
+                self.store.set_op(key, value, "controller")
+
     @atomic
     def cancel_job(self, job_id, actor):
         job = self.store.one("SELECT * FROM jobs WHERE id=?", (job_id,))
@@ -1420,6 +1776,7 @@ class Controller:
             )
             count += 1
         self.store.audit(actor, "recover", {"fenced_attempts": count})
+        self.reconcile_continuations()
         return count
 
     @atomic
@@ -1434,8 +1791,13 @@ class Controller:
             or candidate != commits[row["repo"]]["commit"]
         ):
             raise ControllerError("manual gate or candidate mismatch")
-        if not actor.strip() or not evidence.strip():
-            raise ControllerError("actor and evidence required")
+        self._require_human(actor, row)
+        if (
+            not isinstance(evidence, str)
+            or not evidence.strip()
+            or type(passed) is not bool
+        ):
+            raise ControllerError("evidence and a boolean decision required")
         self.store.execute(
             "INSERT OR REPLACE INTO manual_gates(root_id,candidate,name,actor,at,passed,evidence) VALUES (?,?,?,?,?,?,?)",
             (wid, candidate, name, actor, now_iso(), int(passed), evidence),
@@ -1445,6 +1807,8 @@ class Controller:
             "manual_gate",
             {"root": wid, "candidate": candidate, "name": name, "passed": passed},
         )
+        self._packet(wid)
+        self.reconcile_continuations()
 
     @atomic
     def accept(self, work_item_id, actor):
@@ -1456,7 +1820,7 @@ class Controller:
         self._require_root_scope(row)
         if row["approved_digest"] != _digest(self._approval_payload(work_item_id)):
             raise ControllerError("approved inputs changed; cannot accept")
-        if any(j["status"] != "succeeded" for j in self._jobs(work_item_id)):
+        if any(j["status"] != "succeeded" for j in self.required_jobs(work_item_id)):
             raise ControllerError("required jobs have not succeeded")
         candidate = json.loads(row["candidate_commits"])[row["repo"]]
         snapshot = json.loads(row["snapshot_json"])
@@ -1470,7 +1834,7 @@ class Controller:
                 raise ControllerError(
                     "source target changed; revalidate against the new target before acceptance"
                 )
-        for job in self._jobs(work_item_id):
+        for job in self.required_jobs(work_item_id):
             att = self.store.one(
                 "SELECT * FROM attempts WHERE job_id=? AND status='succeeded'",
                 (job["id"],),
@@ -1495,8 +1859,7 @@ class Controller:
             raise ControllerError(
                 "live evidence required; simulation cannot qualify this outcome"
             )
-        if not actor.strip():
-            raise ControllerError("reviewer is required")
+        self._require_human(actor, row)
         self.store.execute(
             "UPDATE work_items SET status='accepted',presentation_stage='Done',accepted_at=? WHERE id=?",
             (now_iso(), work_item_id),
@@ -1650,5 +2013,9 @@ class Controller:
                 for r in self.store.query(
                     "SELECT id,work_item_id,kind,status FROM jobs"
                 )
+            ],
+            "continuations": [
+                self.continuation(r["id"])
+                for r in self.store.query("SELECT id FROM work_items")
             ],
         }

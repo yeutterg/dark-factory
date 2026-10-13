@@ -4,6 +4,8 @@ Plan selected work, approve it, execute one isolated repository change, and revi
 
 The bootstrap implementation includes real Git workspaces and checks, structured plan/critique/review assignments, a Pi adapter, native macOS isolation, SQLite approvals and leases, verified archives, backup/restore, and JSON GitHub commands. The installed Pi adapter is exercised with a deterministic local HTTP provider in tests; this is not evidence of frontier-model quality or permission to use a live inference account. See [qualification](../specs/qualification.md).
 
+The optional [durable execution layer](durable-execution.md) checkpoints dispatch without replacing individual CLI agents. It also describes preapproved bounded correctness repairs, subscription adapters and named human decision policy.
+
 ## Install and try the isolated fixture
 
 ```bash
@@ -39,6 +41,8 @@ dark-factory --config factory.toml review <work-item-id>
 
 Every approved acceptance criterion has a stable ID and binds canonical checks or declared manual gates. The critic checks that the criteria cover the original request; the independent reviewer must assess every ID with evidence references. The result packet includes `acceptance_coverage` and missing evidence. Successful jobs or a reviewer saying “passed” cannot make an incomplete root accepted. Changing approved scope requires another proposal and approval.
 
+The result packet's `exec_summary` lists declared assumptions, the exact candidate, repair history and remaining manual steps. Agents choose reasonable reversible defaults inside approved scope; implementation assumptions cannot grant new authority. Configure `[operators] humans` for live decisions. Attestations require a named human, timestamp, candidate SHA and evidence. Rejecting a result records feedback for the next proposal; missing criteria cannot be waived in place.
+
 Use `require_live_evidence = true` on a source to prevent simulation from qualifying its outcomes. Routes explicitly classify `evidence_kind` as `live` or `simulation`; fake routes are always simulation. A real Pi process connected to a fixture provider is still simulation. This classification is operator policy, not something a model can change.
 
 Review the numbered test instructions and archived diff/check/reviewer outputs. Record every declared manual gate against the exact candidate SHA, then accept:
@@ -69,7 +73,7 @@ dark-factory --config factory.toml --api-url http://127.0.0.1:8745 pause
 
 The API binds to loopback only. Worker credentials cannot invoke operator decisions. A process lock prevents a second controller from opening the same state directory. Pauses and drains stop new dispatch; cancellation is separate. `resume` clears pause; `undrain` clears drain. Active attempts retain their input snapshots. A valid reload changes future defaults; incompatible approved work stops for a new proposal. Invalid reload retains the last valid in-memory configuration and records an audit event.
 
-`cancel <job-id>` requests process termination and capture. `recover` fences expired leases, preserves unique work and records conservative estimated cost. It never retries automatically. Unknown interrupted usage consumes the reserved allowance. To repair a stopped outcome, inspect the failure packet and use `plan` to create a new version with preserved history and a fresh approval. Bootstrap stops on failure without automatic repair/fallback.
+`cancel <job-id>` requests process termination and capture. `recover` fences expired leases, preserves unique work and records conservative estimated cost. It never replays an interrupted CLI. Unknown interrupted usage consumes the reserved allowance. Repairs default to zero. With `[continuation] max_repairs = 1`, the original proposal includes one conditional correctness repair followed by fresh checks and review, under the original limits. Other stopped outcomes require inspection and a revised plan/approval. There is no automatic provider fallback.
 
 ## Preserve and restore work
 

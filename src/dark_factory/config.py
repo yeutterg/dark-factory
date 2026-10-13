@@ -151,6 +151,9 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             "budgets",
             "sources",
             "execution",
+            "workflow",
+            "operators",
+            "continuation",
         },
         "profile",
     )
@@ -174,6 +177,32 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             raise ConfigError(f"{key} must be a table")
         _fields(table, allowed, key)
     _integer(raw.get("budgets", {}), "root_cents", 1000)
+    continuation = raw.get("continuation", {})
+    if not isinstance(continuation, dict):
+        raise ConfigError("continuation must be a table")
+    _fields(continuation, {"max_repairs"}, "continuation")
+    if _integer(continuation, "max_repairs", 0) > 1:
+        raise ConfigError("at most one targeted correctness repair is supported")
+    workflow = raw.get("workflow", {})
+    if not isinstance(workflow, dict):
+        raise ConfigError("workflow must be a table")
+    _fields(workflow, {"engine", "node_binary"}, "workflow")
+    engine = _require(workflow, "engine", str) if "engine" in workflow else "native"
+    if engine not in {"native", "pi-durable"}:
+        raise ConfigError("unsupported workflow engine")
+    if "node_binary" in workflow and not _require(workflow, "node_binary", str).strip():
+        raise ConfigError("node_binary must not be empty")
+    operators = raw.get("operators", {})
+    if not isinstance(operators, dict):
+        raise ConfigError("operators must be a table")
+    _fields(operators, {"humans"}, "operators")
+    humans = operators.get("humans", [])
+    if (
+        not isinstance(humans, list)
+        or not all(isinstance(x, str) and x.strip() for x in humans)
+        or len(set(humans)) != len(humans)
+    ):
+        raise ConfigError("operators.humans must contain unique named identities")
     if _integer(raw.get("runtime", {}), "api_port", 8745, 1) > 65535:
         raise ConfigError("api_port must be <= 65535")
     version = _require(raw, "schema_version", int)
@@ -469,52 +498,41 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     if not isinstance(execution, dict):
         raise ConfigError("execution must be a table")
     _fields(
-        execution, {"profile", "pi_binary", "claude_binary", "max_seconds"}, "execution"
+        execution,
+        {"profile", "pi_binary", "claude_binary", "codex_binary", "max_seconds"},
+        "execution",
     )
     _integer(execution, "max_seconds", 7200, 1)
-    if "claude_binary" in execution:
-        binary = _require(execution, "claude_binary", str)
-        if not binary.strip():
-            raise ConfigError("claude_binary must not be empty")
-        if "/" in binary:
-            execution["claude_binary"] = _resolve(source_path.parent, binary)
+    for key in ("pi_binary", "claude_binary", "codex_binary"):
+        if key in execution:
+            binary = _require(execution, key, str)
+            if not binary.strip():
+                raise ConfigError(f"{key} must not be empty")
+            if "/" in binary:
+                execution[key] = _resolve(source_path.parent, binary)
     profile = execution.get("profile", "native")
     if profile not in {"native", "macos-sandbox"}:
         raise ConfigError("unsupported execution profile")
     for route in routes.values():
-        if route.harness not in {"fake", "pi", "claude-code"}:
-            raise ConfigError("unsupported harness")
-        if route.harness != "claude-code" and "effort" in routes_raw[route.id]:
+        from dark_factory.adapters.harness.registry import adapter_for
+
+        try:
+            adapter = adapter_for(route.harness)
+        except RuntimeError as exc:
+            raise ConfigError("unsupported harness") from exc
+        if not adapter.supports_effort and "effort" in routes_raw[route.id]:
             raise ConfigError(
-                "explicit effort is supported only by the Claude Code adapter"
+                "explicit effort is supported only by native Claude Code and Codex adapters"
             )
         if route.effort not in {"low", "medium", "high", "xhigh", "max"}:
             raise ConfigError("invalid route effort")
-        if route.harness == "claude-code":
-            if route.role not in {"planner", "critic", "reviewer"}:
-                raise ConfigError("Claude Code subscription routes are read-only")
-            if (
-                route.provider != "claude-subscription"
-                or route.endpoint != "https://api.anthropic.com"
-            ):
-                raise ConfigError(
-                    "Claude Code requires the first-party subscription route"
-                )
-            if (
-                not route.auth_env
-                or route.auth_env in {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
-                or route.api
-            ):
-                raise ConfigError(
-                    "Claude Code requires a subscription OAuth token reference, never an API key"
-                )
-            if not re.fullmatch(
-                r"claude-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]+(?:-[0-9]+)*", route.model
-            ):
-                raise ConfigError(
-                    "Claude Code requires an explicit model ID, not an alias"
-                )
-        if route.harness in {"pi", "claude-code"}:
+        validator = getattr(adapter.factory, "validate_route", None)
+        if validator:
+            try:
+                validator(route)
+            except ValueError as exc:
+                raise ConfigError(str(exc)) from exc
+        if adapter.binary_key:
             if profile != "macos-sandbox" or not normalized_sources:
                 raise ConfigError(
                     "live harness requires sources and macos-sandbox execution"

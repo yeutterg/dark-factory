@@ -65,6 +65,30 @@ def subscription_environment(base, runtime, token):
 class ClaudeCodeHarness:
     name = "claude-code"
 
+    @staticmethod
+    def validate_route(route):
+        import re
+
+        if route.role not in {"planner", "critic", "reviewer"}:
+            raise ValueError("Claude Code subscription routes are read-only")
+        if (
+            route.provider != "claude-subscription"
+            or route.endpoint != "https://api.anthropic.com"
+        ):
+            raise ValueError("Claude Code requires the first-party subscription route")
+        if (
+            not route.auth_env
+            or route.auth_env in {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
+            or route.api
+        ):
+            raise ValueError(
+                "Claude Code requires a subscription OAuth token reference, never an API key"
+            )
+        if not re.fullmatch(
+            r"claude-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]+(?:-[0-9]+)*", route.model
+        ):
+            raise ValueError("Claude Code requires an explicit model ID, not an alias")
+
     def __init__(self, binary="claude"):
         self.binary = str(Path(shutil.which(binary) or binary).resolve())
         self._cancel = threading.Event()
@@ -185,7 +209,8 @@ class ClaudeCodeHarness:
                         msg = item.get("message", {})
                         if item.get("is_api_error_message") is True:
                             detail = " ".join(
-                                p.get("text", "") for p in msg.get("content", [])
+                                p.get("text", "")
+                                for p in msg.get("content", [])
                                 if p.get("type") == "text"
                             )
                             raise ValueError("Claude provider error: " + detail[:1000])

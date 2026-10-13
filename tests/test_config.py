@@ -32,3 +32,28 @@ def test_china_blocked() -> None:
 def test_missing_file() -> None:
     with pytest.raises(ConfigError):
         load_config("/tmp/does-not-exist-factory.toml")
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        '[workflow]\nengine = "other"',
+        '[workflow]\nengine = []',
+        '[workflow]\nengine = 1',
+        '[workflow]\nengine = "native"\nfallback = true',
+        "[continuation]\nmax_repairs = 2",
+        "[continuation]\nmax_repairs = true",
+        '[operators]\nhumans = ["greg", "greg"]',
+    ],
+)
+def test_runtime_policy_rejects_implicit_expansion(extra):
+    text = Path("examples/factory.toml").read_text() + "\n" + extra
+    with pytest.raises(ConfigError):
+        parse_toml_bytes(text.encode(), Path("examples/factory.toml").resolve())
+
+
+def test_durable_example_is_simulation_only():
+    cfg = load_config("examples/factory-durable.toml")
+    assert cfg.raw["workflow"]["engine"] == "pi-durable"
+    assert cfg.raw["continuation"]["max_repairs"] == 1
+    assert all(r.harness == "fake" for r in cfg.routes.values())
