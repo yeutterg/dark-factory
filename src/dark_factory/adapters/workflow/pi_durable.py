@@ -22,9 +22,12 @@ class PiDurableRuntime:
 
     def __init__(self, cfg, store):
         self.cfg, self.store = cfg, store
+        self._validation = None
 
     def validate(self):
         """Check the installed runtime without leasing work or opening its database."""
+        if self._validation is not None:
+            return dict(self._validation)
         for package in ("pi-durable", "pi-ai", "chord"):
             manifest = (
                 ENGINE_DIR
@@ -54,27 +57,28 @@ class PiDurableRuntime:
             version = ()
         if code or len(version) != 3 or version < (22, 19, 0):
             raise RuntimeError("Pi Durable requires Node >=22.19.0")
-        code, _, _ = runner._run(
+        code, probe, _ = runner._run(
             [
                 binary,
-                "--input-type=module",
-                "-e",
-                "await import('@earendil-works/pi-durable')",
+                "--experimental-strip-types",
+                str(ENGINE_DIR / "main.ts"),
+                "--preflight",
             ],
             b"",
             10,
             ENGINE_DIR,
             self._environment(),
         )
-        if code:
+        if code or probe.strip() != b'{"version":1,"type":"ready"}':
             raise RuntimeError(
                 "installed Pi Durable dependencies cannot load; reinstall with npm ci"
             )
-        return {
+        self._validation = {
             "engine": self.name,
             "node_version": ".".join(map(str, version)),
             "package_version": "1.0.3",
         }
+        return dict(self._validation)
 
     @staticmethod
     def _environment():
@@ -91,6 +95,12 @@ class PiDurableRuntime:
             path.parent.name
             for path in directory.glob("att_*/dispatch.sqlite")
             if not self.store.get_op("workflow-settled:" + path.parent.name, "")
+            and (
+                row := self.store.one(
+                    "SELECT status FROM attempts WHERE id=?", (path.parent.name,)
+                )
+            )
+            and row["status"] != "not_started"
         }
         # The controller lease precedes the engine checkpoint. Discovery is not
         # authority: resume_claim must still validate owner, policy and lease.

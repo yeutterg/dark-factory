@@ -36,6 +36,7 @@ ATTEMPT_STATUSES = (
     "cancelled",
     "timed_out",
     "archived",
+    "not_started",
 )
 
 PRESENTATION_STAGES = ("Plan", "Build", "Check", "Review", "Done")

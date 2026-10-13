@@ -51,35 +51,46 @@ const Dispatch = defineTask<Input, { phase: "execute" }, Observation>({
   },
 });
 
-let harness: Harness | undefined;
-try {
-  const init = await read();
-  if (init.version !== 1 || typeof init.database !== "string" ||
-      typeof init.attemptId !== "string" || !/^att_[a-f0-9]+$/.test(init.attemptId) ||
-      typeof init.digest !== "string" || !/^[a-f0-9]{64}$/.test(init.digest)) throw Error("Invalid dispatch identity");
+async function openHarness(path: string): Promise<Harness> {
   const registry = createRegistry();
   registry.install(defineExtension({ name: "factory-cli-runtime", tasks: [Dispatch] }));
-  const database = await openNodeSqliteDatabase(init.database);
+  const database = await openNodeSqliteDatabase(path);
   // The application requires power-failure durability beyond upstream's NORMAL default.
   await database.exec("PRAGMA synchronous = FULL");
-  harness = await Harness.open(await SqliteStorage.open(database), { models: createModels(), registry }, ctx);
-  const root = await harness.root(ctx);
-  const attemptId = init.attemptId;
-  const digest = init.digest;
-  const taskId = await root.commit(async (tx) => {
-    const doc = await tx.doc(Attempts);
-    const existing = doc.items[attemptId];
-    if (existing) {
-      if (existing.digest !== digest) throw Error("Dispatch inputs changed");
-      return existing.taskId;
-    }
-    const id = await tx.createTask(Dispatch, { attemptId, digest }, { ownership: { kind: "conversation" } });
-    doc.items[attemptId] = { taskId: id, digest };
-    return id;
-  }, ctx);
-  // Do not resume unrelated tasks: the bridge grants authority for this attempt only.
-  const task = await harness.waitForTask(taskId as Parameters<Harness["waitForTask"]>[0], ctx);
-  write({ version: 1, type: "result", attemptId, digest, outcome: task.state.outcome.status });
+  return Harness.open(await SqliteStorage.open(database), { models: createModels(), registry }, ctx);
+}
+
+let harness: Harness | undefined;
+try {
+  if (process.argv.includes("--preflight")) {
+    // Exercise the exact imports and startup path, never a controller database.
+    harness = await openHarness(":memory:");
+    await harness.root(ctx);
+    write({ version: 1, type: "ready" });
+  } else {
+    const init = await read();
+    if (init.version !== 1 || typeof init.database !== "string" ||
+        typeof init.attemptId !== "string" || !/^att_[a-f0-9]+$/.test(init.attemptId) ||
+        typeof init.digest !== "string" || !/^[a-f0-9]{64}$/.test(init.digest)) throw Error("Invalid dispatch identity");
+    harness = await openHarness(init.database);
+    const root = await harness.root(ctx);
+    const attemptId = init.attemptId;
+    const digest = init.digest;
+    const taskId = await root.commit(async (tx) => {
+      const doc = await tx.doc(Attempts);
+      const existing = doc.items[attemptId];
+      if (existing) {
+        if (existing.digest !== digest) throw Error("Dispatch inputs changed");
+        return existing.taskId;
+      }
+      const id = await tx.createTask(Dispatch, { attemptId, digest }, { ownership: { kind: "conversation" } });
+      doc.items[attemptId] = { taskId: id, digest };
+      return id;
+    }, ctx);
+    // Do not resume unrelated tasks: the bridge grants authority for this attempt only.
+    const task = await harness.waitForTask(taskId as Parameters<Harness["waitForTask"]>[0], ctx);
+    write({ version: 1, type: "result", attemptId, digest, outcome: task.state.outcome.status });
+  }
 } catch {
   write({ version: 1, type: "error", message: "Durable dispatch failed; inspect controller evidence" });
   process.exitCode = 2;

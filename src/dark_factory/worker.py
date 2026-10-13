@@ -113,31 +113,58 @@ class Worker:
     def run_once(self):
         self.controller.reconcile_continuations()
         runtime = runtime_for(self.cfg, self.store)
+        pending = runtime.pending_attempts()
+        if not pending and (
+            not self.controller.dispatch_allowed()[0]
+            or not self.store.one("SELECT id FROM jobs WHERE status='ready' LIMIT 1")
+        ):
+            return False  # No Node probes while idle, paused or drained.
         # Installation errors are not billable agent attempts. Keep jobs queued.
-        runtime.validate()
+        try:
+            runtime.validate()
+        except Exception as exc:
+            self.store.set_op("workflow_unavailable", str(exc), self.worker_id)
+            self.controller.reconcile_continuations()
+            raise
+        self.store.set_op("workflow_unavailable", "", self.worker_id)
         caps = capabilities(self.cfg)
-        for aid in runtime.pending_attempts():
+        for aid in pending:
             resumed = self.controller.resume_claim(aid, self.worker_id, caps)
             if resumed:
                 active = (
                     self.store.one("SELECT status FROM attempts WHERE id=?", (aid,))[0]
                     == "leased"
                 )
-                runtime.run(resumed, lambda: self._execute(resumed))
+                self._run_claim(runtime, resumed)
                 if active:
                     self.controller.reconcile_continuations()
                     return True
         claimed = self.controller.claim_job(self.worker_id, caps)
         if not claimed:
             return False
+        self._run_claim(runtime, claimed)
+        return True
+
+    def _run_claim(self, runtime, claimed):
+        started = False
+
+        def execute():
+            nonlocal started
+            started = True
+            self._execute(claimed)
+
         try:
-            runtime.run(claimed, lambda: self._execute(claimed))
+            runtime.run(claimed, execute)
         except Exception as exc:
             # A runtime failure cannot trigger another harness or duplicate a completed CLI.
+            self.store.set_op("workflow_unavailable", str(exc), self.worker_id)
             row = self.store.one(
                 "SELECT status FROM attempts WHERE id=?", (claimed["attempt_id"],)
             )
-            if row["status"] in {"leased", "running", "cancelling"}:
+            released = not started and self.controller.release_unstarted_claim(
+                claimed["attempt_id"], self.worker_id, str(exc)
+            )
+            if not released and row["status"] in {"leased", "running", "cancelling"}:
                 self.controller.finish_attempt(
                     claimed["attempt_id"],
                     False,
@@ -154,7 +181,6 @@ class Worker:
             raise
         finally:
             self.controller.reconcile_continuations()
-        return True
 
     def _execute(self, claimed):
         attempt_id = claimed["attempt_id"]

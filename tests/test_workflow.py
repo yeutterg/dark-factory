@@ -116,7 +116,7 @@ def test_restart_after_cli_completion_does_not_execute_twice(tmp_path, monkeypat
 
     def spawn(*args, **kwargs):
         proc = actual(*args, **kwargs)
-        if str(ENGINE_DIR / "main.ts") in args[0]:
+        if str(ENGINE_DIR / "main.ts") in args[0] and "--preflight" not in args[0]:
             assert not any(
                 "TOKEN" in k or "KEY" in k or k == "NODE_OPTIONS" for k in kwargs["env"]
             )

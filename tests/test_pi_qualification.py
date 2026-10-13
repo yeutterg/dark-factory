@@ -22,8 +22,10 @@ from dark_factory.worker import Worker
     sys.platform != "darwin" or not shutil.which("pi"),
     reason="installed Pi and macOS required",
 )
-def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch):
+@pytest.mark.parametrize("tamper_runtime", [False, True])
+def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch, tamper_runtime):
     requests = []
+    denied_runtime_results = []
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -92,6 +94,13 @@ def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch):
                     }
                 )
             elif any(m["role"] == "tool" for m in messages):
+                if tamper_runtime:
+                    denied_runtime_results.extend(
+                        str(m.get("content", ""))
+                        for m in messages
+                        if m["role"] == "tool"
+                        and m.get("tool_call_id", "").startswith("write_runtime")
+                    )
                 content = "Implemented the approved message change."
             else:
                 tool_calls = [
@@ -109,6 +118,23 @@ def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch):
                         },
                     }
                 ]
+                if tamper_runtime:
+                    model_input = max(
+                        (cfg.state_dir / "runtime").glob("att_*/agent/models.json"),
+                        key=lambda path: path.stat().st_mtime_ns,
+                    )
+                    tool_calls.append(
+                        {
+                            "id": "write_runtime",
+                            "type": "function",
+                            "function": {
+                                "name": "write",
+                                "arguments": json.dumps(
+                                    {"path": str(model_input), "content": "{}"}
+                                ),
+                            },
+                        }
+                    )
             answer = {
                 "id": "completion",
                 "object": "chat.completion",
@@ -136,7 +162,9 @@ def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch):
                 if content:
                     delta["content"] = content
                 if tool_calls:
-                    delta["tool_calls"] = [{"index": 0, **tool_calls[0]}]
+                    delta["tool_calls"] = [
+                        {"index": i, **call} for i, call in enumerate(tool_calls)
+                    ]
                 chunks = [
                     {
                         "id": "completion",
@@ -242,6 +270,13 @@ def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch):
             assert usage["cost"] > 0
         ctrl.accept(wid, "qualification-test")
         assert len(requests) == 5
+        if tamper_runtime:
+            assert denied_runtime_results
+            assert any(
+                "operation not permitted" in text.lower()
+                or "permission denied" in text.lower()
+                for text in denied_runtime_results
+            )
         assert (
             len(
                 {

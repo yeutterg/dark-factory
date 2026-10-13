@@ -159,7 +159,13 @@ def test_durable_load_probe_strips_secrets_and_node_hooks(tmp_path, monkeypatch)
 
     def run(self, argv, stdin, timeout, cwd, env):
         assert "NODE_OPTIONS" not in env and "OPENAI_API_KEY" not in env
-        return 0, b"v22.19.0" if "--version" in argv else b"", b""
+        if "--version" not in argv:
+            assert "--experimental-strip-types" in argv and "--preflight" in argv
+        return (
+            0,
+            b"v22.19.0" if "--version" in argv else b'{"version":1,"type":"ready"}',
+            b"",
+        )
 
     monkeypatch.setattr(pi_durable.CommandRunner, "_run", run)
     result = pi_durable.PiDurableRuntime(SimpleNamespace(raw={}), None).validate()
