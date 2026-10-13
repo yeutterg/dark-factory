@@ -37,6 +37,9 @@ class Route:
     api: str = ""
     evidence_kind: str = "simulation"
     effort: str = "high"
+    reasoning: bool = False
+    context_window: int = 128000
+    max_tokens: int = 8192
 
 
 @dataclass
@@ -222,6 +225,9 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
                 "api",
                 "evidence_kind",
                 "effort",
+                "reasoning",
+                "context_window",
+                "max_tokens",
             },
             "route",
         )
@@ -273,6 +279,9 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             api=str(item.get("api", "")),
             evidence_kind=evidence_kind,
             effort=str(item.get("effort", "high")),
+            reasoning=bool(item.get("reasoning", False)),
+            context_window=_integer(item, "context_window", 128000, 1),
+            max_tokens=_integer(item, "max_tokens", 8192, 1),
         )
     if not routes:
         raise ConfigError("at least one route is required")

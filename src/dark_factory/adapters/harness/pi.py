@@ -40,16 +40,17 @@ class PiHarness:
         }
         (agent / "settings.json").write_text(json.dumps(settings))
         provider = {"baseUrl": route["endpoint"], "apiKey": "$" + route["auth_env"]}
-        if route.get("api"):
-            provider["api"] = route["api"]
+        api = route.get("api") or ""
+        if api:
+            provider["api"] = api
             provider["models"] = [
                 {
                     "id": route["model"],
                     "name": route["model"],
-                    "reasoning": False,
+                    "reasoning": bool(route.get("reasoning")),
                     "input": ["text"],
-                    "contextWindow": 128000,
-                    "maxTokens": 8192,
+                    "contextWindow": int(route.get("context_window") or 128000),
+                    "maxTokens": int(route.get("max_tokens") or 8192),
                 }
             ]
         (agent / "models.json").write_text(

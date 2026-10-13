@@ -187,6 +187,12 @@ class Worker:
                 binary = self.cfg.execution.get("claude_binary", "claude")
                 readable_files = [Path(shutil.which(binary) or binary).resolve()]
             if live:
+                if role and claimed["inputs"]["route"]["harness"] == "pi":
+                    binary = Path(
+                        shutil.which(self.cfg.execution.get("pi_binary", "pi"))
+                        or self.cfg.execution.get("pi_binary", "pi")
+                    ).resolve()
+                    readable_files = [binary]
                 prefix = self.env.prefix(
                     prepared,
                     runtime,
@@ -206,7 +212,7 @@ class Worker:
             if role:
                 route = claimed["inputs"]["route"]
                 if route["harness"] in {"pi", "claude-code"}:
-                    secret = os.environ.get(route["auth_env"])
+                    secret = _route_secret(route)
                     if not secret:
                         raise RuntimeError(
                             f"route credential unavailable: {route['auth_env']}"
@@ -403,3 +409,25 @@ class Worker:
                 break
             count += 1
         return count
+
+
+def _route_secret(route: dict) -> str:
+    name = route.get("auth_env") or ""
+    if not name:
+        return ""
+    secret = os.environ.get(name, "")
+    if secret:
+        return secret
+    if route.get("provider") == "together" and name == "TOGETHER_API_KEY":
+        import subprocess
+
+        binary = shutil.which("pi") or "pi"
+        proc = subprocess.run(
+            [binary, "auth", "print-api-key", "--provider", "together"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode == 0:
+            return proc.stdout.strip()
+    return ""

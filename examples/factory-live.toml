@@ -28,17 +28,21 @@ pi_binary = "/opt/homebrew/bin/pi"
 max_seconds = 7200
 
 [routes.primary]
-model = "REPLACE_WITH_EXACT_MODEL_ID"
+model = "deepseek-ai/DeepSeek-V4.1-Flash"
 harness = "pi"
 evidence_kind = "live"
-harness_version = "0.82.1"
-provider = "REPLACE_WITH_PROVIDER_ID"
-endpoint = "REPLACE_WITH_VERIFIED_ENDPOINT"
+harness_version = "0.85.1"
+provider = "together"
+endpoint = "https://api.together.ai/v1"
 billing_account = "REPLACE_WITH_APPROVED_ACCOUNT_REFERENCE"
-region = "UNKNOWN" # Deliberately blocks dispatch until verified.
-geography_evidence = "REPLACE_WITH_PROVIDER_POLICY_REFERENCE_AND_VERIFICATION_DATE"
-auth_env = "REPLACE_WITH_PROVIDER_API_KEY_ENV_NAME"
-role = "coder" # One route may cover all roles; contexts remain separate.
+region = "US"
+geography_evidence = "https://docs.together.ai/docs/privacy-and-security — DeepSeek on Together is hosted in Together North America data centers."
+auth_env = "TOGETHER_API_KEY"
+api = "openai-completions"
+role = "coder"
+reasoning = true
+context_window = 1000000
+max_tokens = 8192
 max_cents = 200
 
 [sources."owner/repository"]

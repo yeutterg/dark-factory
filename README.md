@@ -26,6 +26,6 @@ The demo uses simulated agents with real Git workspaces and checks. It makes no 
 
 Run tests with `python -m pytest`.
 
-[Usage guide](docs/usage.md) · [Live configuration](examples/factory-live.toml) · [Qualification status](specs/qualification.md) · [Roadmap](specs/tasks.md)
+[Usage guide](docs/usage.md) · [Pi + Together](docs/pi-together.md) · [Live configuration](examples/factory-live.toml) · [Qualification status](specs/qualification.md) · [Roadmap](specs/tasks.md)
 
 MIT licensed.
