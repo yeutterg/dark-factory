@@ -10,6 +10,8 @@ The merged base is `35f91807e3ca123936bdca12e791d355745d7e8b`. Its single-reposi
 
 Pi retains its native provider adapter and installed local-provider/isolation tests. Claude Code subscription roles remain read-only and need explicit OAuth/model/region/allowance qualification. Live Codex is blocked. Installed Codex 0.162.1 denies dummy credentials in its command sandbox, but nested macOS sandboxing fails at startup. Built-in tools, native subscription stream/account behavior and the whole execution boundary still need qualification. Removing isolation or copying a host login is not a fix.
 
+Live custom Pi models also need pinned complete pricing and validated usage counters: absent custom prices default to zero in Pi. Route pricing is approved policy; the adapter injects it and independently records conservative client estimates, not invoices. Unknown/interrupted usage consumes the attempt reservation. A strict billed-dollar ceiling needs verified provider/account controls because usage/cancellation can lag an in-flight request. Do not infer those controls from a controller budget or an installed login.
+
 ## Execution sequence
 
 1. Complete state-free preflight and installed-package verification in a separate candidate checkout and fresh state. Prove absent workflow dependencies leave jobs unleased and unbilled. Keep the original controller/state/profile untouched.

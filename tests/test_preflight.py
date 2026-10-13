@@ -74,6 +74,28 @@ def test_live_preflight_requires_human_and_secure_operator_channel(tmp_path):
     assert cfg.operator_token not in json.dumps(result)
 
 
+def test_preflight_missing_subscription_credential_is_a_blocker(tmp_path, monkeypatch):
+    cfg = cfg_for(tmp_path)
+    route = cfg.routes["fake-coder"]
+    route.harness = "claude-code"
+    route.auth_env = "FACTORY_TEST_SUBSCRIPTION"
+    monkeypatch.delenv(route.auth_env, raising=False)
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "dark_factory.preflight.adapter_for",
+        lambda name: SimpleNamespace(
+            name=name, roles={"planner", "critic", "reviewer"}, open=lambda *args: None
+        ),
+    )
+    result = inspect_configuration(cfg)
+    assert not result["preflight_passed"]
+    assert any(
+        c["name"] == "credential-source:fake-coder" and not c["passed"]
+        for c in result["checks"]
+    )
+
+
 def test_missing_durable_install_leaves_job_unleased_and_unbilled(
     tmp_path, monkeypatch
 ):

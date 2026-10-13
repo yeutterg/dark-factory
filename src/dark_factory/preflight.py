@@ -54,6 +54,19 @@ def inspect_configuration(cfg):
         check("route:" + name, harness)
         if checks[-1]["passed"]:
             roles.update(adapter.roles)
+        if route.harness != "fake":
+            checks.append(
+                {
+                    "name": "credential-source:" + name,
+                    "passed": bool(os.environ.get(route.auth_env))
+                    or (
+                        route.harness == "pi"
+                        and route.provider == "together"
+                        and route.auth_env == "TOGETHER_API_KEY"
+                    ),
+                    "requirement": "explicit environment credential or configured harness-native login source; validity unverified",
+                }
+            )
     missing_roles = sorted({"planner", "critic", "coder", "reviewer"} - roles)
     checks.append(
         {"name": "roles", "passed": not missing_roles, "missing": missing_roles}

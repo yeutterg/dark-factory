@@ -231,8 +231,10 @@ class Worker:
             role = spec.get("role")
             prefix = []
             readable_files = []
+            immutable_runtime_files = ()
             if role:
                 adapter = adapter_for(claimed["inputs"]["route"]["harness"])
+                immutable_runtime_files = adapter.immutable_runtime_files
                 if adapter.binary_key:
                     binary = adapter.binary(self.cfg)
                     readable_files = [Path(shutil.which(binary) or binary).resolve()]
@@ -246,6 +248,7 @@ class Worker:
                     else (["."] if not role else []),
                     protected=snapshot["source"].get("protected_paths", []),
                     readable_files=readable_files,
+                    immutable_runtime_files=immutable_runtime_files,
                     private_paths=[
                         self.cfg.source_path,
                         Path(snapshot["source"]["path"]),

@@ -200,7 +200,7 @@ def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch):
     )
     text = text.replace(
         'role = "coder"',
-        'role = "coder"\nauth_env = "FACTORY_TEST_KEY"\ngeography_evidence = "Deterministic loopback fixture; no inference"\napi = "openai-completions"',
+        'role = "coder"\nauth_env = "FACTORY_TEST_KEY"\ngeography_evidence = "Deterministic loopback fixture; no inference"\napi = "openai-completions"\npricing = { input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }\npricing_evidence = "Fixture estimate; not provider billing"',
     )
     text += '\n[execution]\nprofile = "macos-sandbox"\n'
     text += f'\n[sources."yeutterg/dark-factory"]\npath = "{source["path"]}"\nrevision = "HEAD"\nchecks = ["verify"]\nallowed_paths = ["message.py"]\nprotected_paths = ["verify.py", "AGENTS.md"]\nmanual_acceptance = []\n'
@@ -234,6 +234,12 @@ def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch):
         row = store.one("SELECT * FROM work_items")
         assert row["status"] == "awaiting_review", row["packet_json"]
         assert json.loads(row["packet_json"])["simulation"] is True
+        for attempt in store.query(
+            "SELECT result_json FROM attempts WHERE route_id IS NOT NULL"
+        ):
+            usage = json.loads(attempt["result_json"])["usage"]
+            assert usage["cost_source"] == "approved-per-token-pricing"
+            assert usage["cost"] > 0
         ctrl.accept(wid, "qualification-test")
         assert len(requests) == 5
         assert (

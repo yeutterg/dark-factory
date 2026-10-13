@@ -28,6 +28,7 @@ class HarnessAdapter:
     supports_effort: bool = False
     session_paths: tuple[str, ...] = ()
     credential_files: tuple[str, ...] = ()
+    immutable_runtime_files: tuple[str, ...] = ()
 
     def binary(self, cfg):
         return cfg.execution.get(self.binary_key, self.binary_default)
@@ -63,6 +64,7 @@ ADAPTERS = {
             "pi",
             credential_resolver=resolve_credential,
             session_paths=("agent/sessions",),
+            immutable_runtime_files=("agent/models.json", "agent/settings.json"),
         ),
         HarnessAdapter(
             "codex",
