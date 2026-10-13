@@ -22,3 +22,12 @@ Implementation authority remains the [specification](spec.md) and [constitution]
 - [x] Claude Code read-only subscription adapter, native OAuth credential reference, worker/config integration, stream/accounting contracts and installed-CLI local-provider isolation test. Live subscription route/allowance/geography qualification remains pending.
 
 - [ ] Bounded automatic fallback and frontier/workhorse/cheap defaults: [#5](https://github.com/yeutterg/dark-factory/issues/5), part of increment A; subscription exhaustion must never enable paid credits.
+
+## Modular durable extension
+
+- [x] Runtime protocol with native default and opt-in pinned Pi Durable dispatch adapter; no model/provider authority in the runtime.
+- [x] Harness registry and isolated Codex subscription event contract; preserve individual Pi and Claude Code routes.
+- [x] Persisted root continuation, dropped-handoff reconciliation, missing-evidence readiness guards and one original-approval-bound repair/check/review branch.
+- [x] Executive-summary assumptions and repairs, named human candidate-bound attestations, no waiver mechanism and rejection feedback into replanning.
+- [x] Real durable engine crash/restart fixtures and bounded-repair regressions without external inference spending.
+- [ ] Installed Codex isolation and live account qualification; required-child/cross-repository delivery and hosted-CI orchestration remain separate work.

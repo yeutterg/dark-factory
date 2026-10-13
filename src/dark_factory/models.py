@@ -59,6 +59,7 @@ class JobSpec:
     timeout_seconds: int = 3600
     manual_gate: bool = False
     check_names: list[str] = field(default_factory=list)
+    repair: bool = False
 
 
 @dataclass

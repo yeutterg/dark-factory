@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import time
 from pathlib import Path
@@ -11,10 +10,13 @@ from pathlib import Path
 from dark_factory import artifacts
 from dark_factory.adapters.env.native import NativeEnvironment, process_environment
 from dark_factory.adapters.git.local import capture, git
-from dark_factory.adapters.harness.claude_code import ClaudeCodeHarness
-from dark_factory.adapters.harness.fake import FakeHarness
-from dark_factory.adapters.harness.pi import PiHarness
+from dark_factory.adapters.harness.registry import (
+    adapter_for,
+    capabilities,
+    credential_for,
+)
 from dark_factory.runner import CommandRunner
+from dark_factory.workflow import runtime_for
 
 
 class Worker:
@@ -28,25 +30,7 @@ class Worker:
         self.env = NativeEnvironment(cfg.state_dir / "workspaces")
 
     def _harness(self, route=None):
-        if route and route["harness"] == "pi":
-            binary = self.cfg.execution.get("pi_binary", "pi")
-            actual = CommandRunner(self.cfg.source_path.parent).run_plain(
-                [binary, "--version"], 10
-            )
-            if actual[0] or actual[1].strip() != route["harness_version"]:
-                raise RuntimeError("Pi version differs from pinned route")
-            return PiHarness(binary)
-        if route and route["harness"] == "claude-code":
-            binary = self.cfg.execution.get("claude_binary", "claude")
-            actual = CommandRunner(self.cfg.source_path.parent).run_plain(
-                [binary, "--version"], 10
-            )
-            if actual[0] or actual[1].strip() != route["harness_version"]:
-                raise RuntimeError("Claude Code version differs from pinned route")
-            return ClaudeCodeHarness(binary)
-        if route is None or route["harness"] == "fake":
-            return FakeHarness()
-        raise RuntimeError("unsupported route; no fallback permitted")
+        return adapter_for(route["harness"] if route else "fake").open(self.cfg, route)
 
     def _context(self, claimed, workspace):
         root = claimed["work_item"]
@@ -61,29 +45,57 @@ class Worker:
             "manual_gates": snapshot["manual_acceptance"],
             "routes": snapshot["policy"]["routes"],
             "spending_ceiling_cents": root["spending_ceiling_cents"],
+            "revision_feedback": snapshot.get("revision_feedback", []),
         }
         if kind == "plan":
             common["selected_work"] = {"title": root["title"], "body": root["body"]}
         else:
             common["approved_requirements"] = json.loads(root["plan_json"])
-            # The source excerpt is not an instruction for the independent reviewer.
             if kind == "review":
                 common["approved_requirements"].pop("selected_work", None)
+        if claimed["spec"].get("repair"):
+            common["targeted_repair"] = [
+                {
+                    "kind": job["kind"],
+                    "error": attempt["error"],
+                    "result": json.loads(attempt["result_json"] or "{}").get(
+                        "checks", []
+                    ),
+                }
+                for job in self.controller._jobs(root["id"])
+                for attempt in self.store.query(
+                    "SELECT error,result_json FROM attempts WHERE job_id=? AND status='failed'",
+                    (job["id"],),
+                )
+            ]
         if kind in {"check", "review"}:
             common["candidate"] = json.loads(root["candidate_commits"])
         if kind == "review":
             candidate = common["candidate"][root["repo"]]
+            candidate_result = json.loads(
+                (
+                    self.store.resolve_path(candidate["archive"]) / "result.json"
+                ).read_text()
+            )
+            common["declared_candidate_assumptions"] = candidate_result.get(
+                "assumptions", []
+            )
             common["exact_diff"] = (
                 self.store.resolve_path(candidate["archive"]) / "diff.patch"
             ).read_text()
             common["check_evidence"] = []
             for job in self.controller._jobs(root["id"]):
-                if job["kind"] == "check":
+                if job["kind"] == "check" and job["status"] == "succeeded":
                     att = self.store.one(
-                        "SELECT result_json FROM attempts WHERE job_id=? AND status='succeeded'",
+                        "SELECT result_json,inputs_json FROM attempts WHERE job_id=? AND status='succeeded'",
                         (job["id"],),
                     )
-                    common["check_evidence"].append(json.loads(att["result_json"]))
+                    if (
+                        att
+                        and json.loads(att["inputs_json"])["candidate"]
+                        == common["candidate"]
+                    ):
+                        common["check_evidence"].append(json.loads(att["result_json"]))
         # Preserve repository instructions as labeled source material; never merge
         # project-local executable extensions or settings into the harness environment.
         instructions = {}
@@ -99,16 +111,50 @@ class Worker:
         )
 
     def run_once(self):
-        caps = ["native", "fake"]
-        if PiHarness.available(self.cfg.execution.get("pi_binary", "pi")):
-            caps.append("pi")
-        if ClaudeCodeHarness.available(
-            self.cfg.execution.get("claude_binary", "claude")
-        ):
-            caps.append("claude-code")
+        self.controller.reconcile_continuations()
+        runtime = runtime_for(self.cfg, self.store)
+        caps = capabilities(self.cfg)
+        for aid in runtime.pending_attempts():
+            resumed = self.controller.resume_claim(aid, self.worker_id, caps)
+            if resumed:
+                active = (
+                    self.store.one("SELECT status FROM attempts WHERE id=?", (aid,))[0]
+                    == "leased"
+                )
+                runtime.run(resumed, lambda: self._execute(resumed))
+                if active:
+                    self.controller.reconcile_continuations()
+                    return True
         claimed = self.controller.claim_job(self.worker_id, caps)
         if not claimed:
             return False
+        try:
+            runtime.run(claimed, lambda: self._execute(claimed))
+        except Exception as exc:
+            # A runtime failure cannot trigger another harness or duplicate a completed CLI.
+            row = self.store.one(
+                "SELECT status FROM attempts WHERE id=?", (claimed["attempt_id"],)
+            )
+            if row["status"] in {"leased", "running", "cancelling"}:
+                self.controller.finish_attempt(
+                    claimed["attempt_id"],
+                    False,
+                    "workflow runtime failed",
+                    claimed["spec"]["budget_cents"],
+                    None,
+                    error=str(exc),
+                )
+            self.store.audit(
+                self.worker_id,
+                "workflow.error",
+                {"attempt": claimed["attempt_id"], "error": str(exc)},
+            )
+            raise
+        finally:
+            self.controller.reconcile_continuations()
+        return True
+
+    def _execute(self, claimed):
         attempt_id = claimed["attempt_id"]
         job = claimed["job"]
         spec = claimed["spec"]
@@ -163,7 +209,7 @@ class Worker:
                 "commit": snapshot["base"],
             }
             candidate = claimed["inputs"]["candidate"].get(claimed["work_item"]["repo"])
-            if job["kind"] in {"check", "review"}:
+            if job["kind"] in {"check", "review"} or spec.get("repair"):
                 if not candidate:
                     raise RuntimeError("candidate input missing")
                 artifacts.verify(self.store.resolve_path(candidate["archive"]))
@@ -183,16 +229,12 @@ class Worker:
             role = spec.get("role")
             prefix = []
             readable_files = []
-            if role and claimed["inputs"]["route"]["harness"] == "claude-code":
-                binary = self.cfg.execution.get("claude_binary", "claude")
-                readable_files = [Path(shutil.which(binary) or binary).resolve()]
+            if role:
+                adapter = adapter_for(claimed["inputs"]["route"]["harness"])
+                if adapter.binary_key:
+                    binary = adapter.binary(self.cfg)
+                    readable_files = [Path(shutil.which(binary) or binary).resolve()]
             if live:
-                if role and claimed["inputs"]["route"]["harness"] == "pi":
-                    binary = Path(
-                        shutil.which(self.cfg.execution.get("pi_binary", "pi"))
-                        or self.cfg.execution.get("pi_binary", "pi")
-                    ).resolve()
-                    readable_files = [binary]
                 prefix = self.env.prefix(
                     prepared,
                     runtime,
@@ -211,7 +253,7 @@ class Worker:
                 raise RuntimeError("attempt cancelled")
             if role:
                 route = claimed["inputs"]["route"]
-                if route["harness"] in {"pi", "claude-code"}:
+                if route["harness"] != "fake":
                     secret = _route_secret(route)
                     if not secret:
                         raise RuntimeError(
@@ -246,6 +288,15 @@ class Worker:
                         timed_out = True
                         harness.cancel()
                     if event.type != "heartbeat":
+                        if event.type == "session":
+                            self.store.audit(
+                                self.worker_id,
+                                "harness.session",
+                                {
+                                    "attempt": attempt_id,
+                                    "session": event.data.get("session_id"),
+                                },
+                            )
                         events.append(
                             {"type": event.type, "text": event.text, "data": event.data}
                         )
@@ -262,6 +313,25 @@ class Worker:
                 )
                 result["prompt_sha256"] = artifacts.digest(runtime / "prompt.txt")
                 if job["kind"] == "implement":
+                    try:
+                        report = json.loads(output)
+                    except ValueError:
+                        report = {}
+                    assumptions = (
+                        report.get("assumptions", [])
+                        if isinstance(report, dict)
+                        else []
+                    )
+                    if not isinstance(assumptions, list) or not all(
+                        isinstance(a, str) and a.strip() for a in assumptions
+                    ):
+                        raise RuntimeError(
+                            "implementation assumptions must be a list of strings"
+                        )
+                    result["assumptions"] = assumptions
+                    result["assumptions_recorded"] = (
+                        isinstance(report, dict) and "assumptions" in report
+                    )
                     result["candidate"] = capture(
                         prepared.workspace,
                         snapshot["base"],
@@ -337,10 +407,18 @@ class Worker:
                     }
                     if "candidate" in result:
                         files["diff.patch"] = result["candidate"]["diff"]
-                    sessions = runtime / "agent" / "sessions"
-                    if sessions.exists():
-                        for index, session in enumerate(sessions.rglob("*.jsonl")):
-                            files[f"session-{index}.jsonl"] = session.read_text()
+                    session_paths = (
+                        adapter_for(claimed["inputs"]["route"]["harness"]).session_paths
+                        if spec.get("role")
+                        else ()
+                    )
+                    for session_path in session_paths:
+                        session_root = runtime / session_path
+                        if session_root.exists():
+                            for session in session_root.rglob("*.jsonl"):
+                                files[f"session-{len(files)}.jsonl"] = (
+                                    session.read_text()
+                                )
                     # Preserve role output and sessions even if the durable archive fails.
                     for name, body in files.items():
                         (runtime / name).write_text(body)
@@ -412,22 +490,4 @@ class Worker:
 
 
 def _route_secret(route: dict) -> str:
-    name = route.get("auth_env") or ""
-    if not name:
-        return ""
-    secret = os.environ.get(name, "")
-    if secret:
-        return secret
-    if route.get("provider") == "together" and name == "TOGETHER_API_KEY":
-        import subprocess
-
-        binary = shutil.which("pi") or "pi"
-        proc = subprocess.run(
-            [binary, "auth", "print-api-key", "--provider", "together"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if proc.returncode == 0:
-            return proc.stdout.strip()
-    return ""
+    return credential_for(route)

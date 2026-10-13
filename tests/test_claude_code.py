@@ -197,6 +197,7 @@ def config():
         auth_env="FACTORY_CLAUDE_TOKEN",
         role="planner",
         effort="xhigh",
+        api="",  # Native CLI routes must not inherit the Pi example's API protocol.
     )
     return raw
 
@@ -265,7 +266,9 @@ def test_worker_pins_claude_version(tmp_path):
         worker._harness({"harness": "claude-code", "harness_version": "wrong"})
 
 
-def test_native_provider_error_is_preserved_without_accepting_synthetic_output(tmp_path):
+def test_native_provider_error_is_preserved_without_accepting_synthetic_output(
+    tmp_path,
+):
     events = stream()
     events[1]["is_api_error_message"] = True
     events[1]["message"] = {

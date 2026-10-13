@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import shutil
 import sqlite3
+from contextlib import ExitStack
 from pathlib import Path
 
 
@@ -77,7 +79,14 @@ def backup(store, destination: Path) -> None:
     destination = destination.resolve()
     if destination.exists() or destination.is_relative_to(store.state_dir.resolve()):
         raise ValueError("backup needs a new directory outside controller state")
-    with store.transaction():
+    with store.transaction(), ExitStack() as owned:
+        owner_path = store.state_dir / "workflow" / "owner.lock"
+        if owner_path.exists():
+            owner = owned.enter_context(owner_path.open("a+"))
+            try:
+                fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                raise ValueError("drain the workflow runtime before backup") from None
         if store.one(
             "SELECT id FROM attempts WHERE status IN ('leased','running','cancelling')"
         ):
@@ -91,10 +100,24 @@ def backup(store, destination: Path) -> None:
         finally:
             source.close()
             target.close()
-        for directory in ("archives", "artifacts", "workspaces", "inputs", "runtime"):
+        for directory in (
+            "archives",
+            "artifacts",
+            "workspaces",
+            "inputs",
+            "runtime",
+            "workflow",
+        ):
             path = store.state_dir / directory
             if path.exists():
-                shutil.copytree(path, destination / directory, symlinks=True)
+                shutil.copytree(
+                    path,
+                    destination / directory,
+                    symlinks=True,
+                    ignore=shutil.ignore_patterns("auth.json")
+                    if directory == "runtime"
+                    else None,
+                )
         seal(
             destination,
             {

@@ -93,7 +93,14 @@ class FakeHarness:
                 (Path(workspace) / "message.py").write_text(
                     'def message():\n    return "ready"\n'
                 )
-                body = "Updated message.py in the isolated fixture repository"
+                body = json.dumps(
+                    {
+                        "summary": "Updated message.py in the isolated fixture repository",
+                        "assumptions": [
+                            "The configured canonical check defines the requested fixture behavior."
+                        ],
+                    }
+                )
         yield HarnessEvent("text", body)
         self._last = HarnessResult(
             True, body, {"input": 10, "output": 20}, "fake-session", cost_cents=1

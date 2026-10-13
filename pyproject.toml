@@ -25,6 +25,8 @@ where = ["src"]
 dark_factory = [
   "agents/prompts/*.md",
   "agents/skills/*/SKILL.md",
+  "adapters/workflow/pi_engine/*.ts",
+  "adapters/workflow/pi_engine/package*.json",
 ]
 
 [tool.pytest.ini_options]

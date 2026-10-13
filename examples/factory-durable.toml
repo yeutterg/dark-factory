@@ -1,0 +1,40 @@
+schema_version = 1
+repositories = ["example/project"]
+skills = ["@archive-before-delete", "@redesign"]
+
+[project]
+name = "durable-fixture"
+state_dir = "./state/durable-fixture"
+
+[workflow]
+engine = "pi-durable"
+node_binary = "node"
+
+[continuation]
+max_repairs = 1
+
+[budgets]
+root_cents = 2000
+
+[runtime]
+worker_token = "bootstrap-dev-token"
+operator_token = "bootstrap-operator-dev-token"
+
+[routes.fake]
+model = "fake-local"
+harness = "fake"
+harness_version = "0.1"
+provider = "none"
+endpoint = "local"
+billing_account = "simulation"
+region = "LOCAL"
+role = "coder"
+max_cents = 500
+
+[commands.tracking]
+argv = ["python3", "-m", "dark_factory.adapters.projects.github"]
+timeout_seconds = 30
+
+[commands.code_host]
+argv = ["python3", "-m", "dark_factory.adapters.git.github"]
+timeout_seconds = 30

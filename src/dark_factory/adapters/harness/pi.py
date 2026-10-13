@@ -209,3 +209,33 @@ class PiHarness:
 
     def attach_command(self, session_id: str) -> list[str]:
         return [self.binary, "--session", session_id]
+
+
+def resolve_credential(route: dict) -> str:
+    """Only Pi routes may discover Pi's native provider authentication."""
+    import os
+    import subprocess
+
+    name = route.get("auth_env") or ""
+    if not name:
+        return ""
+    secret = os.environ.get(name, "")
+    if secret:
+        return secret
+    if route.get("provider") == "together" and name == "TOGETHER_API_KEY":
+        proc = subprocess.run(
+            [
+                shutil.which("pi") or "pi",
+                "auth",
+                "print-api-key",
+                "--provider",
+                "together",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        if proc.returncode == 0:
+            return proc.stdout.strip()
+    return ""
