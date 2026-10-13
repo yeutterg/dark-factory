@@ -7,6 +7,7 @@ import pytest
 
 from dark_factory.adapters.env.native import process_environment
 from dark_factory.adapters.harness.codex import CodexHarness
+from dark_factory.config import Route
 
 
 def run(tmp_path, events, tail=""):
@@ -95,3 +96,34 @@ def test_incomplete_error_duplicate_or_invalid_usage_fails(tmp_path, events):
 
 def test_timeout_kills_cli_and_removes_credentials(tmp_path):
     assert not run(tmp_path, stream()[:1], "time.sleep(20)\n").ok
+
+
+def test_unqualified_live_route_is_blocked_before_credentials_are_written(tmp_path):
+    route = Route(
+        id="codex",
+        model="gpt-6.1-sol",
+        harness="codex",
+        harness_version="pinned",
+        provider="chatgpt-subscription",
+        endpoint="https://chatgpt.com/backend-api",
+        billing_account="account",
+        region="US",
+        role="coder",
+        auth_env="AUTH",
+        evidence_kind="live",
+    )
+    with pytest.raises(ValueError, match="unqualified"):
+        CodexHarness.validate_route(route)
+    with pytest.raises(ValueError, match="unqualified"):
+        list(
+            CodexHarness().start(
+                "brief",
+                tmp_path,
+                {
+                    "route": vars(route),
+                    "runtime": str(tmp_path / "runtime"),
+                    "prefix": ["sandbox-exec"],
+                },
+            )
+        )
+    assert not (tmp_path / "runtime").exists()

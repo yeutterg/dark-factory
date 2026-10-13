@@ -387,12 +387,16 @@ class Worker:
                 if git(prepared.workspace, "diff", "HEAD", "--"):
                     ok = False
                     error = "verification command modified candidate source"
+                    result["failure_kind"] = "integrity"
+                elif not ok:
+                    result["failure_kind"] = "canonical-check-failure"
             else:
                 raise RuntimeError("unsupported bootstrap job")
             ok = ok and not cancelled and not timed_out
         except Exception as exc:
             error = str(exc)
             ok = False
+            result["failure_kind"] = "execution"
             timed_out = timed_out or "timed out" in error
             cancelled = cancelled or stopped()
         finally:

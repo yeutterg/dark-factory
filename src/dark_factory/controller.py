@@ -221,6 +221,24 @@ class Controller:
         self.cfg, self.store, self.packaged_prompts = cfg, store, packaged_prompts
         self.runner = CommandRunner(cfg.source_path.parent, cfg.max_output_bytes)
         self._save_config()
+        self.scrub_retired_credentials()
+
+    def scrub_retired_credentials(self):
+        """Only adapter-declared credential files in retired, owned attempt runtimes."""
+        for attempt in self.store.query(
+            "SELECT * FROM attempts WHERE status NOT IN ('leased','running','cancelling')"
+        ):
+            route = json.loads(attempt["inputs_json"] or "{}").get("route")
+            if route:
+                removed = adapter_for(route["harness"]).scrub_credentials(
+                    self.cfg.state_dir / "runtime" / attempt["id"]
+                )
+                if removed:
+                    self.store.audit(
+                        "controller",
+                        "credentials.scrub",
+                        {"attempt": attempt["id"], "files": removed},
+                    )
 
     def _save_config(self):
         import copy
@@ -682,6 +700,8 @@ class Controller:
         self.store.audit(
             actor, "reject", {"work_item_id": work_item_id, "reason": reason}
         )
+        if row["status"] == "awaiting_review":
+            self._packet(work_item_id, reason)
         self.reconcile_continuations()
 
     def pause(self, actor):
@@ -1335,9 +1355,7 @@ class Controller:
                 == _digest(self._approval_payload(root["id"]))
                 and (
                     job["kind"] == "check"
-                    and any(
-                        c.get("exit_code", 0) != 0 for c in result.get("checks", [])
-                    )
+                    and self._checks_authorize_repair(root, snapshot, result)
                     or job["kind"] == "review"
                     and parsed is not None
                     and not parsed["passed"]
@@ -1358,6 +1376,34 @@ class Controller:
             {"attempt_id": attempt_id, "status": status, "archive": archive_path},
         )
         self.reconcile_continuations()
+
+    def _checks_authorize_repair(self, root, snapshot, result):
+        if result.get("failure_kind") != "canonical-check-failure":
+            return False
+        checks = result.get("checks")
+        expected = snapshot["source"]["checks"]
+        candidate = (
+            json.loads(root["candidate_commits"]).get(root["repo"], {}).get("commit")
+        )
+        if not isinstance(checks, list) or len(checks) != len(expected):
+            return False
+        for cid, check in zip(expected, checks):
+            if not isinstance(check, dict):
+                return False
+            # Repetition is valid only when explicitly present in the approved
+            # sequence. No missing, extra or reordered execution can grant repair.
+            if check.get("command") != cid:
+                return False
+            binding = snapshot["bindings"][cid]
+            if (
+                check.get("binding") != binding
+                or check.get("argv") != binding["argv"]
+                or check.get("candidate") != candidate
+                or type(check.get("exit_code")) is not int
+                or check["exit_code"] < 0
+            ):
+                return False
+        return bool(candidate) and any(check["exit_code"] != 0 for check in checks)
 
     def _activate_repair(self, wid, failed_job, attempt_id):
         if json.loads(failed_job["spec_json"]).get("repair"):
@@ -1622,19 +1668,20 @@ class Controller:
         if not row:
             raise ControllerError("work item not found")
         allowed, reason = self.dispatch_allowed()
-        if allowed:
+        automated_work_pending = row["status"] in {"planning", "approved", "running"}
+        if allowed or not automated_work_pending:
             reason = ""
         if row["snapshot_json"]:
             snapshot = json.loads(row["snapshot_json"])
-            if datetime.fromisoformat(snapshot["deadline"]) <= datetime.now(
-                timezone.utc
-            ):
-                reason = "root deadline expired"
-            elif row["approved_digest"] and row["approved_digest"] != _digest(
+            if row["approved_digest"] and row["approved_digest"] != _digest(
                 self._approval_payload(wid)
             ):
                 reason = "approved inputs changed; a revised proposal is required"
-            elif (
+            elif automated_work_pending and datetime.fromisoformat(
+                snapshot["deadline"]
+            ) <= datetime.now(timezone.utc):
+                reason = "root deadline expired"
+            elif automated_work_pending and (
                 row["spent_cents"] + row["reserved_cents"]
                 >= row["spending_ceiling_cents"]
             ):
@@ -1776,6 +1823,7 @@ class Controller:
             )
             count += 1
         self.store.audit(actor, "recover", {"fenced_attempts": count})
+        self.scrub_retired_credentials()
         self.reconcile_continuations()
         return count
 
@@ -1876,6 +1924,7 @@ class Controller:
         from dark_factory.adapters.env.native import NativeEnvironment
         from dark_factory.artifacts import verify
 
+        self.scrub_retired_credentials()
         count = 0
         environment = NativeEnvironment(self.cfg.state_dir / "workspaces")
         for attempt in self.store.query(

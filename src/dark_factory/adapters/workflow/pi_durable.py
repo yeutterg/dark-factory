@@ -23,11 +23,20 @@ class PiDurableRuntime:
 
     def pending_attempts(self):
         directory = self.cfg.state_dir / "workflow"
-        return sorted(
+        recorded = {
             path.parent.name
             for path in directory.glob("att_*/dispatch.sqlite")
             if not self.store.get_op("workflow-settled:" + path.parent.name, "")
-        )
+        }
+        # The controller lease precedes the engine checkpoint. Discovery is not
+        # authority: resume_claim must still validate owner, policy and lease.
+        unstarted = {
+            row["id"]
+            for row in self.store.query(
+                "SELECT id FROM attempts WHERE status='leased' AND workspace IS NULL AND pid IS NULL"
+            )
+        }
+        return sorted(recorded | unstarted)
 
     def run(self, claim, execute):
         attempt_id = claim["attempt_id"]
