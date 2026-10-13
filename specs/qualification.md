@@ -4,6 +4,8 @@
 
 The optional Pi Durable 1.0.3 engine is pinned and type-checked. Tests run its actual SQLite task engine with fixture CLI work, including crash-before-dispatch recovery, completion reconciliation without duplicate execution, and refusal to replay interrupted active CLI work. Native and durable workflows exercise failed checks and blocking reviews through one preapproved repair, fresh verification and the human gate. Assumptions and repair history appear in the executive summary. No external inference spending or running-controller upgrade is part of these checks.
 
+Full local suite: **148 passed** under Python 3.11 in 512.74 seconds, including installed Pi/Claude loopback fixtures on macOS. A final strict workflow-engine type guard has additional targeted configuration regressions; hosted CI checks the final PR revision.
+
 The candidate wheel was built with installed Python 3.11 build tools after package-index timeouts. Its packaged engine source/lock was inspected, and a clean virtual environment ran the installed wheel from an unrelated directory through five jobs to `awaiting_review`, with zero reserved allowance and declared assumptions in the review packet. The optional repair branch was correctly marked unused. This is simulation evidence, not live model acceptance.
 
 Codex CLI invocation, subscription authentication, stream parsing, conservative accounting, timeout and credential cleanup have fixture coverage. Installed Codex permission/isolation and live subscription qualification remain pending. The historical qualification below applies to earlier revisions, not a claim that this candidate has been human-accepted. Required-child graphs, cross-repository integration and hosted-CI continuation inside the controller remain unsupported.

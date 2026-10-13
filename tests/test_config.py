@@ -38,6 +38,8 @@ def test_missing_file() -> None:
     "extra",
     [
         '[workflow]\nengine = "other"',
+        '[workflow]\nengine = []',
+        '[workflow]\nengine = 1',
         '[workflow]\nengine = "native"\nfallback = true',
         "[continuation]\nmax_repairs = 2",
         "[continuation]\nmax_repairs = true",

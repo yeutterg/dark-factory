@@ -187,7 +187,8 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     if not isinstance(workflow, dict):
         raise ConfigError("workflow must be a table")
     _fields(workflow, {"engine", "node_binary"}, "workflow")
-    if workflow.get("engine", "native") not in {"native", "pi-durable"}:
+    engine = _require(workflow, "engine", str) if "engine" in workflow else "native"
+    if engine not in {"native", "pi-durable"}:
         raise ConfigError("unsupported workflow engine")
     if "node_binary" in workflow and not _require(workflow, "node_binary", str).strip():
         raise ConfigError("node_binary must not be empty")
