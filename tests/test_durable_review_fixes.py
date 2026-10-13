@@ -308,3 +308,38 @@ def test_retired_attempt_scrubs_only_declared_credentials(tmp_path, recovery):
         )
     finally:
         store.close()
+
+
+def test_explicitly_repeated_checks_can_authorize_only_the_approved_sequence(tmp_path):
+    cfg, store, ctrl, wid, worker = setup(tmp_path, repairs=1)
+    try:
+        root = dict(store.one("SELECT * FROM work_items WHERE id=?", (wid,)))
+        root["candidate_commits"] = json.dumps(
+            {root["repo"]: {"commit": "candidate-sha"}}
+        )
+        snapshot = json.loads(root["snapshot_json"])
+        cid = snapshot["source"]["checks"][0]
+        snapshot["source"]["checks"] = [cid, cid]
+        binding = snapshot["bindings"][cid]
+        check = {
+            "command": cid,
+            "exit_code": 0,
+            "binding": binding,
+            "argv": binding["argv"],
+            "candidate": "candidate-sha",
+        }
+        result = {
+            "failure_kind": "canonical-check-failure",
+            "checks": [copy.deepcopy(check), copy.deepcopy(check)],
+        }
+        result["checks"][1]["exit_code"] = 1
+        assert ctrl._checks_authorize_repair(root, snapshot, result)
+        result["checks"].pop()
+        assert not ctrl._checks_authorize_repair(root, snapshot, result)
+        # Matching counts are insufficient: different commands cannot be substituted.
+        snapshot["source"]["checks"] = [cid, "other"]
+        snapshot["bindings"]["other"] = binding
+        result["checks"] = [dict(check, command="other", exit_code=1), check]
+        assert not ctrl._checks_authorize_repair(root, snapshot, result)
+    finally:
+        store.close()

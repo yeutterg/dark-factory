@@ -41,6 +41,10 @@ class CodexHarness:
     def validate_route(route):
         import re
 
+        if route.evidence_kind != "simulation":
+            raise ValueError(
+                "live Codex routes are unqualified; credential/tool isolation must be proven first"
+            )
         if (
             route.provider != "chatgpt-subscription"
             or route.endpoint != "https://chatgpt.com/backend-api"
@@ -68,6 +72,10 @@ class CodexHarness:
     def start(self, prompt, workspace, extra=None):
         extra = extra or {}
         route = extra["route"]
+        if route.get("evidence_kind") != "simulation":
+            raise ValueError(
+                "live Codex routes are unqualified; credential/tool isolation must be proven first"
+            )
         if (
             route["provider"] != "chatgpt-subscription"
             or route["endpoint"] != "https://chatgpt.com/backend-api"

@@ -1387,14 +1387,13 @@ class Controller:
         )
         if not isinstance(checks, list) or len(checks) != len(expected):
             return False
-        seen = set()
-        for check in checks:
+        for cid, check in zip(expected, checks):
             if not isinstance(check, dict):
                 return False
-            cid = check.get("command")
-            if not isinstance(cid, str) or cid not in expected or cid in seen:
+            # Repetition is valid only when explicitly present in the approved
+            # sequence. No missing, extra or reordered execution can grant repair.
+            if check.get("command") != cid:
                 return False
-            seen.add(cid)
             binding = snapshot["bindings"][cid]
             if (
                 check.get("binding") != binding

@@ -6,6 +6,8 @@ Regression tests cover controller claims without engine checkpoints, unchanged o
 
 The Codex adapter uses a separate pipe-lifetime credential guardian, plus harness-declared stale-file scrubbing on controller startup and lease recovery. Dummy-token tests kill a worker process with SIGKILL, exercise the actual adapter lifecycle, bound credential lifetime while the parent remains alive, preserve live guardian ownership and retained transcripts, and reject symlinks/overwrites. Local file erasure is not provider token revocation or installed/live Codex isolation qualification. No external inference or live controller state is used.
 
+Follow-up review coverage preserves explicitly repeated checks by matching the exact approved sequence. Live Codex configuration and direct invocation are code-blocked until installed credential/tool isolation is proven; the outer runtime read grant is needed by native authentication and is not proof that agent tools cannot read it. Only explicitly classified simulation fixtures are admitted. Pi and Claude admission is unchanged.
+
 ## Durable candidate — 2026-10-13
 
 The optional Pi Durable 1.0.3 engine is pinned and type-checked. Tests run its actual SQLite task engine with fixture CLI work, including crash-before-dispatch recovery, completion reconciliation without duplicate execution, and refusal to replay interrupted active CLI work. Native and durable workflows exercise failed checks and blocking reviews through one preapproved repair, fresh verification and the human gate. Assumptions and repair history appear in the executive summary. No external inference spending or running-controller upgrade is part of these checks.

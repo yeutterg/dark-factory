@@ -46,6 +46,8 @@ The local operator credential authenticates the decision channel; the identity a
 
 Pi retains its native provider configuration and scoped tools. Claude Code retains its subscription adapter for read-only planner/critic/reviewer roles. Codex CLI supports those roles plus coding, with a pinned native invocation, subscription authentication and OS-scoped writes. Each harness owns its route validation, authentication and event parsing; the controller does not interpret provider-specific events.
 
+Live Codex routes are currently blocked in configuration validation and again before adapter invocation. The outer CLI sandbox permits runtime reads for native authentication; the proposed inner tool-permission denial has not yet been qualified with the installed CLI. Do not interpret fixtures or this example as permission to expose real credentials to agent tools. Only explicitly classified simulation fixtures are admitted until a separate credential/tool-isolation qualification proves that boundary. Pi and Claude route admission is unchanged.
+
 An illustrative Codex route (complete the private source, isolation and limits first):
 
 ```toml
