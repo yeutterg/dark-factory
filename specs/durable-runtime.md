@@ -36,3 +36,7 @@ Pi Durable runs no inference and receives no model, tracker or operator credenti
 ## Recovery contract
 
 CLI internals are opaque to the workflow runtime. A process death may lose uncommitted streamed output. No adapter promises exactly-once CLI side effects or automatic session takeover. Safe recovery consists of observing completed attempts, fencing abandoned processes, preserving work and publishing a precise next decision. Any future session-resume policy must be explicitly approved and qualified per harness.
+
+## Post-merge review hardening
+
+The five reviewed failure paths have explicit regression contracts: discover controller leases before any engine database exists without bypassing resume guards; preserve valid human review after execution allowance/deadline exhaustion; refresh rejected result packets without replacing proposal packets; independently erase transient credentials after worker death and scrub retired legacy remnants; permit repair only for complete, correctly bound canonical-check failures, never source-integrity or execution failures. Credential paths and cleanup remain harness metadata, not provider-specific controller logic. Local erasure is not token revocation; live isolation/account qualification remains separate.

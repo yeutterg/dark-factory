@@ -9,6 +9,7 @@ import threading
 from pathlib import Path
 
 from dark_factory.adapters.harness.base import HarnessEvent, HarnessResult
+from dark_factory.adapters.harness.credential_file import credential_file
 from dark_factory.runner import CommandRunner
 
 
@@ -91,10 +92,17 @@ class CodexHarness:
             ) from None
         runtime = Path(extra["runtime"])
         agent = runtime / "codex-agent"
-        agent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        auth_file = agent / "auth.json"
-        auth_file.write_text(json.dumps(auth))
-        auth_file.chmod(0o600)
+        with credential_file(
+            runtime,
+            "codex-agent/auth.json",
+            json.dumps(auth),
+            extra["timeout_seconds"] + 5,
+        ):
+            yield from self._authenticated_start(prompt, workspace, extra, agent)
+
+    def _authenticated_start(self, prompt, workspace, extra, agent):
+        runtime = Path(extra["runtime"])
+        route = extra["route"]
         env = subscription_environment(extra["env"], agent)
         filesystem = {
             ":root": "deny",
@@ -227,8 +235,6 @@ class CodexHarness:
             except Exception as exc:
                 error = error or str(exc)
             finally:
-                # Credentials must not enter archives; retain only session/evidence files.
-                auth_file.unlink(missing_ok=True)
                 self._result = HarnessResult(
                     not error,
                     "\n".join(answer),
@@ -241,16 +247,19 @@ class CodexHarness:
 
         thread = threading.Thread(target=run, daemon=True)
         thread.start()
-        while True:
-            try:
-                event = events.get(timeout=0.1)
-            except queue.Empty:
-                yield HarnessEvent("heartbeat")
-                continue
-            if event is None:
-                break
-            yield event
-        thread.join()
+        try:
+            while True:
+                try:
+                    event = events.get(timeout=0.1)
+                except queue.Empty:
+                    yield HarnessEvent("heartbeat")
+                    continue
+                if event is None:
+                    break
+                yield event
+        finally:
+            self._cancel.set()
+            thread.join(timeout=5)
 
     def wait(self):
         return self._result

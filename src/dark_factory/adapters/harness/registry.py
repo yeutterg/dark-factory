@@ -27,6 +27,7 @@ class HarnessAdapter:
     credential_resolver: Callable[[dict], str] = explicit_credential
     supports_effort: bool = False
     session_paths: tuple[str, ...] = ()
+    credential_files: tuple[str, ...] = ()
 
     def binary(self, cfg):
         return cfg.execution.get(self.binary_key, self.binary_default)
@@ -44,6 +45,11 @@ class HarnessAdapter:
         if actual[0] or actual[1].strip() != route["harness_version"]:
             raise RuntimeError(f"{self.name} version differs from pinned route")
         return self.factory(binary)
+
+    def scrub_credentials(self, runtime):
+        from dark_factory.adapters.harness.credential_file import scrub_file
+
+        return sum(scrub_file(runtime, path) for path in self.credential_files)
 
 
 ADAPTERS = {
@@ -65,6 +71,7 @@ ADAPTERS = {
             "codex",
             supports_effort=True,
             session_paths=("codex-agent/sessions",),
+            credential_files=("codex-agent/auth.json",),
         ),
         HarnessAdapter(
             "claude-code",
