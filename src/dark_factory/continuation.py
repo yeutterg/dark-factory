@@ -7,7 +7,7 @@ import json
 
 def describe(root, jobs, coverage, dispatch_reason=""):
     succeeded = {
-        json.loads(j["spec_json"])["logical_id"]
+        j["logical_id"]
         for j in jobs
         if j["status"] == "succeeded"
     }

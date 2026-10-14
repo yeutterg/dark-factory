@@ -349,8 +349,7 @@ class Worker:
                 }
                 started = time.monotonic()
                 for event in harness.start(prompt, prepared.workspace, extra):
-                    self.controller.heartbeat(self.worker_id, attempt_id)
-                    if stopped():
+                    if stopped():  # Also renews the lease at most every five seconds.
                         cancelled = True
                         harness.cancel()
                     if time.monotonic() - started >= spec["timeout_seconds"]:

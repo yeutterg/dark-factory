@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import zoneinfo
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
@@ -12,7 +13,16 @@ from typing import Any, Optional
 
 from dark_factory.adapters.harness.registry import adapter_for
 from dark_factory.config import FactoryConfig, load_prompt
-from dark_factory.models import JOB_KINDS, JobSpec, PlanGraph
+from dark_factory.models import (
+    ACTIVE_ATTEMPT,
+    DISPATCHABLE_ROOT,
+    JOB_KINDS,
+    PLANNING_KINDS,
+    TERMINAL_ROOT,
+    JobSpec,
+    PlanGraph,
+    sql_set,
+)
 from dark_factory.runner import CommandRunner
 from dark_factory.store import Store, new_id, now_iso
 from dark_factory.workflow import runtime_policy
@@ -25,7 +35,18 @@ class ControllerError(RuntimeError):
 def atomic(method):
     @wraps(method)
     def wrapped(self, *args, **kwargs):
-        with self.store.transaction():
+        with self.store.transaction(), self.decision():
+            return method(self, *args, **kwargs)
+
+    return wrapped
+
+
+def decided(method):
+    """Evaluate a read-only view against one consistent policy snapshot."""
+
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self.decision():
             return method(self, *args, **kwargs)
 
     return wrapped
@@ -219,6 +240,8 @@ class Controller:
         self, cfg: FactoryConfig, store: Store, packaged_prompts: Path
     ) -> None:
         self.cfg, self.store, self.packaged_prompts = cfg, store, packaged_prompts
+        self._decision_depth = 0
+        self._policy_memo: Optional[dict] = None
         identity = json.dumps(
             {
                 "project_id": cfg.project_id,
@@ -389,9 +412,9 @@ class Controller:
                 if file.is_symlink():
                     raise ControllerError("skill resources cannot be symlinks")
                 if file.is_file():
-                    from dark_factory.artifacts import digest
+                    from dark_factory.artifacts import digest_cached
 
-                    files[str(file.relative_to(path))] = digest(file)
+                    files[str(file.relative_to(path))] = digest_cached(file)
             skills.append(
                 {
                     "name": path.name,
@@ -405,7 +428,7 @@ class Controller:
     def _bindings(self) -> dict:
         import shutil
 
-        from dark_factory.artifacts import digest
+        from dark_factory.artifacts import digest_cached as digest
 
         bindings = {}
         for cid, command in self.cfg.commands.items():
@@ -444,9 +467,38 @@ class Controller:
             }
         return bindings
 
+    @contextmanager
+    def decision(self):
+        """Share one policy evaluation across a complete controller decision.
+
+        Policy inputs are re-read for every outermost decision, so on-disk or
+        in-memory changes between decisions are still detected.
+        """
+        self._decision_depth += 1
+        try:
+            yield
+        finally:
+            self._decision_depth -= 1
+            if not self._decision_depth:
+                self._policy_memo = None
+
     def _policy(self) -> dict:
+        if self._decision_depth and self._policy_memo is not None:
+            return self._policy_memo
+        policy = self._evaluate_policy()
+        if self._decision_depth:
+            self._policy_memo = policy
+        return policy
+
+    def _approval_current(self, row) -> bool:
+        """Whether the recorded approval still covers the current inputs."""
+        return bool(row["approved_digest"]) and row["approved_digest"] == _digest(
+            self._approval_payload(row["id"])
+        )
+
+    def _evaluate_policy(self) -> dict:
         # Availability can narrow at any time; the approved execution authority stays fixed.
-        from dark_factory.artifacts import digest
+        from dark_factory.artifacts import digest_cached as digest
 
         package = {
             str(p.relative_to(Path(__file__).parent)): digest(p)
@@ -553,9 +605,9 @@ class Controller:
                     "decision": json.loads(event["payload_json"]),
                 }
                 for event in self.store.query(
-                    "SELECT * FROM audit WHERE action='reject' ORDER BY at,id"
+                    "SELECT * FROM audit WHERE action='reject' AND json_extract(payload_json,'$.work_item_id')=? ORDER BY at,id",
+                    (work_item_id,),
                 )
-                if json.loads(event["payload_json"]).get("work_item_id") == work_item_id
             ]
             + [
                 {"attempt": attempt["id"], "findings": attempt["error"]}
@@ -582,8 +634,9 @@ class Controller:
         )
         for index, spec in enumerate(graph.jobs):
             self.store.execute(
-                """INSERT INTO jobs(id,work_item_id,kind,status,spec_json,depends_on,reserved_cents)
-                VALUES (?,?,?,?,?,?,?)""",
+                """INSERT INTO jobs(id,work_item_id,kind,status,spec_json,depends_on,
+                reserved_cents,plan_version,logical_id,position)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (
                     f"{index}_{spec.job_id}_{work_item_id}_v{version}",
                     work_item_id,
@@ -598,6 +651,9 @@ class Controller:
                     ),
                     json.dumps(spec.depends_on),
                     spec.budget_cents,
+                    version,
+                    spec.job_id,
+                    index,
                 ),
             )
         packet = {
@@ -645,15 +701,14 @@ class Controller:
         return graph
 
     def _jobs(self, wid):
-        version = self.store.one(
-            "SELECT plan_version FROM work_items WHERE id=?", (wid,)
-        )["plan_version"]
         return [
             dict(j)
             for j in self.store.query(
-                "SELECT * FROM jobs WHERE work_item_id=? ORDER BY id", (wid,)
+                """SELECT j.* FROM jobs j JOIN work_items w ON w.id=j.work_item_id
+                WHERE j.work_item_id=? AND j.plan_version=w.plan_version
+                ORDER BY j.position""",
+                (wid,),
             )
-            if json.loads(j["spec_json"]).get("version", 1) == version
         ]
 
     def _approval_payload(self, wid):
@@ -765,8 +820,20 @@ class Controller:
             return False, "external_action_needs_reconciliation"
         return True, "ok"
 
-    @atomic
     def claim_job(self, worker_id, capabilities):
+        """Lease the next eligible job.
+
+        A root whose approved or planning inputs changed is skipped rather than
+        blocking every other root. Its reason is raised only when nothing else
+        could be dispatched, after the scan's own state changes are committed.
+        """
+        claim, blocked = self._claim(worker_id, capabilities)
+        if claim is None and blocked:
+            raise ControllerError(blocked[0])
+        return claim
+
+    @atomic
+    def _claim(self, worker_id, capabilities):
         if (
             not isinstance(worker_id, str)
             or not worker_id
@@ -779,14 +846,15 @@ class Controller:
             and not self.cfg.project_id
         ):
             raise ControllerError("live execution is not qualified")
+        blocked: list[str] = []
         if not self.dispatch_allowed()[0]:
-            return None
+            return None, blocked
         if self.store.one(
-            "SELECT id FROM attempts WHERE status IN ('leased','running','cancelling')"
+            f"SELECT id FROM attempts WHERE status IN {sql_set(ACTIVE_ATTEMPT)}"
         ):
-            return None
+            return None, blocked
         for root in self.store.query(
-            "SELECT * FROM work_items WHERE status IN ('planning','approved','running') ORDER BY created_at,id"
+            f"SELECT * FROM work_items WHERE status IN {sql_set(DISPATCHABLE_ROOT)} ORDER BY created_at,id"
         ):
             try:
                 self._require_root_scope(root)
@@ -799,29 +867,24 @@ class Controller:
             ):
                 self._fail_root(root["id"], "root deadline expired")
                 continue
-            for job in self._jobs(root["id"]):
+            jobs = self._jobs(root["id"])
+            succeeded = {j["logical_id"] for j in jobs if j["status"] == "succeeded"}
+            for job in jobs:
                 if job["status"] != "ready":
                     continue
-                if not all(
-                    any(
-                        j["status"] == "succeeded"
-                        and json.loads(j["spec_json"])["logical_id"] == dep
-                        for j in self._jobs(root["id"])
-                    )
-                    for dep in json.loads(job["depends_on"])
-                ):
+                if not set(json.loads(job["depends_on"])) <= succeeded:
                     continue
-                if job["kind"] not in {"plan", "critique"}:
+                if job["kind"] not in PLANNING_KINDS:
                     if not root["approved_digest"]:
                         continue
-                    if root["approved_digest"] != _digest(
-                        self._approval_payload(root["id"])
-                    ):
-                        raise ControllerError(
+                    if not self._approval_current(root):
+                        blocked.append(
                             "approved inputs changed; dispatch requires a new decision"
                         )
+                        break
                 elif snapshot["policy"] != self._policy():
-                    raise ControllerError("planning inputs changed; replan")
+                    blocked.append("planning inputs changed; replan")
+                    break
                 spec = json.loads(job["spec_json"])
                 role = spec.get("role")
                 route = None
@@ -836,7 +899,8 @@ class Controller:
                         and self.cfg.execution.get("profile") != "macos-sandbox"
                         and not self.cfg.project_id
                     ):
-                        raise ControllerError("live execution is not qualified")
+                        blocked.append("live execution is not qualified")
+                        continue
                     required = {"native", route.harness}
                 else:
                     required = {"native"}
@@ -961,8 +1025,8 @@ class Controller:
                     "prompt": snapshot["policy"]["assets"]
                     .get(role, {})
                     .get("body", ""),
-                }
-        return None
+                }, blocked
+        return None, blocked
 
     @atomic
     def release_unstarted_claim(self, attempt_id, worker_id, reason):
@@ -1040,9 +1104,9 @@ class Controller:
                 return None
             if snapshot["policy"] != self._policy():
                 raise ControllerError("resumed dispatch policy changed; replan")
-            if job["kind"] not in {"plan", "critique"} and root[
-                "approved_digest"
-            ] != _digest(self._approval_payload(root["id"])):
+            if job["kind"] not in {"plan", "critique"} and not self._approval_current(
+                root
+            ):
                 raise ControllerError("resumed dispatch approval changed; replan")
             required = {"native"}
             if inputs.get("route"):
@@ -1171,9 +1235,9 @@ class Controller:
                 "repairs": [
                     dict(a)
                     for a in self.store.query(
-                        "SELECT at,payload_json FROM audit WHERE action='repair.activate' ORDER BY at,id"
+                        "SELECT at,payload_json FROM audit WHERE action='repair.activate' AND json_extract(payload_json,'$.root')=? ORDER BY at,id",
+                        (wid,),
                     )
-                    if json.loads(a["payload_json"]).get("root") == wid
                 ],
                 "candidate": candidate_map,
                 "next_action": self.continuation(wid)["next_action"],
@@ -1320,9 +1384,7 @@ class Controller:
             or root["status"] == "cancelled"
         )
         ok = bool(ok and not timed_out and not cancelled and result.get("ok", False))
-        if job["kind"] not in {"plan", "critique"} and root[
-            "approved_digest"
-        ] != _digest(self._approval_payload(root["id"])):
+        if job["kind"] not in {"plan", "critique"} and not self._approval_current(root):
             ok = False
             error = "approved inputs changed during attempt"
         parsed = None
@@ -1460,8 +1522,7 @@ class Controller:
                 and not timed_out
                 and not cancelled
                 and cost_cents <= json.loads(job["spec_json"])["budget_cents"]
-                and root["approved_digest"]
-                == _digest(self._approval_payload(root["id"]))
+                and self._approval_current(root)
                 and (
                     job["kind"] == "check"
                     and self._checks_authorize_repair(root, snapshot, result)
@@ -1782,9 +1843,7 @@ class Controller:
             reason = ""
         if row["snapshot_json"]:
             snapshot = json.loads(row["snapshot_json"])
-            if row["approved_digest"] and row["approved_digest"] != _digest(
-                self._approval_payload(wid)
-            ):
+            if row["approved_digest"] and not self._approval_current(row):
                 reason = "approved inputs changed; a revised proposal is required"
             elif automated_work_pending and datetime.fromisoformat(
                 snapshot["deadline"]
@@ -1805,7 +1864,7 @@ class Controller:
             )
         if not reason and row["status"] in {"approved", "running"}:
             succeeded = {
-                json.loads(j["spec_json"])["logical_id"]
+                j["logical_id"]
                 for j in self._jobs(wid)
                 if j["status"] == "succeeded"
             }
@@ -1840,13 +1899,19 @@ class Controller:
     @atomic
     def reconcile_continuations(self):
         """Repair dropped status handoffs, never create new work or retry failed attempts."""
-        for row in self.store.query("SELECT * FROM work_items ORDER BY created_at,id"):
-            if row["status"] in {"approved", "running"} and row[
-                "approved_digest"
-            ] == _digest(self._approval_payload(row["id"])):
+        # A finished root's view cannot change once it has been persisted at that status.
+        for row in self.store.query(
+            f"""SELECT w.* FROM work_items w LEFT JOIN ops o ON o.key='continuation:'||w.id
+            WHERE w.status NOT IN {sql_set(TERMINAL_ROOT)}
+            OR o.value IS NULL OR json_extract(o.value,'$.root_status') IS NOT w.status
+            ORDER BY w.created_at,w.id"""
+        ):
+            if row["status"] in {"approved", "running"} and self._approval_current(
+                row
+            ):
                 jobs = self._jobs(row["id"])
                 succeeded = {
-                    json.loads(j["spec_json"])["logical_id"]
+                    j["logical_id"]
                     for j in jobs
                     if j["status"] == "succeeded"
                 }
@@ -1863,7 +1928,7 @@ class Controller:
                             "continuation.reconcile",
                             {"root": row["id"], "job": job["id"]},
                         )
-            view = self.continuation(row["id"])
+            view = {**self.continuation(row["id"]), "root_status": row["status"]}
             value = json.dumps(view, sort_keys=True)
             key = "continuation:" + row["id"]
             if self.store.get_op(key, "") != value:
@@ -1995,7 +2060,7 @@ class Controller:
         if not row or row["status"] != "awaiting_review":
             raise ControllerError("work item is not awaiting review")
         self._require_root_scope(row)
-        if row["approved_digest"] != _digest(self._approval_payload(work_item_id)):
+        if not self._approval_current(row):
             raise ControllerError("approved inputs changed; cannot accept")
         if any(j["status"] != "succeeded" for j in self.required_jobs(work_item_id)):
             raise ControllerError("required jobs have not succeeded")
@@ -2085,7 +2150,7 @@ class Controller:
             or payload.get("head_sha") != candidate["commit"]
         ):
             raise ControllerError("PR payload must name the exact reviewed candidate")
-        if root["approved_digest"] != _digest(self._approval_payload(wid)):
+        if not self._approval_current(root):
             raise ControllerError("approved inputs changed")
         identity = _digest({"root": wid, "operation": operation, "payload": payload})
         action = self.store.one(

@@ -31,7 +31,7 @@ def runtime_for(cfg, store) -> WorkflowRuntime:
 def runtime_policy(cfg) -> dict:
     from pathlib import Path
 
-    from dark_factory.artifacts import digest
+    from dark_factory.artifacts import digest_cached as digest
 
     config = cfg.raw.get("workflow", {"engine": "native"})
     policy = {"config": config, "contract_version": 1}

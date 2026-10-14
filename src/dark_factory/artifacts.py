@@ -20,6 +20,24 @@ def digest(path: Path) -> str:
     return h.hexdigest()
 
 
+_DIGESTS: dict[tuple, str] = {}
+
+
+def digest_cached(path: Path) -> str:
+    """Digest of a trusted input, re-hashed only when its file identity changes.
+
+    ctime is part of the key: any content write updates it and it cannot be set
+    back with utime. Archive verification always uses digest() instead.
+    """
+    path = Path(path).resolve()
+    stat = path.stat()
+    key = (str(path), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    value = _DIGESTS.get(key)
+    if value is None:
+        value = _DIGESTS[key] = digest(path)
+    return value
+
+
 def manifest(root: Path) -> dict:
     entries = {}
     for path in sorted(root.rglob("*")):

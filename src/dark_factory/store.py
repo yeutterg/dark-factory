@@ -195,6 +195,11 @@ class Store:
                 "created_at": "TEXT",
                 "accepted_at": "TEXT",
             },
+            "jobs": {
+                "plan_version": "INTEGER",
+                "logical_id": "TEXT",
+                "position": "INTEGER",
+            },
             "attempts": {
                 "inputs_json": "TEXT",
                 "result_json": "TEXT",
@@ -220,6 +225,24 @@ class Store:
             root_id TEXT NOT NULL, candidate TEXT NOT NULL, name TEXT NOT NULL,
             actor TEXT NOT NULL, at TEXT NOT NULL, passed INTEGER NOT NULL,
             evidence TEXT NOT NULL, PRIMARY KEY(root_id, candidate, name));
+        """)
+        # Jobs created before these columns existed carry the same facts in spec_json
+        # and a numeric position prefix in their identifier.
+        self.conn.execute(
+            """UPDATE jobs SET
+            plan_version=COALESCE(json_extract(spec_json,'$.version'),1),
+            logical_id=json_extract(spec_json,'$.logical_id'),
+            position=CAST(substr(id,1,instr(id,'_')-1) AS INTEGER)
+            WHERE plan_version IS NULL"""
+        )
+        self.conn.executescript("""
+        CREATE INDEX IF NOT EXISTS jobs_root ON jobs(work_item_id, plan_version, position);
+        CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status);
+        CREATE INDEX IF NOT EXISTS attempts_job ON attempts(job_id);
+        CREATE INDEX IF NOT EXISTS attempts_status ON attempts(status);
+        CREATE INDEX IF NOT EXISTS evidence_attempt ON evidence(attempt_id);
+        CREATE INDEX IF NOT EXISTS audit_action ON audit(action, at);
+        CREATE INDEX IF NOT EXISTS costs_root ON costs(root_id);
         """)
         self.conn.execute(
             "INSERT OR REPLACE INTO meta(key,value) VALUES ('schema_version','2')"
