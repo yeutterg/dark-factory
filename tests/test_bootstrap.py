@@ -595,7 +595,7 @@ def test_successful_job_flags_cannot_substitute_for_criterion_evidence(loop):
             review,
         ),
     )
-    assert all(j["status"] == "succeeded" for j in ctrl._jobs(wid))
+    assert all(j["status"] == "succeeded" for j in ctrl.jobs(wid))
     with pytest.raises(ControllerError, match="acceptance criteria remain incomplete"):
         ctrl.accept(wid, "human")
 

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 from dark_factory import artifacts
+from dark_factory.attempts import AttemptRecords
+from dark_factory.config import FactoryConfig
 from dark_factory.execution.packages import identity, pack, unpack
 from dark_factory.store import Store
 from dark_factory.worker import Worker
@@ -46,13 +47,12 @@ def install_assignment(assignment, root):
             path = root / relative
             if relative.startswith("archives/"):
                 artifacts.verify(path)
-        cfg = SimpleNamespace(
-            state_dir=root,
-            source_path=root / "assignment.json",
-            execution=assignment["execution"],
-            raw={},
-            project_id=assignment["project_id"],
-            max_output_bytes=assignment["max_output_bytes"],
+        cfg = FactoryConfig.replica(
+            root,
+            root / "assignment.json",
+            assignment["execution"],
+            assignment["project_id"],
+            assignment["max_output_bytes"],
         )
         (root / "assignment.json").write_text(json.dumps(assignment))
         return cfg, store
@@ -61,12 +61,14 @@ def install_assignment(assignment, root):
         raise
 
 
-class AttemptController:
+class AttemptController(AttemptRecords):
+    """Replica bookkeeping for one assignment; it holds no scheduling authority."""
+
     def __init__(self, store, claim, alive):
         self.store, self.claim, self.alive = store, claim, alive
         self.receipt = None
 
-    def _jobs(self, wid):
+    def jobs(self, wid):
         return self.store.query(
             "SELECT * FROM jobs WHERE work_item_id=? ORDER BY rowid", (wid,)
         )

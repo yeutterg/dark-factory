@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from dark_factory.adapters.harness.registry import adapter_for
+from dark_factory.attempts import AttemptRecords
 from dark_factory.config import FactoryConfig, load_prompt
 from dark_factory.models import (
     ACTIVE_ATTEMPT,
@@ -233,7 +234,7 @@ def window_open(cfg: FactoryConfig, at: Optional[datetime] = None) -> bool:
     return False
 
 
-class Controller:
+class Controller(AttemptRecords):
     """One-process bootstrap controller; only this object mutates execution state."""
 
     def __init__(
@@ -530,14 +531,16 @@ class Controller:
             "execution": self.cfg.execution,
             "workflow": runtime_policy(self.cfg),
             "operators": self.cfg.raw.get("operators", {}),
-            "continuation": self.cfg.raw.get("continuation", {"max_repairs": 0}),
+            "continuation": self.cfg.raw.get(
+                "continuation", {"max_repairs": self.cfg.max_repairs}
+            ),
             "budgets": self.cfg.raw.get("budgets", {}),
             "geography": self.cfg.geography_policy,
             "deployment": {
                 "project_id": self.cfg.project_id,
-                "role_routes": self.cfg.raw.get("role_routes", {}),
-                "environments": self.cfg.raw.get("environments", {}),
-                "workers": self.cfg.raw.get("workers", {}),
+                "role_routes": self.cfg.role_routes,
+                "environments": self.cfg.environments,
+                "workers": self.cfg.workers,
             },
         }
 
@@ -599,13 +602,13 @@ class Controller:
                 "files": {},
                 "timeout_seconds": 30,
             }
-        ceiling = self.cfg.raw.get("budgets", {}).get("root_cents", 1000)
+        ceiling = self.cfg.budgets["root_cents"]
         graph = default_bootstrap_graph(
             work_item_id,
             row["repo"],
             ceiling,
             list(self.cfg.routes),
-            self.cfg.raw.get("continuation", {}).get("max_repairs", 0),
+            self.cfg.max_repairs,
         )
         for job in graph.jobs:
             if job.kind == "implement":
@@ -640,8 +643,7 @@ class Controller:
             "simulation": simulation,
             "manual_acceptance": source.get("manual_acceptance", []),
             "deadline": (
-                datetime.now(timezone.utc)
-                + timedelta(seconds=self.cfg.execution.get("max_seconds", 7200))
+                datetime.now(timezone.utc) + timedelta(seconds=self.cfg.max_seconds)
             ).isoformat(),
         }
         self.store.execute(
@@ -685,9 +687,7 @@ class Controller:
             "allowed_paths": source["allowed_paths"],
             "protected_paths": source.get("protected_paths", []),
             "repair_policy": {
-                "max_repairs": self.cfg.raw.get("continuation", {}).get(
-                    "max_repairs", 0
-                ),
+                "max_repairs": self.cfg.max_repairs,
                 "shared_scope_budget_deadline": True,
             },
             "decision": "Review the plan and critique, then approve this exact proposal.",
@@ -716,7 +716,7 @@ class Controller:
         )
         return graph
 
-    def _jobs(self, wid):
+    def jobs(self, wid):
         return [
             dict(j)
             for j in self.store.query(
@@ -735,7 +735,7 @@ class Controller:
             "snapshot": json.loads(row["snapshot_json"]),
             "jobs": [
                 {k: j[k] for k in ("id", "kind", "spec_json", "depends_on")}
-                for j in self._jobs(wid)
+                for j in self.jobs(wid)
             ],
             "ceiling": row["spending_ceiling_cents"],
             "policy": self._policy(),
@@ -750,7 +750,7 @@ class Controller:
         self._require_human(actor, row)
         if any(
             j["status"] != "succeeded"
-            for j in self._jobs(work_item_id)
+            for j in self.jobs(work_item_id)
             if j["kind"] in {"plan", "critique"}
         ):
             raise ControllerError("planning and critique must succeed before approval")
@@ -780,7 +780,7 @@ class Controller:
                 row["plan_version"],
             ),
         )
-        for job in self._jobs(work_item_id):
+        for job in self.jobs(work_item_id):
             if job["status"] == "blocked":
                 self.store.execute(
                     "UPDATE jobs SET status='ready' WHERE id=?", (job["id"],)
@@ -822,6 +822,11 @@ class Controller:
 
     def undrain(self, actor):
         self.store.set_op("drain", "off", actor)
+
+    def set_workflow_unavailable(self, reason, actor):
+        """Record why the workflow runtime cannot dispatch; empty clears it."""
+        if self.store.get_op("workflow_unavailable", "") != reason:
+            self.store.set_op("workflow_unavailable", reason, actor)
 
     def dispatch_allowed(self):
         if self.store.get_op("pause") == "on":
@@ -883,7 +888,7 @@ class Controller:
             ):
                 self._fail_root(root["id"], "root deadline expired")
                 continue
-            jobs = self._jobs(root["id"])
+            jobs = self.jobs(root["id"])
             succeeded = {j["logical_id"] for j in jobs if j["status"] == "succeeded"}
             for job in jobs:
                 if job["status"] != "ready":
@@ -924,9 +929,7 @@ class Controller:
                     environment = (
                         route.environment
                         if route
-                        else self.cfg.routes[
-                            self.cfg.raw["role_routes"]["coder"]
-                        ].environment
+                        else self.cfg.routes[self.cfg.role_routes["coder"]].environment
                     )
                     required.add("environment:" + environment)
                 if not required.issubset(set(capabilities)):
@@ -939,9 +942,7 @@ class Controller:
                     > root["spending_ceiling_cents"]
                 ):
                     continue
-                account_limit = self.cfg.raw.get("budgets", {}).get(
-                    "account_cents", 10000
-                )
+                account_limit = self.cfg.budgets["account_cents"]
                 total = self.store.one(
                     "SELECT COALESCE(SUM(spent_cents+reserved_cents),0) n FROM work_items"
                 )["n"]
@@ -952,9 +953,7 @@ class Controller:
                         "SELECT COALESCE(SUM(a.cost_cents),0) n FROM attempts a JOIN jobs j ON a.job_id=j.id WHERE j.work_item_id=? AND j.kind IN ('plan','critique')",
                         (root["id"],),
                     )["n"]
-                    if spent + need > self.cfg.raw.get("budgets", {}).get(
-                        "planning_cents", 100
-                    ):
+                    if spent + need > self.cfg.budgets["planning_cents"]:
                         continue
                 attempt = new_id("att")
                 deadline = min(
@@ -971,10 +970,8 @@ class Controller:
                     "commands": snapshot["bindings"],
                     "role": role,
                     "project_id": self.cfg.project_id,
-                    "lease_seconds": self.cfg.raw.get("workers", {})
-                    .get(worker_id, {})
-                    .get("lease_seconds", 30),
-                    "environment": self.cfg.raw.get("environments", {}).get(environment)
+                    "lease_seconds": self.cfg.lease_seconds(worker_id),
+                    "environment": self.cfg.environments.get(environment)
                     if self.cfg.project_id
                     else None,
                 }
@@ -1191,7 +1188,7 @@ class Controller:
     def _packet(self, wid, error=None):
         row = self.store.one("SELECT * FROM work_items WHERE id=?", (wid,))
         records = []
-        for job in self._jobs(wid):
+        for job in self.jobs(wid):
             for attempt in self.store.query(
                 "SELECT * FROM attempts WHERE job_id=?", (job["id"],)
             ):
@@ -1521,7 +1518,7 @@ class Controller:
                 (json.dumps(parsed), json.dumps(packet), root["id"]),
             )
         elif ok and job["kind"] == "review":
-            for optional in self._jobs(root["id"]):
+            for optional in self.jobs(root["id"]):
                 if optional["status"] == "standby":
                     self.store.execute(
                         "UPDATE jobs SET status='not_needed' WHERE id=?",
@@ -1595,13 +1592,13 @@ class Controller:
         if json.loads(failed_job["spec_json"]).get("repair"):
             return False
         repairs = [
-            j for j in self._jobs(wid) if json.loads(j["spec_json"]).get("repair")
+            j for j in self.jobs(wid) if json.loads(j["spec_json"]).get("repair")
         ]
         if not repairs or any(j["status"] != "standby" for j in repairs):
             return False
         # Every repair and follow-up was in the original approved graph. Failed evidence
         # stays archived; only a fresh candidate plus checks/review can satisfy acceptance.
-        for job in self._jobs(wid):
+        for job in self.jobs(wid):
             if job["kind"] in {"check", "review"} and not json.loads(
                 job["spec_json"]
             ).get("repair"):
@@ -1630,7 +1627,7 @@ class Controller:
         return True
 
     def required_jobs(self, wid):
-        jobs = self._jobs(wid)
+        jobs = self.jobs(wid)
         repair_active = any(
             json.loads(j["spec_json"]).get("repair")
             and j["status"] not in {"standby", "not_needed"}
@@ -1771,7 +1768,7 @@ class Controller:
         proposal = json.loads(row["plan_json"]).get("proposal", {})
         snapshot = json.loads(row["snapshot_json"])
         checks, assessments = set(), {}
-        for job in self._jobs(wid):
+        for job in self.jobs(wid):
             if job["kind"] not in {"check", "review"} or job["status"] != "succeeded":
                 continue
             attempt = self.store.one(
@@ -1840,7 +1837,7 @@ class Controller:
             "SELECT id FROM workers WHERE id=?", (actor,)
         ):
             raise ControllerError("worker identities cannot make human decisions")
-        humans = self.cfg.raw.get("operators", {}).get("humans", [])
+        humans = self.cfg.humans
         simulation = json.loads(row["snapshot_json"])["simulation"]
         if (humans or not simulation) and actor not in humans:
             raise ControllerError(
@@ -1880,7 +1877,7 @@ class Controller:
             )
         if not reason and row["status"] in {"approved", "running"}:
             succeeded = {
-                j["logical_id"] for j in self._jobs(wid) if j["status"] == "succeeded"
+                j["logical_id"] for j in self.jobs(wid) if j["status"] == "succeeded"
             }
             eligible = [
                 j
@@ -1921,7 +1918,7 @@ class Controller:
             ORDER BY w.created_at,w.id"""
         ):
             if row["status"] in {"approved", "running"} and self._approval_current(row):
-                jobs = self._jobs(row["id"])
+                jobs = self.jobs(row["id"])
                 succeeded = {
                     j["logical_id"] for j in jobs if j["status"] == "succeeded"
                 }
@@ -1982,7 +1979,7 @@ class Controller:
                 continue
             if (
                 attempt["status"] == "leased"
-                and attempt["worker_id"] in self.cfg.raw.get("workers", {})
+                and attempt["worker_id"] in self.cfg.workers
                 and not self.store.get_op("execution-start:" + attempt["id"], "")
             ):
                 if self.release_unstarted_claim(
@@ -1998,14 +1995,9 @@ class Controller:
             import signal
 
             if attempt["pid"] and attempt["pid_identity"]:
-                import subprocess
+                from dark_factory.runner import process_identity
 
-                observed = subprocess.run(
-                    ["/bin/ps", "-p", str(attempt["pid"]), "-o", "lstart="],
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
-                if observed == attempt["pid_identity"]:
+                if process_identity(attempt["pid"]) == attempt["pid_identity"]:
                     try:
                         if os.getpgid(attempt["pid"]) == attempt["pid"]:
                             os.killpg(attempt["pid"], signal.SIGKILL)
@@ -2026,7 +2018,9 @@ class Controller:
                 timed_out=True,
             )
             count += 1
-        self.store.audit(actor, "recover", {"fenced_attempts": count})
+        # Periodic service recovery runs every second; record only real fencing.
+        if count or actor == "operator":
+            self.store.audit(actor, "recover", {"fenced_attempts": count})
         self.scrub_retired_credentials()
         self.reconcile_continuations()
         return count

@@ -143,7 +143,9 @@ def test_durable_rejects_unsupported_node_before_loading_engine(
 
     monkeypatch.setattr(pi_durable.CommandRunner, "supervise", run)
     with pytest.raises(RuntimeError, match="Node >=22.19.0"):
-        pi_durable.PiDurableRuntime(SimpleNamespace(raw={}), None).validate()
+        pi_durable.PiDurableRuntime(
+            SimpleNamespace(raw={}, node_binary="node"), None
+        ).validate()
     assert len(calls) == 1
 
 
@@ -168,6 +170,8 @@ def test_durable_load_probe_strips_secrets_and_node_hooks(tmp_path, monkeypatch)
         )
 
     monkeypatch.setattr(pi_durable.CommandRunner, "supervise", run)
-    result = pi_durable.PiDurableRuntime(SimpleNamespace(raw={}), None).validate()
+    result = pi_durable.PiDurableRuntime(
+        SimpleNamespace(raw={}, node_binary="node"), None
+    ).validate()
     assert result["node_version"] == "22.19.0"
     assert not (tmp_path / "workflow").exists()

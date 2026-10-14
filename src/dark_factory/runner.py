@@ -162,3 +162,18 @@ class CommandRunner:
                 proc.wait()
                 proc.stdout.close()
                 proc.stderr.close()
+
+
+def process_identity(pid) -> str:
+    """Start time of a process, used to tell a recorded PID from a reused one."""
+    if type(pid) is not int or pid < 1:
+        return ""
+    result = subprocess.run(
+        ["/bin/ps", "-p", str(pid), "-o", "lstart="],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C"},
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""

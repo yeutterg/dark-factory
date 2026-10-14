@@ -16,7 +16,7 @@ class WorkflowRuntime(Protocol):
 
 
 def runtime_for(cfg, store) -> WorkflowRuntime:
-    engine = cfg.raw.get("workflow", {}).get("engine", "native")
+    engine = cfg.workflow_engine
     if engine == "native":
         from dark_factory.adapters.workflow.native import NativeRuntime
 

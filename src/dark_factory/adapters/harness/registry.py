@@ -103,7 +103,7 @@ def capabilities(cfg):
         "native",
         *(
             "environment:" + name
-            for name, recipe in cfg.raw.get("environments", {}).items()
+            for name, recipe in cfg.environments.items()
             if recipe["kind"] in {"native", "macos-sandbox"}
         ),
         *(name for name, adapter in ADAPTERS.items() if adapter.available(cfg)),

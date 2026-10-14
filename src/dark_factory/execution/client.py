@@ -20,6 +20,7 @@ from urllib.request import (
 
 from dark_factory import artifacts
 from dark_factory.execution.packages import MAX_BYTES, identity
+from dark_factory.runner import process_identity
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -221,7 +222,7 @@ class WorkerClient:
                 start_new_session=True,
             )
             item["pid"] = proc.pid
-            item["pid_identity"] = self._process_identity(proc.pid)
+            item["pid_identity"] = process_identity(proc.pid)
             self._write(journal, item)
             try:
                 while proc.poll() is None:
@@ -241,7 +242,7 @@ class WorkerClient:
                 if proc.poll() is None:
                     cancel.touch()
         elif item["phase"] == "started" and not (directory / "result.json").exists():
-            current = self._process_identity(item.get("pid"))
+            current = process_identity(item.get("pid"))
             if current and current == item.get("pid_identity"):
                 try:
                     alive = self.request("heartbeat", {"attempt_id": aid})
@@ -308,19 +309,6 @@ class WorkerClient:
             ):
                 raise ValueError("refusing cleanup without matching ownership evidence")
             shutil.rmtree(directory)
-
-    @staticmethod
-    def _process_identity(pid):
-        if type(pid) is not int or pid < 1:
-            return ""
-        result = subprocess.run(
-            ["/bin/ps", "-p", str(pid), "-o", "lstart="],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env={"PATH": "/usr/bin:/bin", "LANG": "C"},
-        )
-        return result.stdout.strip() if result.returncode == 0 else ""
 
     def _preflight(self, info):
         import platform

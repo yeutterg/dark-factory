@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 
+from dark_factory.adapters.env.base import Environment
 from dark_factory.adapters.env.native import NativeEnvironment
 
 
@@ -288,7 +289,7 @@ class CommandEnvironment(NativeEnvironment):
         super().release(prepared)
 
 
-def environment_for(root, recipe, route=None):
+def environment_for(root, recipe, route=None) -> Environment:
     kind = recipe["kind"]
     if kind in {"native", "macos-sandbox"}:
         return NativeEnvironment(root)

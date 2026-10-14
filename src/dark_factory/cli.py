@@ -208,7 +208,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 0
     ctrl, store = build_controller(args.config)
     try:
-        if ctrl.cfg.raw.get("workers") and (
+        if ctrl.cfg.workers and (
             args.cmd == "run-worker" or args.cmd == "serve" and args.worker
         ):
             raise ConfigError(
@@ -252,12 +252,17 @@ def _dispatch(args: argparse.Namespace) -> int:
             stop = threading.Event()
 
             def local_worker():
+                last_error = None
                 while not stop.is_set():
                     try:
                         ctrl.recover("local-recovery")
                         Worker(ctrl.cfg, store, ctrl, "local").run_loop()
+                        last_error = None
                     except Exception as exc:
-                        store.audit("local", "worker.error", {"error": str(exc)})
+                        # The loop retries every second; audit each distinct failure once.
+                        if str(exc) != last_error:
+                            store.audit("local", "worker.error", {"error": str(exc)})
+                        last_error = str(exc)
                     stop.wait(1)
 
             thread = (

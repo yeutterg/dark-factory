@@ -202,7 +202,7 @@ def test_non_correctness_failure_cannot_activate_repair(tmp_path, monkeypatch, f
         )
         assert all(
             j["status"] == "standby"
-            for j in ctrl._jobs(wid)
+            for j in ctrl.jobs(wid)
             if json.loads(j["spec_json"]).get("repair")
         )
     finally:

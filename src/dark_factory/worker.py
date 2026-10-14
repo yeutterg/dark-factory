@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 import time
@@ -9,12 +10,15 @@ from pathlib import Path
 
 from dark_factory import artifacts
 from dark_factory.adapters.env.native import NativeEnvironment, process_environment
+from dark_factory.adapters.env.registry import environment_for
 from dark_factory.adapters.git.local import capture, git
 from dark_factory.adapters.harness.registry import (
     adapter_for,
     capabilities,
     credential_for,
 )
+from dark_factory.execution.policy import recipe_for
+from dark_factory.models import ACTIVE_ATTEMPT
 from dark_factory.runner import CommandRunner, RunnerTimeout
 from dark_factory.workflow import runtime_for
 
@@ -68,7 +72,7 @@ class Worker:
                         "checks", []
                     ),
                 }
-                for job in self.controller._jobs(root["id"])
+                for job in self.controller.jobs(root["id"])
                 for attempt in self.store.query(
                     "SELECT error,result_json FROM attempts WHERE job_id=? AND status='failed'",
                     (job["id"],),
@@ -90,7 +94,7 @@ class Worker:
                 self.store.resolve_path(candidate["archive"]) / "diff.patch"
             ).read_text()
             common["check_evidence"] = []
-            for job in self.controller._jobs(root["id"]):
+            for job in self.controller.jobs(root["id"]):
                 if job["kind"] == "check" and job["status"] == "succeeded":
                     att = self.store.one(
                         "SELECT result_json,inputs_json FROM attempts WHERE job_id=? AND status='succeeded'",
@@ -129,18 +133,15 @@ class Worker:
         try:
             runtime.validate()
         except Exception as exc:
-            self.store.set_op("workflow_unavailable", str(exc), self.worker_id)
+            self.controller.set_workflow_unavailable(str(exc), self.worker_id)
             self.controller.reconcile_continuations()
             raise
-        self.store.set_op("workflow_unavailable", "", self.worker_id)
+        self.controller.set_workflow_unavailable("", self.worker_id)
         caps = capabilities(self.cfg)
         for aid in pending:
             resumed = self.controller.resume_claim(aid, self.worker_id, caps)
             if resumed:
-                active = (
-                    self.store.one("SELECT status FROM attempts WHERE id=?", (aid,))[0]
-                    == "leased"
-                )
+                active = self.controller.attempt_status(aid) == "leased"
                 self._run_claim(runtime, resumed)
                 if active:
                     self.controller.reconcile_continuations()
@@ -163,14 +164,12 @@ class Worker:
             runtime.run(claimed, execute)
         except Exception as exc:
             # A runtime failure cannot trigger another harness or duplicate a completed CLI.
-            self.store.set_op("workflow_unavailable", str(exc), self.worker_id)
-            row = self.store.one(
-                "SELECT status FROM attempts WHERE id=?", (claimed["attempt_id"],)
-            )
+            self.controller.set_workflow_unavailable(str(exc), self.worker_id)
+            status = self.controller.attempt_status(claimed["attempt_id"])
             released = not started and self.controller.release_unstarted_claim(
                 claimed["attempt_id"], self.worker_id, str(exc)
             )
-            if not released and row["status"] in {"leased", "running", "cancelling"}:
+            if not released and status in ACTIVE_ATTEMPT:
                 self.controller.finish_attempt(
                     claimed["attempt_id"],
                     False,
@@ -195,14 +194,9 @@ class Worker:
         spec = claimed["spec"]
         snapshot = claimed["snapshot"]
         runtime = self.cfg.state_dir / "runtime" / attempt_id
-        from dark_factory.adapters.env.registry import environment_for
-        from dark_factory.execution.policy import recipe_for
-
         route = claimed["inputs"].get("route")
         recipe = claimed["inputs"].get("environment") or recipe_for(self.cfg, route)
         if route and route["harness"] in recipe.get("harness_binaries", {}):
-            import copy
-
             self.cfg = copy.copy(self.cfg)
             self.cfg.execution = {
                 **self.cfg.execution,
@@ -232,27 +226,13 @@ class Worker:
                 last_heartbeat = time.monotonic()
                 if not self.controller.heartbeat(self.worker_id, attempt_id):
                     return True
-            row = self.store.one(
-                "SELECT status FROM attempts WHERE id=?", (attempt_id,)
-            )
-            return not row or row["status"] not in {"leased", "running"}
+            return self.controller.attempt_status(attempt_id) not in {
+                "leased",
+                "running",
+            }
 
         def on_start(pid):
-            import subprocess
-
-            identity = subprocess.run(
-                ["/bin/ps", "-p", str(pid), "-o", "lstart="],
-                capture_output=True,
-                text=True,
-                check=False,
-            ).stdout.strip()
-            self.store.execute(
-                "UPDATE attempts SET pid_identity=? WHERE id=?", (identity, attempt_id)
-            )
-            self.store.execute(
-                "UPDATE attempts SET pid=?,status='running' WHERE id=? AND status='leased'",
-                (pid, attempt_id),
-            )
+            self.controller.record_process(attempt_id, pid)
 
         try:
             source = {
@@ -271,10 +251,7 @@ class Worker:
                     "commit": candidate["commit"],
                 }
             prepared = self.env.prepare(attempt_id, source)
-            self.store.execute(
-                "UPDATE attempts SET workspace=? WHERE id=?",
-                (str(prepared.workspace), attempt_id),
-            )
+            self.controller.record_workspace(attempt_id, prepared.workspace)
             env = process_environment(runtime)
             live = recipe["kind"] != "native"
             role = spec.get("role")
@@ -514,17 +491,11 @@ class Worker:
                         ephemeral_paths=snapshot["source"].get("ephemeral_paths", []),
                     )
                     archived = True
-                    self.store.execute(
-                        "UPDATE attempts SET archive_path=?,cleanup_status='archived' WHERE id=?",
-                        (str(archive), attempt_id),
-                    )
+                    self.controller.record_archive(attempt_id, archive)
                 except Exception as exc:
                     error = f"archive failed; workspace retained: {exc}"
                     ok = False
-                    self.store.execute(
-                        "UPDATE attempts SET cleanup_status='archive_failed' WHERE id=?",
-                        (attempt_id,),
-                    )
+                    self.controller.record_cleanup(attempt_id, "archive_failed")
                     self.store.audit(
                         self.worker_id,
                         "archive.failed",
@@ -537,15 +508,9 @@ class Worker:
                 if archived:
                     try:
                         self.env.release(prepared)
-                        self.store.execute(
-                            "UPDATE attempts SET cleanup_status='cleaned' WHERE id=?",
-                            (attempt_id,),
-                        )
+                        self.controller.record_cleanup(attempt_id, "cleaned")
                     except Exception as exc:
-                        self.store.execute(
-                            "UPDATE attempts SET cleanup_status='cleanup_failed' WHERE id=?",
-                            (attempt_id,),
-                        )
+                        self.controller.record_cleanup(attempt_id, "cleanup_failed")
                         self.store.audit(
                             self.worker_id,
                             "cleanup.failed",

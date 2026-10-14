@@ -218,7 +218,7 @@ def validate_deployment(raw, routes):
 
 def selected_route(cfg, role):
     if cfg.project_id:
-        return cfg.routes[cfg.raw["role_routes"][role]]
+        return cfg.routes[cfg.role_routes[role]]
     from dark_factory.adapters.harness.registry import adapter_for
 
     eligible = [r for r in cfg.routes.values() if role in adapter_for(r.harness).roles]
@@ -231,9 +231,9 @@ def selected_route(cfg, role):
 
 def recipe_for(cfg, route):
     if cfg.project_id:
-        return cfg.raw["environments"][
+        return cfg.environments[
             route["environment"]
             if route
-            else cfg.routes[cfg.raw["role_routes"]["coder"]].environment
+            else cfg.routes[cfg.role_routes["coder"]].environment
         ]
     return {"kind": cfg.execution.get("profile", "native")}

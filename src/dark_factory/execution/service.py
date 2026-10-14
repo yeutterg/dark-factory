@@ -22,14 +22,14 @@ class ExecutionService:
     def authenticate(self, worker, token):
         import hmac
 
-        item = self.cfg.raw.get("workers", {}).get(worker)
+        item = self.cfg.workers.get(worker)
         if not item or not self.cfg.project_id:
             return False
         expected = os.environ.get(item["token_env"], "")
         forbidden = {self.cfg.worker_token, self.cfg.operator_token}
         other = [
             os.environ.get(v["token_env"], "")
-            for k, v in self.cfg.raw["workers"].items()
+            for k, v in self.cfg.workers.items()
             if k != worker
         ]
         return (
@@ -46,13 +46,13 @@ class ExecutionService:
         return row
 
     def preflight(self, worker):
-        choices = self.cfg.raw["workers"][worker]["environments"]
+        choices = self.cfg.workers[worker]["environments"]
         return {
             "version": 1,
             "project_id": self.cfg.project_id,
             "runner_code": self.ctrl._policy()["runner_code"],
             "execution": self.cfg.execution,
-            "environments": {k: self.cfg.raw["environments"][k] for k in choices},
+            "environments": {k: self.cfg.environments[k] for k in choices},
             "routes": [
                 vars(r) for r in self.cfg.routes.values() if r.environment in choices
             ],
@@ -71,7 +71,7 @@ class ExecutionService:
                     *{r.harness for r in self.cfg.routes.values()},
                     *(
                         "environment:" + n
-                        for n in self.cfg.raw["workers"][worker]["environments"]
+                        for n in self.cfg.workers[worker]["environments"]
                     ),
                 ]
                 if row["status"] != "leased" or not self.ctrl.resume_claim(
@@ -87,10 +87,7 @@ class ExecutionService:
             caps = [
                 "native",
                 *{r.harness for r in self.cfg.routes.values()},
-                *(
-                    "environment:" + n
-                    for n in self.cfg.raw["workers"][worker]["environments"]
-                ),
+                *("environment:" + n for n in self.cfg.workers[worker]["environments"]),
             ]
             claimed = self.ctrl.claim_job(worker, caps)
             if claimed is None:
@@ -113,10 +110,7 @@ class ExecutionService:
                 datetime.now(timezone.utc)
                 + timedelta(seconds=claimed["inputs"]["lease_seconds"]),
             )
-            self.store.execute(
-                "UPDATE jobs SET lease_until=? WHERE id=?",
-                (until.isoformat(), row["job_id"]),
-            )
+            self.ctrl.set_lease(row["job_id"], until)
             return json.loads((directory / "assignment.json").read_text())
 
     def _assignment(self, claimed):
@@ -131,7 +125,7 @@ class ExecutionService:
             paths[f"archives/candidate-{n}"] = archive
             references[candidate["archive"]] = f"archives/candidate-{n}"
         # Transfer only this root's prior check/review records and required artifacts.
-        jobs = self.ctrl._jobs(claimed["work_item"]["id"])
+        jobs = self.ctrl.jobs(claimed["work_item"]["id"])
         attempts = [
             dict(row)
             for row in self.store.query(
@@ -180,8 +174,6 @@ class ExecutionService:
     def start(self, worker, aid, execution_id):
         import re
 
-        from dark_factory.controller import _digest
-
         if not isinstance(execution_id, str) or not re.fullmatch(
             r"[a-f0-9]{32}", execution_id
         ):
@@ -202,16 +194,13 @@ class ExecutionService:
             if (
                 snapshot["policy"] != self.ctrl._policy()
                 or job["kind"] not in {"plan", "critique"}
-                and root["approved_digest"]
-                != _digest(self.ctrl._approval_payload(root["id"]))
+                and not self.ctrl._approval_current(root)
             ):
                 raise ControllerError("execution authority changed before start")
             if not self.heartbeat(worker, aid):
                 return False
             self.store.set_op("execution-start:" + aid, execution_id, "execution")
-            self.store.execute(
-                "UPDATE attempts SET status='running' WHERE id=?", (aid,)
-            )
+            self.ctrl.mark_running(aid)
             return True
 
     def finish(self, worker, data):
@@ -251,10 +240,7 @@ class ExecutionService:
                 raise ControllerError("attempt lease expired before result submission")
             # Bound verified artifact ingestion by the original attempt deadline.
             # It cannot authorize execution replay or extend the approved deadline.
-            self.store.execute(
-                "UPDATE jobs SET lease_until=? WHERE id=?",
-                (row["deadline"], row["job_id"]),
-            )
+            self.ctrl.set_lease(row["job_id"], row["deadline"])
             assignment = json.loads(
                 (
                     self.store.state_dir / "dispatch" / aid / "assignment.json"

@@ -44,7 +44,7 @@ class PiDurableRuntime:
                 raise RuntimeError(
                     "install the pinned workflow dependencies with npm ci"
                 )
-        binary = self.cfg.raw.get("workflow", {}).get("node_binary", "node")
+        binary = self.cfg.node_binary
         runner = CommandRunner(ENGINE_DIR, 4096)
         code, output, _ = runner.supervise(
             [binary, "--version"], b"", 10, ENGINE_DIR, self._environment()
@@ -134,7 +134,7 @@ class PiDurableRuntime:
                 )
 
     def _drive(self, directory, attempt_id, digest, expected, execute, claim):
-        binary = self.cfg.raw.get("workflow", {}).get("node_binary", "node")
+        binary = self.cfg.node_binary
         proc = subprocess.Popen(
             [binary, "--experimental-strip-types", str(ENGINE_DIR / "main.ts")],
             stdin=subprocess.PIPE,
