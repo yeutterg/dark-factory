@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from dark_factory.contracts import ContractError, make_request, validate_result
 
@@ -43,7 +43,7 @@ class CommandRunner:
         payload: dict[str, Any],
         request_id: str,
         timeout_seconds: int,
-        env: Optional[dict[str, str]] = None,
+        env: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         if not argv or not all(isinstance(x, str) for x in argv):
             raise RunnerError("argv must be a non-empty list of strings")
@@ -69,8 +69,8 @@ class CommandRunner:
         self,
         argv: list[str],
         timeout_seconds: int,
-        cwd: Optional[Path] = None,
-        env: Optional[dict[str, str]] = None,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
         code, stdout, stderr = self.supervise(
             argv,

@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dark_factory import artifacts
-from dark_factory.control.base import ControllerError, atomic
+from dark_factory.control.base import ControllerCore, ControllerError, atomic
 from dark_factory.control.roles import parse_role
 from dark_factory.store import new_id, now_iso
 
 
-class ResultsMixin:
+class ResultsMixin(ControllerCore):
     """Settle attempt results and activate the preapproved repair branch."""
 
     def _fail_root(self, wid, error):
@@ -76,11 +76,10 @@ class ResultsMixin:
             error = "missing durable archive"
         timed_out = (
             timed_out
-            or datetime.fromisoformat(attempt["deadline"]) <= datetime.now(timezone.utc)
+            or datetime.fromisoformat(attempt["deadline"]) <= datetime.now(UTC)
             or (
                 job["lease_until"]
-                and datetime.fromisoformat(job["lease_until"])
-                <= datetime.now(timezone.utc)
+                and datetime.fromisoformat(job["lease_until"]) <= datetime.now(UTC)
             )
         )
         cancelled = (
@@ -262,7 +261,7 @@ class ResultsMixin:
         )
         if not isinstance(checks, list) or len(checks) != len(expected):
             return False
-        for cid, check in zip(expected, checks):
+        for cid, check in zip(expected, checks, strict=True):
             if not isinstance(check, dict):
                 return False
             # Repetition is valid only when explicitly present in the approved

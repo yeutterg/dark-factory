@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import tempfile
+from datetime import UTC
 from pathlib import Path
 
 from dark_factory import artifacts
@@ -102,12 +103,12 @@ class ExecutionService:
                 self.store.set_op(key, claimed["attempt_id"], "execution")
 
             runtime.run(claimed, publish)
-            from datetime import datetime, timedelta, timezone
+            from datetime import datetime, timedelta
 
             row = self._owned(worker, claimed["attempt_id"])
             until = min(
                 datetime.fromisoformat(row["deadline"]),
-                datetime.now(timezone.utc)
+                datetime.now(UTC)
                 + timedelta(seconds=claimed["inputs"]["lease_seconds"]),
             )
             self.ctrl.set_lease(row["job_id"], until)
@@ -231,12 +232,12 @@ class ExecutionService:
                 return {"accepted": True, "attempt_id": aid, "result_digest": request}
             if row["status"] not in {"leased", "running", "cancelling"}:
                 raise ControllerError("attempt is fenced")
-            from datetime import datetime, timezone
+            from datetime import datetime
 
             job = self.store.one(
                 "SELECT lease_until FROM jobs WHERE id=?", (row["job_id"],)
             )
-            if datetime.fromisoformat(job["lease_until"]) <= datetime.now(timezone.utc):
+            if datetime.fromisoformat(job["lease_until"]) <= datetime.now(UTC):
                 raise ControllerError("attempt lease expired before result submission")
             # Bound verified artifact ingestion by the original attempt deadline.
             # It cannot authorize execution replay or extend the approved deadline.

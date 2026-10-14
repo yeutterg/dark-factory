@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
 
 from dark_factory.attempts import AttemptRecords
 from dark_factory.config import FactoryConfig
@@ -52,7 +51,7 @@ class Controller(
     ) -> None:
         self.cfg, self.store, self.packaged_prompts = cfg, store, packaged_prompts
         self._decision_depth = 0
-        self._policy_memo: Optional[dict] = None
+        self._policy_memo: dict | None = None
         identity = json.dumps(
             {
                 "project_id": cfg.project_id,

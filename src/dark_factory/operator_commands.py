@@ -9,8 +9,9 @@ reachable through the API.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from dark_factory.controller import Controller, ControllerError
 

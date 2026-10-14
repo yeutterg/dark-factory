@@ -114,7 +114,7 @@ def main():
         print(json.dumps(handle(json.load(sys.stdin))))
     except Exception as exc:
         print(str(exc), file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":

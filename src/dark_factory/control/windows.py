@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import zoneinfo
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from dark_factory.config import FactoryConfig
 
 
-def window_open(cfg: FactoryConfig, at: Optional[datetime] = None) -> bool:
-    at = at or datetime.now(timezone.utc)
+def window_open(cfg: FactoryConfig, at: datetime | None = None) -> bool:
+    at = at or datetime.now(UTC)
     if not cfg.windows:
         return at.date().isoformat() not in cfg.date_exceptions
     for window in cfg.windows:

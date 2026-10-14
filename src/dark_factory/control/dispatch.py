@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import os
 import signal
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from dark_factory import artifacts
 from dark_factory.adapters.env.base import PreparedEnv
 from dark_factory.adapters.env.native import NativeEnvironment
 from dark_factory.adapters.harness.registry import adapter_for
-from dark_factory.control.base import ControllerError, _digest, atomic
+from dark_factory.control.base import ControllerCore, ControllerError, _digest, atomic
 from dark_factory.control.windows import window_open
 from dark_factory.execution.policy import selected_route
 from dark_factory.models import (
@@ -24,7 +24,7 @@ from dark_factory.runner import process_identity
 from dark_factory.store import new_id, now_iso
 
 
-class DispatchMixin:
+class DispatchMixin(ControllerCore):
     """Hand out bounded attempts and fence the ones that stop reporting."""
 
     def pause(self, actor):
@@ -99,9 +99,7 @@ class DispatchMixin:
                 self._fail_root(root["id"], str(exc))
                 continue
             snapshot = json.loads(root["snapshot_json"])
-            if datetime.fromisoformat(snapshot["deadline"]) <= datetime.now(
-                timezone.utc
-            ):
+            if datetime.fromisoformat(snapshot["deadline"]) <= datetime.now(UTC):
                 self._fail_root(root["id"], "root deadline expired")
                 continue
             jobs = self.jobs(root["id"])
@@ -172,8 +170,7 @@ class DispatchMixin:
                 attempt = new_id("att")
                 deadline = min(
                     datetime.fromisoformat(snapshot["deadline"]),
-                    datetime.now(timezone.utc)
-                    + timedelta(seconds=spec["timeout_seconds"]),
+                    datetime.now(UTC) + timedelta(seconds=spec["timeout_seconds"]),
                 )
                 inputs = {
                     "root_version": root["plan_version"],
@@ -195,7 +192,7 @@ class DispatchMixin:
                         worker_id,
                         min(
                             deadline,
-                            datetime.now(timezone.utc)
+                            datetime.now(UTC)
                             + timedelta(seconds=inputs["lease_seconds"]),
                         ).isoformat(),
                         job["id"],
@@ -327,7 +324,7 @@ class DispatchMixin:
             if min(
                 datetime.fromisoformat(attempt["deadline"]),
                 datetime.fromisoformat(job["lease_until"]),
-            ) <= datetime.now(timezone.utc):
+            ) <= datetime.now(UTC):
                 return None
             if snapshot["policy"] != self._policy():
                 raise ControllerError("resumed dispatch policy changed; replan")
@@ -362,7 +359,7 @@ class DispatchMixin:
             "SELECT a.*,j.lease_until FROM attempts a JOIN jobs j ON a.job_id=j.id WHERE a.id=? AND a.worker_id=?",
             (attempt_id, worker_id),
         )
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if (
             not attempt
             or attempt["status"] not in {"leased", "running"}
@@ -426,7 +423,7 @@ class DispatchMixin:
             if min(
                 datetime.fromisoformat(attempt["deadline"]),
                 datetime.fromisoformat(attempt["lease_until"]),
-            ) > datetime.now(timezone.utc):
+            ) > datetime.now(UTC):
                 continue
             if (
                 attempt["status"] == "leased"

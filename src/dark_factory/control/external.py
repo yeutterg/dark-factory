@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 
-from dark_factory.control.base import ControllerError, _digest
+from dark_factory.control.base import ControllerCore, ControllerError, _digest
 from dark_factory.store import now_iso
 
 
-class ExternalMixin:
+class ExternalMixin(ControllerCore):
     """Record intent before a code-host write and reconcile ambiguity."""
 
     def external_action(self, wid, operation, payload, actor):

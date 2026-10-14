@@ -5,7 +5,7 @@ from __future__ import annotations
 import queue
 import shutil
 import threading
-from typing import Callable, Iterator
+from collections.abc import Callable, Iterator
 
 from dark_factory.adapters.harness.base import HarnessEvent, HarnessResult
 
@@ -25,7 +25,7 @@ class JsonLines:
             line, _, rest = self.pending.partition(b"\n")
             self.pending[:] = rest
             if line.strip():
-                self.handle(line)
+                self.handle(bytes(line))
 
     @property
     def incomplete(self) -> bool:

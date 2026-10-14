@@ -5,11 +5,37 @@ from __future__ import annotations
 import hashlib
 import json
 from functools import wraps
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from dark_factory.config import FactoryConfig
+    from dark_factory.runner import CommandRunner
+    from dark_factory.store import Store
 
 
 class ControllerError(RuntimeError):
     pass
+
+
+class ControllerCore:
+    """State and cross-module calls shared by every controller responsibility."""
+
+    cfg: FactoryConfig
+    store: Store
+    runner: CommandRunner
+    packaged_prompts: Path
+    _decision_depth: int
+    _policy_memo: dict | None
+
+    if TYPE_CHECKING:
+
+        def decision(self) -> Any: ...
+        def _policy(self) -> dict: ...
+        def _bindings(self) -> dict: ...
+        def _approval_current(self, row) -> bool: ...
+        def _approval_payload(self, wid) -> dict: ...
+        def jobs(self, wid) -> list[dict]: ...
 
 
 def atomic(method):

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from dark_factory.adapters.git.local import clone, fixture, pin
-from dark_factory.control.base import ControllerError, _digest, atomic
+from dark_factory.control.base import ControllerCore, ControllerError, _digest, atomic
 from dark_factory.control.graph import default_bootstrap_graph, validate_graph
 from dark_factory.models import (
     PlanGraph,
@@ -17,7 +17,7 @@ from dark_factory.models import (
 from dark_factory.store import new_id, now_iso
 
 
-class PlanningMixin:
+class PlanningMixin(ControllerCore):
     """Select complete roots, plan them and record human decisions."""
 
     def intake_issues(
@@ -208,7 +208,7 @@ class PlanningMixin:
             "simulation": simulation,
             "manual_acceptance": source.get("manual_acceptance", []),
             "deadline": (
-                datetime.now(timezone.utc) + timedelta(seconds=self.cfg.max_seconds)
+                datetime.now(UTC) + timedelta(seconds=self.cfg.max_seconds)
             ).isoformat(),
         }
         self.store.execute(

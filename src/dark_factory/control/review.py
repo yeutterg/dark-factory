@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dark_factory import artifacts
 from dark_factory.adapters.git.local import pin
 from dark_factory.continuation import describe
-from dark_factory.control.base import ControllerError, atomic, decided
+from dark_factory.control.base import ControllerCore, ControllerError, atomic, decided
 from dark_factory.models import (
     TERMINAL_ROOT,
     sql_set,
@@ -17,7 +17,7 @@ from dark_factory.models import (
 from dark_factory.store import now_iso
 
 
-class ReviewMixin:
+class ReviewMixin(ControllerCore):
     """Compute completion from candidate-bound facts and record acceptance."""
 
     def _packet(self, wid, error=None):
@@ -250,7 +250,7 @@ class ReviewMixin:
                 reason = "approved inputs changed; a revised proposal is required"
             elif automated_work_pending and datetime.fromisoformat(
                 snapshot["deadline"]
-            ) <= datetime.now(timezone.utc):
+            ) <= datetime.now(UTC):
                 reason = "root deadline expired"
             elif automated_work_pending and (
                 row["spent_cents"] + row["reserved_cents"]

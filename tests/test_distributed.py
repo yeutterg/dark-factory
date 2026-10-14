@@ -135,7 +135,9 @@ def test_full_portable_loop_and_idempotent_settlement(tmp_path, monkeypatch):
             result = execute_assignment(
                 assignment,
                 tmp_path / f"executor-{n}",
-                lambda: service.heartbeat("worker1", assignment["claim"]["attempt_id"]),
+                lambda aid=assignment["claim"]["attempt_id"]: service.heartbeat(
+                    "worker1", aid
+                ),
             )
             assert result["receipt"]["ok"], result["receipt"]
             ack = service.finish("worker1", result)

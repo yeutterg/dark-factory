@@ -8,10 +8,11 @@ import json
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from dark_factory.artifacts import digest_cached
 from dark_factory.config import ConfigError, load_config, load_prompt
-from dark_factory.control.base import ControllerError, _digest
+from dark_factory.control.base import ControllerCore, ControllerError, _digest
 from dark_factory.runner import CommandRunner
 from dark_factory.workflow import runtime_policy
 
@@ -19,7 +20,7 @@ from dark_factory.workflow import runtime_policy
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
 
-class PolicyMixin:
+class PolicyMixin(ControllerCore):
     """Evaluate, memoize and compare the policy that approvals cover."""
 
     def _save_config(self):
@@ -114,7 +115,7 @@ class PolicyMixin:
         }
 
     def _assets(self) -> dict:
-        assets = {}
+        assets: dict[str, Any] = {}
         for role in ("planner", "critic", "coder", "reviewer"):
             body, sha = load_prompt(self.cfg, role, self.packaged_prompts)
             assets[role] = {"body": body, "sha256": sha}

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from dark_factory.adapters.harness.claude_code import ClaudeCodeHarness
 from dark_factory.adapters.harness.codex import CodexHarness

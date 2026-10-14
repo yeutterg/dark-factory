@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 
 
 @dataclass
@@ -18,7 +18,7 @@ class Environment(Protocol):
     name: str
 
     def prepare(
-        self, attempt_id: str, source: Optional[dict[str, Any]] = None
+        self, attempt_id: str, source: dict[str, Any] | None = None
     ) -> PreparedEnv:
         """Create the attempt's owned workspace, cloning source at its commit."""
         ...
@@ -31,8 +31,8 @@ class Environment(Protocol):
         network: bool,
         writable: list[str],
         protected: list[str],
-        private_paths: Optional[list[Path]] = None,
-        readable_files: Optional[list[Path]] = None,
+        private_paths: list[Path] | None = None,
+        readable_files: list[Path] | None = None,
         immutable_runtime_files: tuple[str, ...] = (),
     ) -> list[str]:
         """argv prefix that runs a command under this backend's isolation policy."""

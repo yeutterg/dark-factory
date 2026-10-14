@@ -41,7 +41,7 @@ def install_assignment(assignment, root):
             insert("jobs", row)
         for row in assignment["attempts"]:
             insert("attempts", row)
-        for original, relative in assignment["references"].items():
+        for relative in assignment["references"].values():
             if Path(relative).is_absolute() or ".." in Path(relative).parts:
                 raise ValueError("unsafe input reference")
             path = root / relative

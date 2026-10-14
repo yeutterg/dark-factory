@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 from contextlib import ExitStack
 from pathlib import Path
+from typing import Any
 
 
 def digest(path: Path) -> str:
@@ -46,7 +47,7 @@ def digest_cached(path: Path) -> str:
 
 
 def manifest(root: Path) -> dict:
-    entries = {}
+    entries: dict[str, dict[str, Any]] = {}
     for path in sorted(root.rglob("*")):
         name = str(path.relative_to(root))
         if name == "manifest.json":

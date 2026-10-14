@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Optional
 
 
 class WorkStatus(StrEnum):
@@ -83,9 +82,9 @@ def sql_set(values) -> str:
 class JobSpec:
     job_id: str
     kind: str
-    role: Optional[str] = None
-    command_id: Optional[str] = None
-    repo: Optional[str] = None
+    role: str | None = None
+    command_id: str | None = None
+    repo: str | None = None
     depends_on: list[str] = field(default_factory=list)
     budget_cents: int = 0
     timeout_seconds: int = 3600

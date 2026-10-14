@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from os import PathLike
-from typing import Any, Iterator, Optional, Protocol
+from typing import Any, Protocol
 
 
 @dataclass
@@ -19,9 +20,9 @@ class HarnessResult:
     ok: bool
     output: str
     usage: dict[str, Any]
-    session_id: Optional[str]
+    session_id: str | None
     cost_cents: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class Harness(Protocol):
@@ -31,7 +32,7 @@ class Harness(Protocol):
         self,
         prompt: str,
         workspace: PathLike,
-        extra: Optional[dict[str, Any]] = None,
+        extra: dict[str, Any] | None = None,
     ) -> Iterator[HarnessEvent]: ...
 
     def wait(self) -> HarnessResult: ...

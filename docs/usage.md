@@ -101,7 +101,9 @@ Restore verifies artifacts and SQLite integrity and relocates state-owned path r
 ## Verify and extend
 
 ```bash
-python -m pytest
+python -m pytest -n auto
+ruff check src tests && ruff format --check src tests
+mypy
 ```
 
 Tests use temporary repositories/state and fake external services. On macOS with Pi installed, the suite also runs the actual Pi binary through a deterministic loopback provider, exercising tool writes, fresh sessions and OS isolation with no inference spending. [Qualification details](../specs/qualification.md) distinguish this from live model qualification.

@@ -9,9 +9,9 @@ import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS config_revisions (
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def new_id(prefix: str) -> str:
@@ -155,7 +155,9 @@ class Store:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except OSError:
                     lock.close()
-                    raise RuntimeError("state directory already has a controller owner")
+                    raise RuntimeError(
+                        "state directory already has a controller owner"
+                    ) from None
                 _OWNERS[self._owner_key] = (os.getpid(), lock, 1)
         (self.state_dir / "artifacts").mkdir(exist_ok=True)
         (self.state_dir / "archives").mkdir(exist_ok=True)
@@ -189,7 +191,7 @@ class Store:
                     "legacy scaffold state has no pinned inputs; preserve it and use a new bootstrap state directory"
                 )
         self.conn.executescript(SCHEMA)
-        for table, columns in {
+        for table, added in {
             "work_items": {
                 "snapshot_json": "TEXT",
                 "created_at": "TEXT",
@@ -210,11 +212,11 @@ class Store:
                 "cleanup_status": "TEXT",
             },
         }.items():
-            existing = {
+            present = {
                 row[1] for row in self.conn.execute(f"PRAGMA table_info({table})")
             }
-            for column, kind in columns.items():
-                if column not in existing:
+            for column, kind in added.items():
+                if column not in present:
                     self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
         self.conn.executescript("""
         CREATE TABLE IF NOT EXISTS proposals (
@@ -289,7 +291,7 @@ class Store:
         with self._lock:
             return list(self.conn.execute(sql, params))
 
-    def one(self, sql: str, params: tuple[Any, ...] = ()) -> Optional[sqlite3.Row]:
+    def one(self, sql: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
         with self._lock:
             return self.conn.execute(sql, params).fetchone()
 
@@ -331,7 +333,7 @@ class Store:
             (digest, body, 1 if valid else 0, now_iso()),
         )
 
-    def last_valid_config(self) -> Optional[str]:
+    def last_valid_config(self) -> str | None:
         row = self.one(
             "SELECT body FROM config_revisions WHERE valid=1 ORDER BY loaded_at DESC LIMIT 1"
         )
