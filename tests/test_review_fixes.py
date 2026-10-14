@@ -1,5 +1,6 @@
 """Regressions for the controller efficiency and dispatch review."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -110,5 +111,30 @@ def test_legacy_jobs_are_backfilled_and_ordered_numerically(tmp_path):
     try:
         rows = store.query("SELECT logical_id,plan_version FROM jobs ORDER BY position")
         assert [tuple(r) for r in rows] == [("job2", 1), ("job10", 1)]
+    finally:
+        store.close()
+
+
+def test_unchanged_read_only_attempts_archive_only_their_commit(tmp_path):
+    cfg = cfg_for(tmp_path)
+    store = Store(cfg.state_dir)
+    ctrl = Controller(cfg, store, PROMPTS)
+    try:
+        wid = ctrl.intake_issues([issue(1)])[0]
+        ctrl.start_planning(wid)
+        worker = Worker(cfg, store, ctrl)
+        worker.run_loop(2)
+        ctrl.approve(wid, "human")
+        worker.run_loop(10)
+        rows = store.query(
+            "SELECT j.kind,a.archive_path FROM attempts a JOIN jobs j ON a.job_id=j.id"
+        )
+        archives = {row["kind"]: Path(row["archive_path"]) for row in rows}
+        for kind in ("plan", "critique", "review"):
+            manifest = json.loads((archives[kind] / "manifest.json").read_text())
+            assert not (archives[kind] / "workspace").exists()
+            assert len(manifest["workspace_commit"]) == 40
+        assert (archives["implement"] / "workspace" / "message.py").is_file()
+        assert ctrl.continuation(wid)["next_action"]["kind"] == "human_review"
     finally:
         store.close()

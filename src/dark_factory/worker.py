@@ -489,6 +489,10 @@ class Worker:
                         {"attempt_id": attempt_id, "job_id": job["id"], "ok": ok},
                         files,
                         ephemeral_paths=snapshot["source"].get("ephemeral_paths", []),
+                        # Only implementation output becomes a candidate source.
+                        unchanged_commit=source["commit"]
+                        if job["kind"] in {"plan", "critique", "review"}
+                        else None,
                     )
                     archived = True
                     self.controller.record_archive(attempt_id, archive)

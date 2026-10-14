@@ -94,9 +94,23 @@ def archive(
     metadata: dict,
     files: dict[str, str],
     ephemeral_paths=(),
+    unchanged_commit=None,
 ) -> str:
+    """Copy unique work and evidence, then seal and verify the archive.
+
+    With unchanged_commit, a workspace that is exactly that commit (no tracked,
+    untracked or ignored changes) holds nothing unique, so only the commit is
+    recorded; the pinned input snapshot already preserves it.
+    """
     destination.mkdir(parents=True, exist_ok=False)
     from dark_factory.adapters.git.local import git
+
+    if unchanged_commit and workspace_matches(workspace, unchanged_commit):
+        for name, body in files.items():
+            if Path(name).name != name:
+                raise ValueError("invalid artifact filename")
+            (destination / name).write_text(body)
+        return seal(destination, {**metadata, "workspace_commit": unchanged_commit})
 
     for name in ephemeral_paths:
         if (
@@ -127,6 +141,21 @@ def archive(
             raise ValueError("invalid artifact filename")
         (destination / name).write_text(body)
     return seal(destination, metadata)
+
+
+def workspace_matches(workspace: Path, commit: str) -> bool:
+    from dark_factory.adapters.git.local import git
+
+    try:
+        return git(workspace, "rev-parse", "HEAD") == commit and not git(
+            workspace,
+            "status",
+            "--porcelain=v1",
+            "--ignored",
+            "--untracked-files=all",
+        )
+    except RuntimeError:
+        return False
 
 
 def backup(store, destination: Path) -> None:
