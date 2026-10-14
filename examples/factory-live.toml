@@ -39,6 +39,9 @@ region = "US"
 geography_evidence = "https://docs.together.ai/docs/privacy-and-security — DeepSeek on Together is hosted in Together North America data centers."
 auth_env = "TOGETHER_API_KEY"
 api = "openai-completions"
+# Example published rates, not an account/invoice spending guarantee. Verify at approval time.
+pricing = { input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }
+pricing_evidence = "https://www.together.ai/models/deepseek-v4-1-flash"
 role = "coder"
 reasoning = true
 context_window = 1000000

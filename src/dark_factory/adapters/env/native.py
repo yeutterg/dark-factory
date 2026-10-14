@@ -42,6 +42,7 @@ class NativeEnvironment:
         protected: list[str],
         private_paths: list[Path] | None = None,
         readable_files: list[Path] | None = None,
+        immutable_runtime_files: tuple[str, ...] = (),
     ) -> list[str]:
         if platform.system() != "Darwin" or not Path("/usr/bin/sandbox-exec").exists():
             raise RuntimeError("macos-sandbox requires sandbox-exec on macOS")
@@ -96,6 +97,19 @@ class NativeEnvironment:
             lines.append(
                 '(allow network-outbound (remote unix-socket (path "/private/var/run/mDNSResponder")))'
             )
+        for name in ("sandbox.sb", *immutable_runtime_files):
+            relative = Path(name)
+            path = (runtime / relative).resolve()
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or not path.is_relative_to(runtime)
+                or path == runtime
+            ):
+                raise ValueError(
+                    "immutable runtime input must stay inside owned runtime"
+                )
+            lines.append(f"(deny file-write* (literal {json.dumps(str(path))}))")
         policy = runtime / "sandbox.sb"
         policy.write_text("\n".join(lines))
         return ["/usr/bin/sandbox-exec", "-f", str(policy)]

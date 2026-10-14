@@ -22,8 +22,10 @@ from dark_factory.worker import Worker
     sys.platform != "darwin" or not shutil.which("pi"),
     reason="installed Pi and macOS required",
 )
-def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch):
+@pytest.mark.parametrize("tamper_runtime", [False, True])
+def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch, tamper_runtime):
     requests = []
+    denied_runtime_results = []
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -92,6 +94,13 @@ def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch):
                     }
                 )
             elif any(m["role"] == "tool" for m in messages):
+                if tamper_runtime:
+                    denied_runtime_results.extend(
+                        str(m.get("content", ""))
+                        for m in messages
+                        if m["role"] == "tool"
+                        and m.get("tool_call_id", "").startswith("write_runtime")
+                    )
                 content = "Implemented the approved message change."
             else:
                 tool_calls = [
@@ -109,6 +118,23 @@ def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch):
                         },
                     }
                 ]
+                if tamper_runtime:
+                    model_input = max(
+                        (cfg.state_dir / "runtime").glob("att_*/agent/models.json"),
+                        key=lambda path: path.stat().st_mtime_ns,
+                    )
+                    tool_calls.append(
+                        {
+                            "id": "write_runtime",
+                            "type": "function",
+                            "function": {
+                                "name": "write",
+                                "arguments": json.dumps(
+                                    {"path": str(model_input), "content": "{}"}
+                                ),
+                            },
+                        }
+                    )
             answer = {
                 "id": "completion",
                 "object": "chat.completion",
@@ -136,7 +162,9 @@ def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch):
                 if content:
                     delta["content"] = content
                 if tool_calls:
-                    delta["tool_calls"] = [{"index": 0, **tool_calls[0]}]
+                    delta["tool_calls"] = [
+                        {"index": i, **call} for i, call in enumerate(tool_calls)
+                    ]
                 chunks = [
                     {
                         "id": "completion",
@@ -200,7 +228,7 @@ def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch):
     )
     text = text.replace(
         'role = "coder"',
-        'role = "coder"\nauth_env = "FACTORY_TEST_KEY"\ngeography_evidence = "Deterministic loopback fixture; no inference"\napi = "openai-completions"',
+        'role = "coder"\nauth_env = "FACTORY_TEST_KEY"\ngeography_evidence = "Deterministic loopback fixture; no inference"\napi = "openai-completions"\npricing = { input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }\npricing_evidence = "Fixture estimate; not provider billing"',
     )
     text += '\n[execution]\nprofile = "macos-sandbox"\n'
     text += f'\n[sources."yeutterg/dark-factory"]\npath = "{source["path"]}"\nrevision = "HEAD"\nchecks = ["verify"]\nallowed_paths = ["message.py"]\nprotected_paths = ["verify.py", "AGENTS.md"]\nmanual_acceptance = []\n'
@@ -234,8 +262,21 @@ def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch):
         row = store.one("SELECT * FROM work_items")
         assert row["status"] == "awaiting_review", row["packet_json"]
         assert json.loads(row["packet_json"])["simulation"] is True
+        for attempt in store.query(
+            "SELECT result_json FROM attempts WHERE route_id IS NOT NULL"
+        ):
+            usage = json.loads(attempt["result_json"])["usage"]
+            assert usage["cost_source"] == "approved-per-token-pricing"
+            assert usage["cost"] > 0
         ctrl.accept(wid, "qualification-test")
         assert len(requests) == 5
+        if tamper_runtime:
+            assert denied_runtime_results
+            assert any(
+                "operation not permitted" in text.lower()
+                or "permission denied" in text.lower()
+                for text in denied_runtime_results
+            )
         assert (
             len(
                 {

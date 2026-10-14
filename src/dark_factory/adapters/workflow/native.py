@@ -4,6 +4,9 @@
 class NativeRuntime:
     name = "native"
 
+    def validate(self):
+        return {"engine": self.name}
+
     def run(self, claim, execute):
         execute()
 

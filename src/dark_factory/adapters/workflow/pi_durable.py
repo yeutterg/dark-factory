@@ -12,6 +12,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from dark_factory.runner import CommandRunner
+
 ENGINE_DIR = Path(__file__).parent / "pi_engine"
 
 
@@ -20,6 +22,72 @@ class PiDurableRuntime:
 
     def __init__(self, cfg, store):
         self.cfg, self.store = cfg, store
+        self._validation = None
+
+    def validate(self):
+        """Check the installed runtime without leasing work or opening its database."""
+        if self._validation is not None:
+            return dict(self._validation)
+        for package in ("pi-durable", "pi-ai", "chord"):
+            manifest = (
+                ENGINE_DIR
+                / "node_modules"
+                / "@earendil-works"
+                / package
+                / "package.json"
+            )
+            try:
+                version = json.loads(manifest.read_text())["version"]
+            except (OSError, ValueError, KeyError, TypeError):
+                version = None
+            if version != "1.0.3":
+                raise RuntimeError(
+                    "install the pinned workflow dependencies with npm ci"
+                )
+        binary = self.cfg.raw.get("workflow", {}).get("node_binary", "node")
+        runner = CommandRunner(ENGINE_DIR, 4096)
+        code, output, _ = runner._run(
+            [binary, "--version"], b"", 10, ENGINE_DIR, self._environment()
+        )
+        try:
+            version = tuple(
+                int(part) for part in output.decode().strip().lstrip("v").split(".")
+            )
+        except ValueError:
+            version = ()
+        if code or len(version) != 3 or version < (22, 19, 0):
+            raise RuntimeError("Pi Durable requires Node >=22.19.0")
+        code, probe, _ = runner._run(
+            [
+                binary,
+                "--experimental-strip-types",
+                str(ENGINE_DIR / "main.ts"),
+                "--preflight",
+            ],
+            b"",
+            10,
+            ENGINE_DIR,
+            self._environment(),
+        )
+        if code or probe.strip() != b'{"version":1,"type":"ready"}':
+            raise RuntimeError(
+                "installed Pi Durable dependencies cannot load; reinstall with npm ci"
+            )
+        self._validation = {
+            "engine": self.name,
+            "node_version": ".".join(map(str, version)),
+            "package_version": "1.0.3",
+        }
+        return dict(self._validation)
+
+    @staticmethod
+    def _environment():
+        # No credentials, proxy overrides or executable Node hooks in the scheduler.
+        return {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "LANG": "en_US.UTF-8",
+            "NODE_NO_WARNINGS": "1",
+        }
 
     def pending_attempts(self):
         directory = self.cfg.state_dir / "workflow"
@@ -27,6 +95,12 @@ class PiDurableRuntime:
             path.parent.name
             for path in directory.glob("att_*/dispatch.sqlite")
             if not self.store.get_op("workflow-settled:" + path.parent.name, "")
+            and (
+                row := self.store.one(
+                    "SELECT status FROM attempts WHERE id=?", (path.parent.name,)
+                )
+            )
+            and row["status"] != "not_started"
         }
         # The controller lease precedes the engine checkpoint. Discovery is not
         # authority: resume_claim must still validate owner, policy and lease.
@@ -39,6 +113,7 @@ class PiDurableRuntime:
         return sorted(recorded | unstarted)
 
     def run(self, claim, execute):
+        self.validate()
         attempt_id = claim["attempt_id"]
         expected = json.dumps(claim["inputs"], sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(expected.encode()).hexdigest()
@@ -49,21 +124,6 @@ class PiDurableRuntime:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
                 raise RuntimeError("durable runtime already has an owner") from None
-            for package in ("pi-durable", "pi-ai", "chord"):
-                manifest = (
-                    ENGINE_DIR
-                    / "node_modules"
-                    / "@earendil-works"
-                    / package
-                    / "package.json"
-                )
-                if (
-                    not manifest.is_file()
-                    or json.loads(manifest.read_text())["version"] != "1.0.3"
-                ):
-                    raise RuntimeError(
-                        "install the pinned workflow dependencies with npm ci"
-                    )
             self._drive(directory, attempt_id, digest, expected, execute, claim)
             row = self.store.one(
                 "SELECT status FROM attempts WHERE id=?", (attempt_id,)
@@ -83,11 +143,7 @@ class PiDurableRuntime:
             cwd=ENGINE_DIR,
             start_new_session=True,
             # The scheduler runs no inference; do not inherit any credentials or Node hooks.
-            env={
-                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                "LANG": "en_US.UTF-8",
-                "NODE_NO_WARNINGS": "1",
-            },
+            env=self._environment(),
         )
         buffer = bytearray()
         total = 0

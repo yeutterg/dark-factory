@@ -7,14 +7,45 @@ import math
 import queue
 import shutil
 import threading
+from decimal import Decimal
 from pathlib import Path
 
 from dark_factory.adapters.harness.base import HarnessEvent, HarnessResult
 from dark_factory.runner import CommandRunner
 
 
+def validate_pricing(pricing, evidence, required=False):
+    if pricing and (
+        not isinstance(pricing, dict)
+        or set(pricing) != {"input", "output", "cache_read", "cache_write"}
+        or any(
+            type(v) not in {int, float} or not math.isfinite(v) or v < 0
+            for v in pricing.values()
+        )
+    ):
+        raise ValueError(
+            "Pi pricing needs four finite non-negative per-million-token rates"
+        )
+    if required and (
+        not pricing
+        or not evidence.strip()
+        or not (pricing["input"] > 0 or pricing["output"] > 0)
+    ):
+        raise ValueError(
+            "live custom Pi models require pinned positive pricing and pricing_evidence; absent prices default to zero"
+        )
+
+
 class PiHarness:
     name = "pi"
+
+    @staticmethod
+    def validate_route(route):
+        validate_pricing(
+            route.pricing,
+            route.pricing_evidence,
+            route.evidence_kind == "live" and bool(route.api),
+        )
 
     def __init__(self, binary: str = "pi") -> None:
         self.binary = shutil.which(binary) or binary
@@ -28,6 +59,16 @@ class PiHarness:
     def start(self, prompt: str, workspace: Path, extra=None):
         extra = extra or {}
         route = extra["route"]
+        if route.get("evidence_kind") not in {"simulation", "live"}:
+            raise ValueError("Pi requires explicit live or simulation classification")
+        pricing = route.get("pricing", {})
+        validate_pricing(
+            pricing,
+            route.get("pricing_evidence", ""),
+            route.get("evidence_kind") == "live" and bool(route.get("api")),
+        )
+        if route.get("evidence_kind") == "live" and not extra.get("prefix"):
+            raise ValueError("Pi requires an isolated execution environment")
         runtime = Path(extra["runtime"])
         agent = runtime / "agent"
         agent.mkdir(parents=True)
@@ -51,6 +92,18 @@ class PiHarness:
                     "input": ["text"],
                     "contextWindow": int(route.get("context_window") or 128000),
                     "maxTokens": int(route.get("max_tokens") or 8192),
+                    **(
+                        {
+                            "cost": {
+                                "input": pricing["input"],
+                                "output": pricing["output"],
+                                "cacheRead": pricing["cache_read"],
+                                "cacheWrite": pricing["cache_write"],
+                            }
+                        }
+                        if pricing
+                        else {}
+                    ),
                 }
             ]
         (agent / "models.json").write_text(
@@ -91,12 +144,14 @@ class PiHarness:
         pending = bytearray()
         messages = []
         usage = {"input": 0, "output": 0, "cost": 0.0, "reported_cost": False}
+        cost_known = False
+        estimated_cost = Decimal(0)
         session_id = None
         parse_error = None
         self._cancel.clear()
 
         def output(name, data):
-            nonlocal session_id, parse_error
+            nonlocal session_id, parse_error, cost_known, estimated_cost
             if name != "stdout":
                 return
             pending.extend(data)
@@ -136,11 +191,70 @@ class PiHarness:
                             "errorMessage", "Pi stopped without completion"
                         )
                     u = message.get("usage", {})
+                    if (
+                        not isinstance(u, dict)
+                        or any(
+                            type(u.get(k)) is not int or u[k] < 0
+                            for k in ("input", "output")
+                        )
+                        or (
+                            route.get("evidence_kind") == "live"
+                            and not any(
+                                u.get(k, 0)
+                                for k in ("input", "output", "cacheRead", "cacheWrite")
+                            )
+                        )
+                        or any(
+                            type(u.get(k, 0)) is not int or u.get(k, 0) < 0
+                            for k in ("cacheRead", "cacheWrite")
+                        )
+                    ):
+                        parse_error = "invalid Pi usage; cost is unknown"
+                        cost_known = False
+                        self.cancel()
+                        continue
                     usage["input"] += u.get("input", 0)
                     usage["output"] += u.get("output", 0)
-                    if "total" in u.get("cost", {}):
-                        usage["reported_cost"] = True
-                    usage["cost"] += u.get("cost", {}).get("total", 0)
+                    if pricing:
+                        estimated_cost += (
+                            sum(
+                                Decimal(str(pricing[rate])) * u.get(counter, 0)
+                                for rate, counter in (
+                                    ("input", "input"),
+                                    ("output", "output"),
+                                    ("cache_read", "cacheRead"),
+                                    ("cache_write", "cacheWrite"),
+                                )
+                            )
+                            / 1000000
+                        )
+                        usage["cost"] = float(estimated_cost)
+                        usage["cost_source"] = "approved-per-token-pricing"
+                        usage["cost_status"] = "client-estimate-not-provider-bill"
+                        cost_known = True
+                    else:
+                        total = (
+                            u.get("cost", {}).get("total")
+                            if isinstance(u.get("cost"), dict)
+                            else None
+                        )
+                        if (
+                            type(total) in {int, float}
+                            and math.isfinite(total)
+                            and total >= 0
+                            and (
+                                total > 0 or route.get("evidence_kind") == "simulation"
+                            )
+                        ):
+                            usage["reported_cost"] = True
+                            usage["cost"] += total
+                            cost_known = True
+                        elif route.get("evidence_kind") == "simulation":
+                            cost_known = False  # A fixture may omit cost; reserve conservatively.
+                        else:
+                            cost_known = False
+                            parse_error = "Pi live pricing/usage is unqualified; zero is not a billing receipt"
+                            self.cancel()
                     if math.ceil(usage["cost"] * 100) > extra["budget_cents"]:
                         parse_error = "attempt budget reached"
                         self.cancel()
@@ -164,25 +278,30 @@ class PiHarness:
                 error = parse_error or (
                     stderr.decode(errors="replace")[-2000:] if code else None
                 )
+                if error or not cost_known:
+                    usage["partial_estimate_usd"] = usage["cost"]
+                    usage["cost_status"] = "unknown-reservation-charged"
                 self._result = HarnessResult(
                     code == 0 and not error and bool(messages),
                     messages[-1] if messages else "",
                     usage,
                     session_id,
                     cost_cents=math.ceil(usage["cost"] * 100)
-                    if usage["reported_cost"]
-                    else extra["budget_cents"],
+                    if cost_known and not error
+                    else max(extra["budget_cents"], math.ceil(usage["cost"] * 100)),
                     error=error,
                 )
             except Exception as exc:
+                usage["partial_estimate_usd"] = usage["cost"]
+                usage["cost_status"] = "unknown-reservation-charged"
                 self._result = HarnessResult(
                     False,
                     messages[-1] if messages else "",
                     usage,
                     session_id,
-                    cost_cents=math.ceil(usage["cost"] * 100)
-                    if usage["reported_cost"]
-                    else extra["budget_cents"],
+                    cost_cents=max(
+                        extra["budget_cents"], math.ceil(usage["cost"] * 100)
+                    ),
                     error=parse_error or str(exc),
                 )
             finally:

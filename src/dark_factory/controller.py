@@ -913,6 +913,52 @@ class Controller:
         return None
 
     @atomic
+    def release_unstarted_claim(self, attempt_id, worker_id, reason):
+        """Fence untouched local dispatch; never reset a started CLI or its costs."""
+        attempt = self.store.one("SELECT * FROM attempts WHERE id=?", (attempt_id,))
+        if (
+            not attempt
+            or attempt["worker_id"] != worker_id
+            or attempt["status"] != "leased"
+            or attempt["workspace"] is not None
+            or attempt["pid"] is not None
+        ):
+            return False
+        job = self.store.one("SELECT * FROM jobs WHERE id=?", (attempt["job_id"],))
+        if job["status"] != "leased" or job["worker_id"] != worker_id:
+            return False
+        reservation = json.loads(job["spec_json"])["budget_cents"]
+        self.store.execute(
+            "UPDATE attempts SET status='not_started',ended_at=?,cost_cents=0,error=? WHERE id=?",
+            (now_iso(), reason, attempt_id),
+        )
+        self.store.execute(
+            "UPDATE jobs SET status='ready',worker_id=NULL,lease_until=NULL WHERE id=?",
+            (job["id"],),
+        )
+        self.store.execute(
+            "UPDATE work_items SET reserved_cents=MAX(reserved_cents-?,0) WHERE id=?",
+            (reservation, job["work_item_id"]),
+        )
+        self.store.execute("UPDATE workers SET busy=0 WHERE id=?", (worker_id,))
+        self.store.execute(
+            "INSERT INTO costs(id,root_id,attempt_id,source,amount_cents,currency,status,created_at) VALUES (?,?,?,?,0,'USD','not_started',?)",
+            (
+                new_id("cost"),
+                job["work_item_id"],
+                attempt_id,
+                "workflow-startup",
+                now_iso(),
+            ),
+        )
+        self.store.audit(
+            worker_id,
+            "attempt.not_started",
+            {"attempt_id": attempt_id, "job_id": job["id"], "reason": reason},
+        )
+        return True
+
+    @atomic
     def resume_claim(self, attempt_id, worker_id, capabilities):
         """Reacquire dispatch identity; active CLI work is never implicitly replayed."""
         attempt = self.store.one("SELECT * FROM attempts WHERE id=?", (attempt_id,))
@@ -1686,6 +1732,14 @@ class Controller:
                 >= row["spending_ceiling_cents"]
             ):
                 reason = "root allowance exhausted"
+        if (
+            automated_work_pending
+            and not reason
+            and self.store.get_op("workflow_unavailable", "")
+        ):
+            reason = "Workflow runtime unavailable: " + self.store.get_op(
+                "workflow_unavailable", ""
+            )
         if not reason and row["status"] in {"approved", "running"}:
             succeeded = {
                 json.loads(j["spec_json"])["logical_id"]

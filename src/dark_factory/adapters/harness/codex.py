@@ -138,8 +138,9 @@ class CodexHarness:
             "model_provider": '"openai"',
             "model_reasoning_effort": json.dumps(route.get("effort", "high")),
             "chatgpt_base_url": json.dumps(route["endpoint"] + "/"),
-            "model_providers.openai.request_max_retries": "0",
-            "model_providers.openai.stream_max_retries": "0",
+            # Built-in providers cannot be overridden in current Codex. Native
+            # transport retries remain bounded by the supervised attempt deadline;
+            # they do not authorize another factory attempt/provider/account.
         }
         argv = [
             *extra.get("prefix", []),

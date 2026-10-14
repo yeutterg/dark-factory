@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import tomllib
@@ -40,6 +41,8 @@ class Route:
     reasoning: bool = False
     context_window: int = 128000
     max_tokens: int = 8192
+    pricing: dict[str, float] = field(default_factory=dict)
+    pricing_evidence: str = ""
 
 
 @dataclass
@@ -257,6 +260,8 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
                 "reasoning",
                 "context_window",
                 "max_tokens",
+                "pricing",
+                "pricing_evidence",
             },
             "route",
         )
@@ -269,6 +274,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             "geography_evidence",
             "api",
             "effort",
+            "pricing_evidence",
         ):
             if key in item:
                 _require(item, key, str)
@@ -292,6 +298,19 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             raise ConfigError(
                 "invalid route evidence_kind; fake routes are simulation only"
             )
+        pricing = item.get("pricing", {})
+        if not isinstance(pricing, dict):
+            raise ConfigError("route pricing must be a table")
+        if pricing and (
+            set(pricing) != {"input", "output", "cache_read", "cache_write"}
+            or any(
+                type(v) not in {int, float} or not math.isfinite(v) or v < 0
+                for v in pricing.values()
+            )
+        ):
+            raise ConfigError(
+                "pricing needs four finite non-negative per-million-token rates"
+            )
         routes[rid] = Route(
             id=rid,
             model=_require(item, "model", str),
@@ -311,6 +330,8 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             reasoning=bool(item.get("reasoning", False)),
             context_window=_integer(item, "context_window", 128000, 1),
             max_tokens=_integer(item, "max_tokens", 8192, 1),
+            pricing=dict(pricing),
+            pricing_evidence=str(item.get("pricing_evidence", "")),
         )
     if not routes:
         raise ConfigError("at least one route is required")
