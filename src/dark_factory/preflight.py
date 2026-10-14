@@ -44,13 +44,13 @@ def inspect_configuration(cfg):
         adapter = adapter_for(route.harness)
 
         def harness(adapter=adapter, route=route):
-            if not cfg.raw.get("workers"):
+            if not cfg.workers:
                 adapter.open(cfg, asdict(route))
             return {
                 "harness": adapter.name,
                 "version": route.harness_version,
                 "evidence_kind": route.evidence_kind,
-                "placement": "remote-worker" if cfg.raw.get("workers") else "local",
+                "placement": "remote-worker" if cfg.workers else "local",
             }
 
         check("route:" + name, harness)
@@ -61,7 +61,7 @@ def inspect_configuration(cfg):
                 {
                     "name": "credential-source:" + name,
                     "passed": bool(os.environ.get(route.auth_env))
-                    or bool(cfg.raw.get("workers"))
+                    or bool(cfg.workers)
                     or (
                         route.harness == "pi"
                         and not cfg.project_id
@@ -89,7 +89,7 @@ def inspect_configuration(cfg):
         checks.append(
             {
                 "name": "native-isolation",
-                "passed": bool(cfg.raw.get("workers"))
+                "passed": bool(cfg.workers)
                 or platform.system() == "Darwin"
                 and Path("/usr/bin/sandbox-exec").is_file()
                 and cfg.execution.get("profile") == "macos-sandbox",
@@ -98,7 +98,7 @@ def inspect_configuration(cfg):
         checks.append(
             {
                 "name": "human-identities",
-                "passed": bool(cfg.raw.get("operators", {}).get("humans")),
+                "passed": bool(cfg.humans),
             }
         )
         checks.append(

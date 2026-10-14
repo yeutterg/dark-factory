@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from dark_factory.adapters.harness.claude_code import ClaudeCodeHarness
 from dark_factory.adapters.harness.codex import CodexHarness
@@ -13,7 +13,7 @@ from dark_factory.adapters.harness.pi import PiHarness, resolve_credential
 from dark_factory.runner import CommandRunner
 
 
-def explicit_credential(route):
+def explicit_credential(route, binary=None):
     return os.environ.get(route.get("auth_env", ""), "")
 
 
@@ -24,7 +24,7 @@ class HarnessAdapter:
     binary_key: str = ""
     binary_default: str = ""
     roles: frozenset[str] = frozenset({"planner", "critic", "coder", "reviewer"})
-    credential_resolver: Callable[[dict], str] = explicit_credential
+    credential_resolver: Callable[[dict, str], str] = explicit_credential
     supports_effort: bool = False
     session_paths: tuple[str, ...] = ()
     credential_files: tuple[str, ...] = ()
@@ -40,7 +40,7 @@ class HarnessAdapter:
         if not self.binary_key:
             return self.factory()
         binary = self.binary(cfg)
-        code, out, _ = CommandRunner(cfg.source_path.parent)._run(
+        code, out, _ = CommandRunner(cfg.source_path.parent).supervise(
             [*(prefix or []), binary, "--version"],
             b"",
             10,
@@ -103,12 +103,14 @@ def capabilities(cfg):
         "native",
         *(
             "environment:" + name
-            for name, recipe in cfg.raw.get("environments", {}).items()
+            for name, recipe in cfg.environments.items()
             if recipe["kind"] in {"native", "macos-sandbox"}
         ),
         *(name for name, adapter in ADAPTERS.items() if adapter.available(cfg)),
     ]
 
 
-def credential_for(route):
-    return adapter_for(route.get("harness", "pi")).credential_resolver(route)
+def credential_for(route, cfg=None):
+    adapter = adapter_for(route.get("harness", "pi"))
+    binary = adapter.binary(cfg) if cfg else adapter.binary_default
+    return adapter.credential_resolver(route, binary)

@@ -26,7 +26,7 @@ dark-factory --config factory.toml demo
 
 The demo uses simulated agents with real Git workspaces and checks. It makes no model calls and stops for review.
 
-Run tests with `python -m pytest`.
+Run tests with `python -m pytest -n auto`; lint and type-check with `ruff check src tests` and `mypy`.
 
 [Usage guide](docs/usage.md) · [Pi + Together](docs/pi-together.md) · [Live configuration](examples/factory-live.toml) · [Qualification status](specs/qualification.md) · [Roadmap](specs/tasks.md)
 

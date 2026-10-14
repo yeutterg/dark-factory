@@ -2,10 +2,32 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
+import platform
 import subprocess
 from pathlib import Path
+
+
+@functools.cache
+def git_binary() -> str:
+    """The system Git, bypassing macOS's /usr/bin/git xcrun shim.
+
+    The shim re-resolves the developer directory on every call; under the stripped
+    environment below that lookup is uncached and costs about a second per call.
+    """
+    if platform.system() == "Darwin" and Path("/usr/bin/xcrun").exists():
+        found = subprocess.run(
+            ["/usr/bin/xcrun", "--find", "git"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        ).stdout.strip()
+        if found and Path(found).is_absolute() and os.access(found, os.X_OK):
+            return found
+    return "/usr/bin/git"
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -21,7 +43,14 @@ def git(cwd: Path, *args: str) -> str:
         "GIT_COMMITTER_EMAIL": "factory@localhost",
     }
     proc = subprocess.run(
-        ["/usr/bin/git", "-c", "core.hooksPath=/dev/null", *args],
+        [
+            git_binary(),
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            *args,
+        ],
         cwd=cwd,
         env=env,
         capture_output=True,

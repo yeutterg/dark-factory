@@ -117,7 +117,7 @@ def test_unused_repair_does_not_block_human_review(tmp_path):
         assert worker.run_loop() == 3
         assert ctrl._packet(wid)["ready_for_human_review"]
         optional = [
-            j for j in ctrl._jobs(wid) if json.loads(j["spec_json"]).get("repair")
+            j for j in ctrl.jobs(wid) if json.loads(j["spec_json"]).get("repair")
         ]
         assert len(optional) == 3
         assert all(j["status"] == "not_needed" for j in optional)

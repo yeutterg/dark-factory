@@ -210,7 +210,7 @@ def test_macos_denies_host_data_and_protected_writes(tmp_path):
     )
     from dark_factory.runner import CommandRunner
 
-    code, out, err = CommandRunner(prepared.workspace)._run(
+    code, out, err = CommandRunner(prepared.workspace).supervise(
         prefix
         + [
             "/bin/sh",
@@ -360,7 +360,7 @@ def test_shell_process_descendant_stops_on_timeout(tmp_path):
     script = "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',sys.argv[1]]); time.sleep(60)"
     child = f"import time; from pathlib import Path; time.sleep(2); Path({str(marker)!r}).write_text('survived')"
     with pytest.raises(RunnerError, match="timed out"):
-        CommandRunner(tmp_path)._run(
+        CommandRunner(tmp_path).supervise(
             [sys.executable, "-c", script, child],
             b"",
             0.3,
@@ -477,7 +477,7 @@ def test_readonly_roles_cannot_mutate_candidate_on_macos(tmp_path):
     )
     from dark_factory.runner import CommandRunner
 
-    code, out, err = CommandRunner(prepared.workspace)._run(
+    code, out, err = CommandRunner(prepared.workspace).supervise(
         prefix + ["/bin/sh", "-c", "echo modified > source.txt"],
         b"",
         5,
@@ -595,7 +595,7 @@ def test_successful_job_flags_cannot_substitute_for_criterion_evidence(loop):
             review,
         ),
     )
-    assert all(j["status"] == "succeeded" for j in ctrl._jobs(wid))
+    assert all(j["status"] == "succeeded" for j in ctrl.jobs(wid))
     with pytest.raises(ControllerError, match="acceptance criteria remain incomplete"):
         ctrl.accept(wid, "human")
 

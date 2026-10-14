@@ -81,7 +81,7 @@ dark-factory --config factory.toml --api-url http://127.0.0.1:8745 status
 dark-factory --config factory.toml --api-url http://127.0.0.1:8745 pause
 ```
 
-The API binds to loopback only. Worker credentials cannot invoke operator decisions. A process lock prevents a second controller from opening the same state directory. Pauses and drains stop new dispatch; cancellation is separate. `resume` clears pause; `undrain` clears drain. Active attempts retain their input snapshots. A valid reload changes future defaults; incompatible approved work stops for a new proposal. Invalid reload retains the last valid in-memory configuration and records an audit event.
+Operator commands accept the same arguments and return the same JSON with or without `--api-url`. `preflight`, `backup`, `restore`, `run-worker`, `serve`, `demo`, `adapter` and `execution-worker` run only locally. The API binds to loopback only. Worker credentials cannot invoke operator decisions. A process lock prevents a second controller from opening the same state directory. Pauses and drains stop new dispatch; cancellation is separate. `resume` clears pause; `undrain` clears drain. Active attempts retain their input snapshots. A valid reload changes future defaults; incompatible approved work stops for a new proposal. Invalid reload retains the last valid in-memory configuration and records an audit event.
 
 `cancel <job-id>` requests process termination and capture. `recover` fences expired leases, preserves unique work and records conservative estimated cost. It never replays an interrupted CLI. Unknown interrupted usage consumes the reserved allowance. Repairs default to zero. With `[continuation] max_repairs = 1`, the original proposal includes one conditional correctness repair followed by fresh checks and review, under the original limits. Other stopped outcomes require inspection and a revised plan/approval. There is no automatic provider fallback.
 
@@ -101,7 +101,9 @@ Restore verifies artifacts and SQLite integrity and relocates state-owned path r
 ## Verify and extend
 
 ```bash
-python -m pytest
+python -m pytest -n auto
+ruff check src tests && ruff format --check src tests
+mypy
 ```
 
 Tests use temporary repositories/state and fake external services. On macOS with Pi installed, the suite also runs the actual Pi binary through a deterministic loopback provider, exercising tool writes, fresh sessions and OS isolation with no inference spending. [Qualification details](../specs/qualification.md) distinguish this from live model qualification.

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Callable, Protocol
+from collections.abc import Callable
+from typing import Protocol
 
 
 class WorkflowRuntime(Protocol):
@@ -16,7 +17,7 @@ class WorkflowRuntime(Protocol):
 
 
 def runtime_for(cfg, store) -> WorkflowRuntime:
-    engine = cfg.raw.get("workflow", {}).get("engine", "native")
+    engine = cfg.workflow_engine
     if engine == "native":
         from dark_factory.adapters.workflow.native import NativeRuntime
 
@@ -31,7 +32,7 @@ def runtime_for(cfg, store) -> WorkflowRuntime:
 def runtime_policy(cfg) -> dict:
     from pathlib import Path
 
-    from dark_factory.artifacts import digest
+    from dark_factory.artifacts import digest_cached as digest
 
     config = cfg.raw.get("workflow", {"engine": "native"})
     policy = {"config": config, "contract_version": 1}

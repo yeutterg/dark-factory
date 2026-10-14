@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import queue
+import re
 import shutil
-import threading
 from pathlib import Path
 
 from dark_factory.adapters.harness.base import HarnessEvent, HarnessResult
 from dark_factory.adapters.harness.credential_file import credential_file
+from dark_factory.adapters.harness.streaming import JsonLines, StreamingCliHarness
 from dark_factory.runner import CommandRunner
 
 
@@ -34,53 +34,41 @@ def inline_table(values):
     )
 
 
-class CodexHarness:
+def validate_codex_route(route: dict) -> None:
+    """Shared by profile validation and dispatch; route is the dict form."""
+    if route.get("evidence_kind") != "simulation":
+        raise ValueError(
+            "live Codex routes are unqualified; credential/tool isolation must be proven first"
+        )
+    if (
+        route.get("provider") != "chatgpt-subscription"
+        or route.get("endpoint") != "https://chatgpt.com/backend-api"
+        or route.get("api")
+    ):
+        raise ValueError("Codex requires its native first-party subscription route")
+    auth_env = route.get("auth_env")
+    if not auth_env or auth_env in {"OPENAI_API_KEY", "CODEX_API_KEY"}:
+        raise ValueError("Codex requires an explicit subscription credential reference")
+    if not re.fullmatch(r"gpt-[0-9][a-z0-9.-]+", route.get("model") or ""):
+        raise ValueError("Codex requires an explicit GPT model ID")
+    if route.get("effort", "high") not in {"low", "medium", "high", "xhigh"}:
+        raise ValueError("unsupported Codex effort")
+
+
+class CodexHarness(StreamingCliHarness):
     name = "codex"
 
     @staticmethod
     def validate_route(route):
-        import re
-
-        if route.evidence_kind != "simulation":
-            raise ValueError(
-                "live Codex routes are unqualified; credential/tool isolation must be proven first"
-            )
-        if (
-            route.provider != "chatgpt-subscription"
-            or route.endpoint != "https://chatgpt.com/backend-api"
-            or route.api
-        ):
-            raise ValueError("Codex requires its native first-party subscription route")
-        if not route.auth_env or route.auth_env in {"OPENAI_API_KEY", "CODEX_API_KEY"}:
-            raise ValueError(
-                "Codex requires an explicit subscription credential reference"
-            )
-        if not re.fullmatch(r"gpt-[0-9][a-z0-9.-]+", route.model):
-            raise ValueError("Codex requires an explicit GPT model ID")
-        if route.effort not in {"low", "medium", "high", "xhigh"}:
-            raise ValueError("unsupported Codex effort")
+        validate_codex_route(vars(route))
 
     def __init__(self, binary="codex"):
-        self.binary = shutil.which(binary) or binary
-        self._cancel = threading.Event()
-        self._result = HarnessResult(False, "", {}, None, error="not started")
-
-    @classmethod
-    def available(cls, binary="codex"):
-        return shutil.which(binary) is not None
+        super().__init__(shutil.which(binary) or binary)
 
     def start(self, prompt, workspace, extra=None):
         extra = extra or {}
         route = extra["route"]
-        if route.get("evidence_kind") != "simulation":
-            raise ValueError(
-                "live Codex routes are unqualified; credential/tool isolation must be proven first"
-            )
-        if (
-            route["provider"] != "chatgpt-subscription"
-            or route["endpoint"] != "https://chatgpt.com/backend-api"
-        ):
-            raise ValueError("Codex requires its native first-party subscription route")
+        validate_codex_route(route)
         if not extra.get("prefix") and route.get("evidence_kind") != "simulation":
             raise ValueError("Codex requires an isolated execution environment")
         try:
@@ -167,8 +155,6 @@ class CodexHarness:
         for key, value in settings.items():
             argv += ["-c", key + "=" + value]
         argv.append("-")
-        events = queue.Queue()
-        pending = bytearray()
         session_id = None
         terminal = None
         answer = []
@@ -181,16 +167,11 @@ class CodexHarness:
         }
         self._cancel.clear()
 
-        def output(name, data):
-            nonlocal session_id, terminal, error
-            if name != "stdout":
-                return
-            pending.extend(data)
-            while b"\n" in pending:
-                line, _, rest = pending.partition(b"\n")
-                pending[:] = rest
-                if not line.strip():
-                    continue
+        def run(emit):
+            nonlocal error
+
+            def handle(line):
+                nonlocal session_id, terminal, error
                 try:
                     event = json.loads(line)
                     kind = event["type"]
@@ -201,7 +182,7 @@ class CodexHarness:
                         if session_id or not isinstance(sid, str) or not sid:
                             raise ValueError("invalid Codex session identity")
                         session_id = sid
-                        events.put(HarnessEvent("session", data={"session_id": sid}))
+                        emit(HarnessEvent("session", data={"session_id": sid}))
                     elif (
                         kind == "item.completed"
                         and event.get("item", {}).get("type") == "agent_message"
@@ -221,25 +202,26 @@ class CodexHarness:
                         usage["tokens"] = tokens
                     elif kind in {"turn.failed", "error"}:
                         raise ValueError("Codex assignment failed; no paid fallback")
-                    events.put(HarnessEvent("event", data=event))
+                    emit(HarnessEvent("event", data=event))
                 except (ValueError, KeyError, TypeError) as exc:
                     error = str(exc)
                     self._cancel.set()
 
-        def run():
-            nonlocal error
+            lines = JsonLines(handle)
             try:
-                code, _, _ = CommandRunner(workspace, extra["max_output_bytes"])._run(
+                code, _, _ = CommandRunner(
+                    workspace, extra["max_output_bytes"]
+                ).supervise(
                     argv,
                     prompt.encode(),
                     extra["timeout_seconds"],
                     workspace,
                     env,
                     should_stop=self._cancel.is_set,
-                    on_output=output,
+                    on_output=lines,
                     on_start=extra.get("on_start"),
                 )
-                if code or pending.strip() or not terminal or not answer:
+                if code or lines.incomplete or not terminal or not answer:
                     error = error or "Codex ended without a complete answer"
             except Exception as exc:
                 error = error or str(exc)
@@ -252,29 +234,9 @@ class CodexHarness:
                     extra["budget_cents"],
                     error,
                 )
-                events.put(None)
 
-        thread = threading.Thread(target=run, daemon=True)
-        thread.start()
-        try:
-            while True:
-                try:
-                    event = events.get(timeout=0.1)
-                except queue.Empty:
-                    yield HarnessEvent("heartbeat")
-                    continue
-                if event is None:
-                    break
-                yield event
-        finally:
-            self._cancel.set()
-            thread.join(timeout=5)
-
-    def wait(self):
-        return self._result
-
-    def cancel(self):
-        self._cancel.set()
+        # Leaving the generator early stops Codex before credentials are erased.
+        yield from self._stream(run, stop_on_exit=True)
 
     def attach_command(self, session_id):
         return [self.binary, "resume", session_id]

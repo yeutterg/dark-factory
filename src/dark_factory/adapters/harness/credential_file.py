@@ -92,7 +92,7 @@ def credential_file(runtime, relative, content, timeout_seconds):
             writable.register(guardian.stdin, selectors.EVENT_WRITE)
             while remaining:
                 if not writable.select(max(0, deadline - time.monotonic())):
-                    raise RuntimeError("credential guardian startup timed out")
+                    raise TimeoutError("credential guardian startup timed out")
                 try:
                     remaining = remaining[
                         os.write(guardian.stdin.fileno(), remaining) :

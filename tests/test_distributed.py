@@ -135,7 +135,9 @@ def test_full_portable_loop_and_idempotent_settlement(tmp_path, monkeypatch):
             result = execute_assignment(
                 assignment,
                 tmp_path / f"executor-{n}",
-                lambda: service.heartbeat("worker1", assignment["claim"]["attempt_id"]),
+                lambda aid=assignment["claim"]["attempt_id"]: service.heartbeat(
+                    "worker1", aid
+                ),
             )
             assert result["receipt"]["ok"], result["receipt"]
             ack = service.finish("worker1", result)
@@ -239,3 +241,20 @@ def test_fenced_result_rejected(tmp_path, monkeypatch):
             service.finish("worker1", result)
     finally:
         store.close()
+
+
+def test_live_project_route_serves_only_its_configured_role(tmp_path, monkeypatch):
+    from dark_factory.execution.policy import validate_deployment
+
+    cfg = deployment(tmp_path, monkeypatch)
+    raw = copy.deepcopy(cfg.raw)
+    raw["environments"]["local"] = {
+        "kind": "macos-sandbox",
+        "qualification": "test",
+        "region": "US",
+        "geography_evidence": "test",
+    }
+    route = cfg.routes["fake-coder"]
+    route.evidence_kind = "live"
+    with pytest.raises(ConfigError, match="only its configured role"):
+        validate_deployment(raw, cfg.routes)

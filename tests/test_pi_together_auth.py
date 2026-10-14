@@ -38,3 +38,20 @@ def test_together_secret_prefers_environment(monkeypatch):
         _route_secret({"provider": "together", "auth_env": "TOGETHER_API_KEY"})
         == "from-env"
     )
+
+
+def test_together_secret_uses_configured_pi_binary(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.delenv("TOGETHER_API_KEY", raising=False)
+    seen = []
+
+    def fake_run(argv, **kwargs):
+        seen.append(argv[0])
+        return SimpleNamespace(returncode=0, stdout="key\n", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    cfg = SimpleNamespace(execution={"pi_binary": "/opt/pinned/pi"})
+    route = {"provider": "together", "auth_env": "TOGETHER_API_KEY", "harness": "pi"}
+    assert _route_secret(route, cfg) == "key"
+    assert seen == ["/opt/pinned/pi"]

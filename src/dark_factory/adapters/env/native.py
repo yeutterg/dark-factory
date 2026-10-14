@@ -19,10 +19,10 @@ class NativeEnvironment:
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
 
-    def prepare(self, work_item_id: str, repo=None) -> PreparedEnv:
-        if Path(work_item_id).name != work_item_id or work_item_id in {".", ".."}:
+    def prepare(self, attempt_id: str, repo=None) -> PreparedEnv:
+        if Path(attempt_id).name != attempt_id or attempt_id in {".", ".."}:
             raise ValueError("invalid owned workspace identifier")
-        workspace = self.root / work_item_id
+        workspace = self.root / attempt_id
         if workspace.exists():
             raise FileExistsError(workspace)
         if isinstance(repo, dict):
@@ -125,7 +125,7 @@ class NativeEnvironment:
         prefix = self.prefix(
             prepared, runtime, network=False, writable=[], protected=[]
         )
-        code, out, err = CommandRunner(cwd)._run(
+        code, out, err = CommandRunner(cwd).supervise(
             prefix + argv, b"", timeout_seconds, cwd, process_environment(runtime)
         )
         return code, out.decode(errors="replace"), err.decode(errors="replace")

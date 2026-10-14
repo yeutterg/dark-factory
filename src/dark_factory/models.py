@@ -2,21 +2,49 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from enum import StrEnum
 
-WORK_STATUSES = (
-    "selected",
-    "planning",
-    "awaiting_approval",
-    "approved",
-    "running",
-    "awaiting_review",
-    "accepted",
-    "failed",
-    "cancelled",
-    "rejected",
-)
+
+class WorkStatus(StrEnum):
+    SELECTED = "selected"
+    PLANNING = "planning"
+    AWAITING_APPROVAL = "awaiting_approval"
+    APPROVED = "approved"
+    RUNNING = "running"
+    AWAITING_REVIEW = "awaiting_review"
+    ACCEPTED = "accepted"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+
+
+class JobStatus(StrEnum):
+    STANDBY = "standby"
+    BLOCKED = "blocked"
+    READY = "ready"
+    LEASED = "leased"
+    RUNNING = "running"
+    CANCELLING = "cancelling"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    TIMED_OUT = "timed_out"
+    SUPERSEDED = "superseded"
+    SUPERSEDED_BY_REPAIR = "superseded_by_repair"
+    NOT_NEEDED = "not_needed"
+
+
+class AttemptStatus(StrEnum):
+    LEASED = "leased"
+    RUNNING = "running"
+    CANCELLING = "cancelling"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    TIMED_OUT = "timed_out"
+    NOT_STARTED = "not_started"
+
 
 JOB_KINDS = (
     "plan",
@@ -26,35 +54,37 @@ JOB_KINDS = (
     "review",
     "command",
 )
+PLANNING_KINDS = frozenset({"plan", "critique"})
+EVIDENCE_KINDS = frozenset({"check", "review"})
 
-ATTEMPT_STATUSES = (
-    "pending",
-    "leased",
-    "running",
-    "succeeded",
-    "failed",
-    "cancelled",
-    "timed_out",
-    "archived",
-    "not_started",
+ACTIVE_ATTEMPT = frozenset(
+    {AttemptStatus.LEASED, AttemptStatus.RUNNING, AttemptStatus.CANCELLING}
 )
+DISPATCHABLE_ROOT = frozenset(
+    {WorkStatus.PLANNING, WorkStatus.APPROVED, WorkStatus.RUNNING}
+)
+TERMINAL_ROOT = frozenset(
+    {WorkStatus.ACCEPTED, WorkStatus.FAILED, WorkStatus.REJECTED, WorkStatus.CANCELLED}
+)
+INACTIVE_REPAIR = frozenset({JobStatus.STANDBY, JobStatus.NOT_NEEDED})
 
 PRESENTATION_STAGES = ("Plan", "Build", "Check", "Review", "Done")
 
 
-def to_dict(obj: Any) -> dict[str, Any]:
-    if hasattr(obj, "__dataclass_fields__"):
-        return asdict(obj)
-    raise TypeError(type(obj))
+def sql_set(values) -> str:
+    """Render a fixed status set as a SQL list. Only enum members are accepted."""
+    if not all(isinstance(v, StrEnum) for v in values):
+        raise TypeError("sql_set accepts status enum members only")
+    return "(" + ",".join(f"'{v}'" for v in sorted(values)) + ")"
 
 
 @dataclass
 class JobSpec:
     job_id: str
     kind: str
-    role: Optional[str] = None
-    command_id: Optional[str] = None
-    repo: Optional[str] = None
+    role: str | None = None
+    command_id: str | None = None
+    repo: str | None = None
     depends_on: list[str] = field(default_factory=list)
     budget_cents: int = 0
     timeout_seconds: int = 3600
@@ -72,66 +102,3 @@ class PlanGraph:
     permitted_routes: list[str]
     permitted_previews: list[str] = field(default_factory=list)
     protected_paths: list[str] = field(default_factory=list)
-
-
-@dataclass
-class WorkItem:
-    id: str
-    external_id: str
-    url: str
-    title: str
-    body: str
-    parent_id: Optional[str]
-    repo: Optional[str]
-    status: str
-    is_root: bool
-    iteration: Optional[str] = None
-    plan_version: int = 0
-    approved_digest: Optional[str] = None
-    approved_by: Optional[str] = None
-    approved_at: Optional[str] = None
-    spending_ceiling_cents: int = 0
-    reserved_cents: int = 0
-    spent_cents: int = 0
-    candidate_commits: dict[str, str] = field(default_factory=dict)
-    presentation_stage: str = "Plan"
-
-
-@dataclass
-class Job:
-    id: str
-    work_item_id: str
-    kind: str
-    status: str
-    spec_json: str
-    depends_on: str
-    lease_until: Optional[str] = None
-    worker_id: Optional[str] = None
-    reserved_cents: int = 0
-
-
-@dataclass
-class Attempt:
-    id: str
-    job_id: str
-    worker_id: Optional[str]
-    status: str
-    workspace: Optional[str]
-    route_id: Optional[str]
-    started_at: Optional[str]
-    ended_at: Optional[str]
-    cost_cents: int = 0
-    error: Optional[str] = None
-    config_hash: Optional[str] = None
-    prompt_hash: Optional[str] = None
-
-
-@dataclass
-class Evidence:
-    id: str
-    attempt_id: str
-    kind: str
-    path: Optional[str]
-    digest: Optional[str]
-    payload_json: str
-    inputs_json: str

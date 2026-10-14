@@ -14,6 +14,13 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = 1
+# Every optional setting has exactly one default, shared by validation and use.
+BUDGET_DEFAULTS = {"root_cents": 1000, "planning_cents": 100, "account_cents": 10000}
+DEFAULT_MAX_REPAIRS = 0
+DEFAULT_MAX_SECONDS = 7200
+DEFAULT_LEASE_SECONDS = 30
+DEFAULT_WORKFLOW_ENGINE = "native"
+DEFAULT_NODE_BINARY = "node"
 BLOCKED_REGIONS = {"CN", "CHINA", "PRC"}
 
 
@@ -89,6 +96,79 @@ class FactoryConfig:
     execution: dict[str, Any] = field(default_factory=dict)
     operator_token: str = ""
     project_id: str = ""
+
+    @classmethod
+    def replica(cls, state_dir, source_path, execution, project_id, max_output_bytes):
+        """Settings for executing one assignment in a private attempt replica."""
+        return cls(
+            schema_version=SCHEMA_VERSION,
+            project_name="",
+            state_dir=Path(state_dir),
+            source_path=Path(source_path),
+            digest="",
+            repositories=[],
+            labels={},
+            routes={},
+            windows=[],
+            date_exceptions=[],
+            commands={},
+            prompts={},
+            skills=[],
+            geography_policy=[],
+            worker_token="",
+            api_host="",
+            api_port=0,
+            default_timeout_seconds=0,
+            max_output_bytes=max_output_bytes,
+            execution=dict(execution),
+            project_id=project_id,
+        )
+
+    # Typed views over validated tables. They read raw on access so an operator
+    # reload (or a test) that replaces a table is reflected without re-parsing.
+    def _table(self, name: str) -> dict[str, Any]:
+        return self.raw.get(name, {})
+
+    @property
+    def budgets(self) -> dict[str, int]:
+        return {**BUDGET_DEFAULTS, **self._table("budgets")}
+
+    @property
+    def max_repairs(self) -> int:
+        return self._table("continuation").get("max_repairs", DEFAULT_MAX_REPAIRS)
+
+    @property
+    def max_seconds(self) -> int:
+        return self.execution.get("max_seconds", DEFAULT_MAX_SECONDS)
+
+    @property
+    def workflow_engine(self) -> str:
+        return self._table("workflow").get("engine", DEFAULT_WORKFLOW_ENGINE)
+
+    @property
+    def node_binary(self) -> str:
+        return self._table("workflow").get("node_binary", DEFAULT_NODE_BINARY)
+
+    @property
+    def humans(self) -> list[str]:
+        return self._table("operators").get("humans", [])
+
+    @property
+    def role_routes(self) -> dict[str, str]:
+        return self._table("role_routes")
+
+    @property
+    def environments(self) -> dict[str, dict[str, Any]]:
+        return self._table("environments")
+
+    @property
+    def workers(self) -> dict[str, dict[str, Any]]:
+        return self._table("workers")
+
+    def lease_seconds(self, worker_id: str) -> int:
+        return self.workers.get(worker_id, {}).get(
+            "lease_seconds", DEFAULT_LEASE_SECONDS
+        )
 
 
 def _require(d: dict[str, Any], key: str, typ: type) -> Any:
@@ -186,18 +266,22 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         if not isinstance(table, dict):
             raise ConfigError(f"{key} must be a table")
         _fields(table, allowed, key)
-    _integer(raw.get("budgets", {}), "root_cents", 1000)
+    _integer(raw.get("budgets", {}), "root_cents", BUDGET_DEFAULTS["root_cents"])
     continuation = raw.get("continuation", {})
     if not isinstance(continuation, dict):
         raise ConfigError("continuation must be a table")
     _fields(continuation, {"max_repairs"}, "continuation")
-    if _integer(continuation, "max_repairs", 0) > 1:
+    if _integer(continuation, "max_repairs", DEFAULT_MAX_REPAIRS) > 1:
         raise ConfigError("at most one targeted correctness repair is supported")
     workflow = raw.get("workflow", {})
     if not isinstance(workflow, dict):
         raise ConfigError("workflow must be a table")
     _fields(workflow, {"engine", "node_binary"}, "workflow")
-    engine = _require(workflow, "engine", str) if "engine" in workflow else "native"
+    engine = (
+        _require(workflow, "engine", str)
+        if "engine" in workflow
+        else DEFAULT_WORKFLOW_ENGINE
+    )
     if engine not in {"native", "pi-durable"}:
         raise ConfigError("unsupported workflow engine")
     if "node_binary" in workflow and not _require(workflow, "node_binary", str).strip():
@@ -564,7 +648,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         {"profile", "pi_binary", "claude_binary", "codex_binary", "max_seconds"},
         "execution",
     )
-    _integer(execution, "max_seconds", 7200, 1)
+    _integer(execution, "max_seconds", DEFAULT_MAX_SECONDS, 1)
     for key in ("pi_binary", "claude_binary", "codex_binary"):
         if key in execution:
             binary = _require(execution, key, str)
@@ -632,8 +716,8 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
                 )
             if not re.fullmatch(r"[A-Z][A-Z0-9_]*", route.auth_env):
                 raise ConfigError("auth_env must name an environment variable")
-    for key, default in (("planning_cents", 100), ("account_cents", 10000)):
-        _integer(raw.get("budgets", {}), key, default, 1)
+    for key in ("planning_cents", "account_cents"):
+        _integer(raw.get("budgets", {}), key, BUDGET_DEFAULTS[key], 1)
 
     from dark_factory.execution.policy import validate_deployment
 

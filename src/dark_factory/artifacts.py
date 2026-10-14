@@ -8,8 +8,10 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 from contextlib import ExitStack
 from pathlib import Path
+from typing import Any
 
 
 def digest(path: Path) -> str:
@@ -20,8 +22,35 @@ def digest(path: Path) -> str:
     return h.hexdigest()
 
 
+# One entry per path: a changed file replaces its previous identity and digest.
+_DIGESTS: dict[str, tuple[tuple, str]] = {}
+
+
+def digest_cached(path: Path) -> str:
+    """Digest of a trusted input, re-hashed only when its file identity changes.
+
+    ctime is part of the key: any content write updates it and it cannot be set
+    back with utime. Archive verification always uses digest() instead.
+    """
+    path = Path(path).resolve()
+    stat = path.stat()
+    identity = (
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_size,
+        stat.st_mtime_ns,
+        stat.st_ctime_ns,
+    )
+    cached = _DIGESTS.get(str(path))
+    if cached and cached[0] == identity:
+        return cached[1]
+    value = digest(path)
+    _DIGESTS[str(path)] = (identity, value)
+    return value
+
+
 def manifest(root: Path) -> dict:
-    entries = {}
+    entries: dict[str, dict[str, Any]] = {}
     for path in sorted(root.rglob("*")):
         name = str(path.relative_to(root))
         if name == "manifest.json":
@@ -69,12 +98,27 @@ def archive(
     metadata: dict,
     files: dict[str, str],
     ephemeral_paths=(),
+    unchanged=None,
 ) -> str:
+    """Copy unique work and evidence, then seal and verify the archive.
+
+    unchanged is (commit, git_fingerprint) taken when the workspace was
+    prepared. A workspace still exactly at that state, with no file, ref,
+    object, index-flag or stash changes, holds nothing unique, so only the
+    commit is recorded; the pinned input snapshot already preserves it.
+    """
     destination.mkdir(parents=True, exist_ok=False)
     from dark_factory.adapters.git.local import git
 
+    if unchanged and workspace_matches(workspace, *unchanged):
+        unchanged_commit = unchanged[0]
+        for name, body in files.items():
+            if Path(name).name != name:
+                raise ValueError("invalid artifact filename")
+            (destination / name).write_text(body)
+        return seal(destination, {**metadata, "workspace_commit": unchanged_commit})
+
     for name in ephemeral_paths:
-        path = workspace / name
         if (
             Path(name).is_absolute()
             or ".." in Path(name).parts
@@ -103,6 +147,43 @@ def archive(
             raise ValueError("invalid artifact filename")
         (destination / name).write_text(body)
     return seal(destination, metadata)
+
+
+def git_fingerprint(workspace: Path) -> str:
+    """Digest of repository state that git status does not show.
+
+    Covers every ref (branches, tags, notes, stash), object counts and packs,
+    and index flags that can hide working-tree edits.
+    """
+    from dark_factory.adapters.git.local import git
+
+    parts = [
+        git(workspace, "rev-parse", "HEAD"),
+        git(workspace, "for-each-ref", "--format=%(refname) %(objectname)"),
+        git(workspace, "count-objects", "-v"),
+        git(workspace, "ls-files", "-v"),
+        git(workspace, "stash", "list"),
+    ]
+    return hashlib.sha256("\0".join(parts).encode()).hexdigest()
+
+
+def workspace_matches(workspace: Path, commit: str, fingerprint: str) -> bool:
+    from dark_factory.adapters.git.local import git
+
+    try:
+        return (
+            git(workspace, "rev-parse", "HEAD") == commit
+            and not git(
+                workspace,
+                "status",
+                "--porcelain=v1",
+                "--ignored",
+                "--untracked-files=all",
+            )
+            and git_fingerprint(workspace) == fingerprint
+        )
+    except (RuntimeError, subprocess.TimeoutExpired):
+        return False
 
 
 def backup(store, destination: Path) -> None:

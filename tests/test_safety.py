@@ -3,7 +3,7 @@
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -171,7 +171,7 @@ def test_invalid_external_requests_never_claim_success(handle, operation):
 def test_overnight_window_uses_local_start_day(simulation):
     cfg, *_ = simulation
     cfg.windows = [Window(["Mon"], "22:00", "06:00", "America/Los_Angeles")]
-    at = datetime(2026, 9, 15, 9, tzinfo=timezone.utc)  # Tuesday 02:00 PDT
+    at = datetime(2026, 9, 15, 9, tzinfo=UTC)  # Tuesday 02:00 PDT
     assert window_open(cfg, at)
     cfg.date_exceptions = ["2026-09-14"]
     assert not window_open(cfg, at)

@@ -2,6 +2,7 @@
 
 import copy
 import json
+from contextlib import ExitStack
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -97,7 +98,11 @@ def test_completed_candidate_remains_reviewable_after_execution_limits(tmp_path)
             def now(cls, tz=None):
                 return datetime.now(tz) + timedelta(days=30)
 
-        with patch("dark_factory.controller.datetime", FutureClock):
+        with ExitStack() as clocks:
+            for module in ("dispatch", "planning", "results", "review"):
+                clocks.enter_context(
+                    patch(f"dark_factory.control.{module}.datetime", FutureClock)
+                )
             assert ctrl._packet(wid)["ready_for_human_review"]
             ctrl.record_manual_gate(
                 wid,
@@ -202,7 +207,7 @@ def test_non_correctness_failure_cannot_activate_repair(tmp_path, monkeypatch, f
         )
         assert all(
             j["status"] == "standby"
-            for j in ctrl._jobs(wid)
+            for j in ctrl.jobs(wid)
             if json.loads(j["spec_json"]).get("repair")
         )
     finally:

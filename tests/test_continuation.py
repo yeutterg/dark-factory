@@ -79,7 +79,7 @@ def test_green_jobs_without_connected_check_evidence_are_not_ready(tmp_path):
             (json.dumps(result), att["id"]),
         )
         ctrl.reconcile_continuations()
-        assert all(j["status"] == "succeeded" for j in ctrl._jobs(wid))
+        assert all(j["status"] == "succeeded" for j in ctrl.jobs(wid))
         assert ctrl.continuation(wid)["next_action"]["kind"] == "blocked"
         assert not ctrl._packet(wid)["ready_for_human_review"]
         assert "check:fixture-check" in ctrl._packet(wid)["missing_evidence"]
@@ -93,7 +93,7 @@ def test_dropped_handoff_reconciles_without_new_scope_or_duplicate_dispatch(tmp_
         worker.run_loop(2)
         ctrl.approve(wid, "human-tester")
         assert worker.run_once()
-        check = next(j for j in ctrl._jobs(wid) if j["kind"] == "check")
+        check = next(j for j in ctrl.jobs(wid) if j["kind"] == "check")
         store.execute("UPDATE jobs SET status='blocked' WHERE id=?", (check["id"],))
         before = ctrl._approval_payload(wid)
         # A fresh worker reconciles the saved root, including after a status request.

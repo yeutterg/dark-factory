@@ -152,7 +152,7 @@ def test_named_sandbox_contract_runs_stop_and_release(tmp_path):
     prepared = env.prepare("task")
     runtime = tmp_path / "runtime"
     prefix = env.prefix(prepared, runtime, network=False, writable=[], protected=[])
-    code, stdout, _ = CommandRunner(prepared.workspace)._run(
+    code, stdout, _ = CommandRunner(prepared.workspace).supervise(
         prefix + [sys.executable, "-c", "print('ok')"],
         b"",
         10,
@@ -247,7 +247,7 @@ assert not Path('/var/run/docker.sock').exists()
 print('isolated')
 """
     try:
-        code, out, err = CommandRunner(prepared.workspace)._run(
+        code, out, err = CommandRunner(prepared.workspace).supervise(
             prefix + ["python3", "-c", script],
             b"",
             30,
