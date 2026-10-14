@@ -223,7 +223,10 @@ def selected_route(cfg, role):
 
     eligible = [r for r in cfg.routes.values() if role in adapter_for(r.harness).roles]
     exact = [r for r in eligible if r.role == role]
-    return (exact or eligible or [None])[0]
+    # A route approved for one role never silently serves another with live
+    # authority; simulation fixtures may share one route across roles.
+    shared = [r for r in eligible if r.evidence_kind == "simulation"]
+    return (exact or shared or [None])[0]
 
 
 def recipe_for(cfg, route):

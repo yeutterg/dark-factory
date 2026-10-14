@@ -334,6 +334,17 @@ class Controller:
         )
         if not result["ok"] or not isinstance(result.get("items"), list):
             raise ControllerError(result.get("error", "tracking returned no items"))
+        # Caller-supplied issue fields are labeled fixtures; they cannot establish
+        # root scope when any route can spend or produce live evidence.
+        fixtures = {
+            observation.get("external_id")
+            for observation in result.get("evidence", {}).get("observations", [])
+            if isinstance(observation, dict)
+            and observation.get("source") == "provided-fixture"
+        }
+        simulation_only = all(
+            route.evidence_kind == "simulation" for route in self.cfg.routes.values()
+        )
         ids = []
         with self.store.transaction():
             for item in result["items"]:
@@ -364,6 +375,11 @@ class Controller:
                 ):
                     raise ControllerError(
                         "tracking result needs a provider-qualified external_id"
+                    )
+                if item["external_id"] in fixtures and not simulation_only:
+                    raise ControllerError(
+                        "provided issue fixtures cannot establish root scope for live "
+                        "routes; select the issue by repository and number"
                     )
                 existing = self.store.one(
                     "SELECT id FROM work_items WHERE external_id=?",
