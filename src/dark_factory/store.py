@@ -272,6 +272,11 @@ class Store:
 
     def resolve_path(self, value: str | Path) -> Path:
         path = Path(value)
+        references = self.one("SELECT value FROM meta WHERE key='execution_references'")
+        if references:
+            mapping = json.loads(references["value"])
+            if str(value) in mapping:
+                return self.state_dir.resolve() / mapping[str(value)]
         row = self.one("SELECT value FROM meta WHERE key='restore_origins'")
         if row and path.is_absolute():
             for original_value in json.loads(row["value"]):

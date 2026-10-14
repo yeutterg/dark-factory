@@ -64,10 +64,40 @@ def verify(root: Path) -> dict:
 
 
 def archive(
-    workspace: Path, destination: Path, metadata: dict, files: dict[str, str]
+    workspace: Path,
+    destination: Path,
+    metadata: dict,
+    files: dict[str, str],
+    ephemeral_paths=(),
 ) -> str:
     destination.mkdir(parents=True, exist_ok=False)
-    shutil.copytree(workspace, destination / "workspace", symlinks=True)
+    from dark_factory.adapters.git.local import git
+
+    for name in ephemeral_paths:
+        path = workspace / name
+        if (
+            Path(name).is_absolute()
+            or ".." in Path(name).parts
+            or name in {".", ".git", ""}
+        ):
+            raise ValueError("unsafe ephemeral output path")
+        if git(workspace, "ls-files", "--", name):
+            raise ValueError("cannot discard tracked files as ephemeral output")
+
+    def ignore(directory, names):
+        return [
+            name
+            for name in names
+            if str((Path(directory) / name).relative_to(workspace)) in ephemeral_paths
+        ]
+
+    shutil.copytree(
+        workspace,
+        destination / "workspace",
+        symlinks=True,
+        ignore=ignore if ephemeral_paths else None,
+    )
+    metadata = {**metadata, "discarded_ephemeral_paths": list(ephemeral_paths)}
     for name, body in files.items():
         if Path(name).name != name:
             raise ValueError("invalid artifact filename")
@@ -107,6 +137,7 @@ def backup(store, destination: Path) -> None:
             "inputs",
             "runtime",
             "workflow",
+            "dispatch",
         ):
             path = store.state_dir / directory
             if path.exists():

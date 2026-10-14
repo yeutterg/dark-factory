@@ -44,11 +44,13 @@ def inspect_configuration(cfg):
         adapter = adapter_for(route.harness)
 
         def harness(adapter=adapter, route=route):
-            adapter.open(cfg, asdict(route))
+            if not cfg.raw.get("workers"):
+                adapter.open(cfg, asdict(route))
             return {
                 "harness": adapter.name,
                 "version": route.harness_version,
                 "evidence_kind": route.evidence_kind,
+                "placement": "remote-worker" if cfg.raw.get("workers") else "local",
             }
 
         check("route:" + name, harness)
@@ -59,8 +61,10 @@ def inspect_configuration(cfg):
                 {
                     "name": "credential-source:" + name,
                     "passed": bool(os.environ.get(route.auth_env))
+                    or bool(cfg.raw.get("workers"))
                     or (
                         route.harness == "pi"
+                        and not cfg.project_id
                         and route.provider == "together"
                         and route.auth_env == "TOGETHER_API_KEY"
                     ),
@@ -85,7 +89,8 @@ def inspect_configuration(cfg):
         checks.append(
             {
                 "name": "native-isolation",
-                "passed": platform.system() == "Darwin"
+                "passed": bool(cfg.raw.get("workers"))
+                or platform.system() == "Darwin"
                 and Path("/usr/bin/sandbox-exec").is_file()
                 and cfg.execution.get("profile") == "macos-sandbox",
             }
@@ -109,6 +114,7 @@ def inspect_configuration(cfg):
             "route": name,
             "environment_present": bool(os.environ.get(route.auth_env)),
             "native_login_possible": route.harness == "pi"
+            and not cfg.project_id
             and route.provider == "together"
             and route.auth_env == "TOGETHER_API_KEY",
         }

@@ -341,6 +341,8 @@ def resolve_credential(route: dict) -> str:
     secret = os.environ.get(name, "")
     if secret:
         return secret
+    if route.get("project_id"):
+        return ""
     if route.get("provider") == "together" and name == "TOGETHER_API_KEY":
         proc = subprocess.run(
             [

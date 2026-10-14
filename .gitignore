@@ -16,6 +16,8 @@ node_modules/
 artifacts/
 .env
 .env.*
+*.worker.local.toml
+execution-worker.local.toml
 !.env.example
 .DS_Store
 web/node_modules/

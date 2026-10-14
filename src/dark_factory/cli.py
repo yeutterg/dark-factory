@@ -28,7 +28,9 @@ def main(argv: list[str] | None = None) -> int:
         prog="dark-factory", description="Dark Factory bootstrap controller"
     )
     parser.add_argument("--api-url", help="Use an already running local controller")
-    parser.add_argument("--config", required=True, help="Path to factory.toml")
+    parser.add_argument(
+        "--config", help="Path to factory.toml (not used by execution-worker)"
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status")
@@ -76,6 +78,11 @@ def main(argv: list[str] | None = None) -> int:
     p_run = sub.add_parser("run-worker")
     p_run.add_argument("--max-jobs", type=int, default=0)
     p_run.add_argument("--worker-id", default="local")
+    p_remote = sub.add_parser(
+        "execution-worker", help="Run a project-scoped outbound execution worker"
+    )
+    p_remote.add_argument("--profile", required=True, type=Path)
+    p_remote.add_argument("--max-jobs", type=int, default=0)
     p_accept = sub.add_parser("accept")
     p_accept.add_argument("work_item_id")
     p_accept.add_argument("--actor", default="operator")
@@ -87,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     p_serve = sub.add_parser("serve")
     p_serve.add_argument("--host")
     p_serve.add_argument("--port", type=int)
+    p_serve.add_argument("--tls-cert", type=Path)
+    p_serve.add_argument("--tls-key", type=Path)
     p_serve.add_argument(
         "--worker",
         action="store_true",
@@ -108,6 +117,44 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _dispatch(args: argparse.Namespace) -> int:
+    if args.cmd == "execution-worker":
+        import os
+        import time
+        import tomllib
+        from dark_factory.execution.client import WorkerClient
+
+        data = tomllib.loads(args.profile.read_text())
+        if set(data) - {
+            "url",
+            "project_id",
+            "worker_id",
+            "token_env",
+            "state_dir",
+            "accounts",
+            "ca_file",
+        }:
+            raise ConfigError("unknown execution worker profile fields")
+        client = WorkerClient(
+            data["url"],
+            data["project_id"],
+            data["worker_id"],
+            os.environ.get(data["token_env"], ""),
+            args.profile.parent / data["state_dir"],
+            data.get("accounts", {}),
+            args.profile.parent / data["ca_file"] if data.get("ca_file") else None,
+        )
+        count = 0
+        while not args.max_jobs or count < args.max_jobs:
+            if client.run_once():
+                count += 1
+            elif args.max_jobs:
+                break
+            else:
+                time.sleep(1)
+        print(json.dumps({"jobs_run": count}))
+        return 0
+    if not args.config:
+        raise ConfigError("--config is required for controller commands")
     if args.cmd == "preflight":
         from dark_factory.preflight import inspect_configuration
 
@@ -150,6 +197,12 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 0
     ctrl, store = build_controller(args.config)
     try:
+        if ctrl.cfg.raw.get("workers") and (
+            args.cmd == "run-worker" or args.cmd == "serve" and args.worker
+        ):
+            raise ConfigError(
+                "project-scoped workers run separately; use execution-worker"
+            )
         if args.cmd == "backup":
             from dark_factory.artifacts import backup
 
@@ -236,7 +289,15 @@ def _dispatch(args: argparse.Namespace) -> int:
 
             host = args.host or ctrl.cfg.api_host
             port = args.port or ctrl.cfg.api_port
-            server = serve(ctrl, host, port, ctrl.cfg.worker_token)
+            if bool(args.tls_cert) != bool(args.tls_key):
+                raise ConfigError("TLS certificate and key must be supplied together")
+            server = serve(
+                ctrl,
+                host,
+                port,
+                ctrl.cfg.worker_token,
+                (str(args.tls_cert), str(args.tls_key)) if args.tls_cert else None,
+            )
             print(json.dumps({"listening": f"{host}:{port}"}))
             import threading
 
