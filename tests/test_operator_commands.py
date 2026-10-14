@@ -79,3 +79,25 @@ def test_cli_rejects_local_only_command_over_api(tmp_path, capsys):
     )
     assert code == 2
     assert "runs locally" in capsys.readouterr().err
+
+
+def test_remote_cli_renders_result_and_exit_code_like_local(tmp_path, capsys):
+    from test_loop import cfg_for
+
+    cfg = cfg_for(tmp_path)
+    store = Store(tmp_path)
+    ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))
+    ctrl.reload = lambda actor="operator": False
+    server = serve(ctrl, "127.0.0.1", 0, cfg.worker_token)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}"
+    base = ["--config", str(cfg.source_path), "--api-url", url]
+    try:
+        assert main([*base, "reload"]) == 2
+        capsys.readouterr()
+        assert main([*base, "status"]) == 0
+        assert "project" in json.loads(capsys.readouterr().out)
+    finally:
+        server.shutdown()
+        server.server_close()
+        store.close()

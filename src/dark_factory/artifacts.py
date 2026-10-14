@@ -22,7 +22,8 @@ def digest(path: Path) -> str:
     return h.hexdigest()
 
 
-_DIGESTS: dict[tuple, str] = {}
+# One entry per path: a changed file replaces its previous identity and digest.
+_DIGESTS: dict[str, tuple[tuple, str]] = {}
 
 
 def digest_cached(path: Path) -> str:
@@ -33,17 +34,18 @@ def digest_cached(path: Path) -> str:
     """
     path = Path(path).resolve()
     stat = path.stat()
-    key = (
-        str(path),
+    identity = (
         stat.st_dev,
         stat.st_ino,
         stat.st_size,
         stat.st_mtime_ns,
         stat.st_ctime_ns,
     )
-    value = _DIGESTS.get(key)
-    if value is None:
-        value = _DIGESTS[key] = digest(path)
+    cached = _DIGESTS.get(str(path))
+    if cached and cached[0] == identity:
+        return cached[1]
+    value = digest(path)
+    _DIGESTS[str(path)] = (identity, value)
     return value
 
 
@@ -96,18 +98,20 @@ def archive(
     metadata: dict,
     files: dict[str, str],
     ephemeral_paths=(),
-    unchanged_commit=None,
+    unchanged=None,
 ) -> str:
     """Copy unique work and evidence, then seal and verify the archive.
 
-    With unchanged_commit, a workspace that is exactly that commit (no tracked,
-    untracked or ignored changes) holds nothing unique, so only the commit is
-    recorded; the pinned input snapshot already preserves it.
+    unchanged is (commit, git_fingerprint) taken when the workspace was
+    prepared. A workspace still exactly at that state, with no file, ref,
+    object, index-flag or stash changes, holds nothing unique, so only the
+    commit is recorded; the pinned input snapshot already preserves it.
     """
     destination.mkdir(parents=True, exist_ok=False)
     from dark_factory.adapters.git.local import git
 
-    if unchanged_commit and workspace_matches(workspace, unchanged_commit):
+    if unchanged and workspace_matches(workspace, *unchanged):
+        unchanged_commit = unchanged[0]
         for name, body in files.items():
             if Path(name).name != name:
                 raise ValueError("invalid artifact filename")
@@ -145,7 +149,25 @@ def archive(
     return seal(destination, metadata)
 
 
-def workspace_matches(workspace: Path, commit: str) -> bool:
+def git_fingerprint(workspace: Path) -> str:
+    """Digest of repository state that git status does not show.
+
+    Covers every ref (branches, tags, notes, stash), object counts and packs,
+    and index flags that can hide working-tree edits.
+    """
+    from dark_factory.adapters.git.local import git
+
+    parts = [
+        git(workspace, "rev-parse", "HEAD"),
+        git(workspace, "for-each-ref", "--format=%(refname) %(objectname)"),
+        git(workspace, "count-objects", "-v"),
+        git(workspace, "ls-files", "-v"),
+        git(workspace, "stash", "list"),
+    ]
+    return hashlib.sha256("\0".join(parts).encode()).hexdigest()
+
+
+def workspace_matches(workspace: Path, commit: str, fingerprint: str) -> bool:
     from dark_factory.adapters.git.local import git
 
     try:
@@ -158,12 +180,7 @@ def workspace_matches(workspace: Path, commit: str) -> bool:
                 "--ignored",
                 "--untracked-files=all",
             )
-            # Index flags can hide edits from status; a stash keeps work in .git.
-            and all(
-                line.startswith("H ")
-                for line in git(workspace, "ls-files", "-v").splitlines()
-            )
-            and not git(workspace, "stash", "list")
+            and git_fingerprint(workspace) == fingerprint
         )
     except (RuntimeError, subprocess.TimeoutExpired):
         return False

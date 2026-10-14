@@ -171,6 +171,8 @@ def validate_deployment(raw, routes):
     for role, rid in roles.items():
         if rid not in routes or role not in adapter_for(routes[rid].harness).roles:
             raise ConfigError("role route lacks harness capability")
+        if routes[rid].evidence_kind == "live" and routes[rid].role != role:
+            raise ConfigError("a live route serves only its configured role")
     workers = raw.get("workers", {})
     if not isinstance(workers, dict) or not workers:
         raise ConfigError(

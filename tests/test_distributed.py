@@ -241,3 +241,20 @@ def test_fenced_result_rejected(tmp_path, monkeypatch):
             service.finish("worker1", result)
     finally:
         store.close()
+
+
+def test_live_project_route_serves_only_its_configured_role(tmp_path, monkeypatch):
+    from dark_factory.execution.policy import validate_deployment
+
+    cfg = deployment(tmp_path, monkeypatch)
+    raw = copy.deepcopy(cfg.raw)
+    raw["environments"]["local"] = {
+        "kind": "macos-sandbox",
+        "qualification": "test",
+        "region": "US",
+        "geography_evidence": "test",
+    }
+    route = cfg.routes["fake-coder"]
+    route.evidence_kind = "live"
+    with pytest.raises(ConfigError, match="only its configured role"):
+        validate_deployment(raw, cfg.routes)

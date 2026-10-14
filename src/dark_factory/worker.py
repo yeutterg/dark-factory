@@ -209,6 +209,7 @@ class Worker:
         runtime.mkdir(parents=True, mode=0o700)
         archive = self.cfg.state_dir / "archives" / attempt_id
         prepared = None
+        baseline = None
         output = ""
         error = None
         ok = False
@@ -253,6 +254,11 @@ class Worker:
                 }
             prepared = self.env.prepare(attempt_id, source)
             self.controller.record_workspace(attempt_id, prepared.workspace)
+            if job["kind"] in {"plan", "critique", "review"}:
+                baseline = (
+                    source["commit"],
+                    artifacts.git_fingerprint(prepared.workspace),
+                )
             env = process_environment(runtime)
             live = recipe["kind"] != "native"
             role = spec.get("role")
@@ -493,9 +499,7 @@ class Worker:
                         files,
                         ephemeral_paths=snapshot["source"].get("ephemeral_paths", []),
                         # Only implementation output becomes a candidate source.
-                        unchanged_commit=source["commit"]
-                        if job["kind"] in {"plan", "critique", "review"}
-                        else None,
+                        unchanged=baseline,
                     )
                     archived = True
                     self.controller.record_archive(attempt_id, archive)

@@ -167,3 +167,27 @@ def test_policy_snapshot_is_never_shared_across_threads(tmp_path):
         release.set()
         holder.join()
         store.close()
+
+
+@pytest.mark.parametrize("change", [None, "note", "branch", "untracked"])
+def test_read_only_archive_keeps_any_git_only_work(tmp_path, change):
+    from dark_factory import artifacts
+    from dark_factory.adapters.git.local import git
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    git(workspace, "init", "-b", "main")
+    (workspace / "a.txt").write_text("a\n")
+    git(workspace, "add", ".")
+    git(workspace, "commit", "-m", "base")
+    commit = git(workspace, "rev-parse", "HEAD")
+    baseline = (commit, artifacts.git_fingerprint(workspace))
+    if change == "note":
+        git(workspace, "notes", "add", "-m", "review evidence", "HEAD")
+    elif change == "branch":
+        git(workspace, "branch", "kept")
+    elif change == "untracked":
+        (workspace / "b.txt").write_text("b\n")
+    destination = tmp_path / "archive"
+    artifacts.archive(workspace, destination, {}, {}, unchanged=baseline)
+    assert (destination / "workspace").exists() == (change is not None)

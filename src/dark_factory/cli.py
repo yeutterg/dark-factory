@@ -204,8 +204,11 @@ def _dispatch(args: argparse.Namespace) -> int:
             },
         )
         with urlopen(req, timeout=30) as response:
-            print(response.read().decode())
-        return 0
+            text, code = command.render(json.loads(response.read())["result"])
+        # Same output and exit status as the local command.
+        if text is not None:
+            print(text)
+        return code
     ctrl, store = build_controller(args.config)
     try:
         if ctrl.cfg.workers and (
