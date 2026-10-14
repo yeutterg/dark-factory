@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 from datetime import UTC, datetime, timedelta
 
 from dark_factory import artifacts
-from dark_factory.adapters.env.base import PreparedEnv
-from dark_factory.adapters.env.native import NativeEnvironment
 from dark_factory.adapters.harness.registry import adapter_for
 from dark_factory.control.base import ControllerCore, ControllerError, _digest, atomic
 from dark_factory.control.windows import window_open
+from dark_factory.execution.cleanup import release_attempt_environment
 from dark_factory.execution.policy import selected_route
 from dark_factory.models import (
     ACTIVE_ATTEMPT,
@@ -490,18 +490,19 @@ class DispatchMixin(ControllerCore):
 
         self.scrub_retired_credentials()
         count = 0
-        environment = NativeEnvironment(self.cfg.state_dir / "workspaces")
         for attempt in self.store.query(
             "SELECT * FROM attempts WHERE cleanup_status IN ('archived','cleanup_failed') AND status NOT IN ('leased','running','cancelling')"
         ):
             if not attempt["archive_path"] or not attempt["workspace"]:
                 continue
             artifacts.verify(self.store.resolve_path(attempt["archive_path"]))
-            workspace = self.store.resolve_path(attempt["workspace"])
-            environment.release(PreparedEnv(workspace, "native", {}))
+            release_attempt_environment(self.store, attempt)
             self.store.execute(
                 "UPDATE attempts SET cleanup_status='cleaned' WHERE id=?",
                 (attempt["id"],),
+            )
+            shutil.rmtree(
+                self.cfg.state_dir / "runtime" / attempt["id"], ignore_errors=True
             )
             self.store.audit(actor, "cleanup.complete", {"attempt_id": attempt["id"]})
             count += 1

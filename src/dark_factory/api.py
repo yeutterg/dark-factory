@@ -90,6 +90,10 @@ def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHand
                     )
                 elif operation == "finish":
                     result = service.finish(worker, data)
+                elif operation == "cleanup":
+                    result = service.cleanup(
+                        worker, data["attempt_id"], data["result_digest"]
+                    )
                 else:
                     raise ValueError("unsupported execution operation")
                 self._send(200, {"ok": True, "result": result})

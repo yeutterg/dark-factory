@@ -168,6 +168,8 @@ class WorkerClient:
         directory = Path(item["directory"])
         assignment = json.loads((directory / "assignment.json").read_text())
         aid = assignment["claim"]["attempt_id"]
+        if item["phase"] == "cleanup":
+            return self._retry_cleanup(journal, item, assignment)
         route = assignment["claim"]["inputs"].get("route")
         if item["phase"] == "execute":
             env = {
@@ -266,6 +268,7 @@ class WorkerClient:
                     "error": "worker interrupted; private task resources retained",
                     "timed_out": False,
                     "cancelled": False,
+                    "cleanup_status": "archive_failed",
                 },
             }
             self._write(directory / "result.json", result)
@@ -278,11 +281,52 @@ class WorkerClient:
         ):
             raise ValueError("controller did not verify settlement")
         self._write(directory / "ack.json", ack)
-        item.update(phase="settled", cleanup=bool(result.get("archive")))
+        cleanup_status = result["receipt"]["cleanup_status"]
+        item.update(
+            phase="cleanup"
+            if result.get("archive") and cleanup_status == "cleanup_failed"
+            else "settled",
+            cleanup=bool(result.get("archive")) and cleanup_status == "cleaned",
+            result_digest=ack["result_digest"],
+        )
         self._write(journal, item)
         receipts = self.state / "receipts"
         receipts.mkdir(exist_ok=True, mode=0o700)
         self._write(receipts / (aid + ".json"), ack)
+        if item["phase"] == "cleanup":
+            return self._retry_cleanup(journal, item, assignment)
+        self._cleanup(item)
+        journal.unlink()
+        return True
+
+    def _retry_cleanup(self, journal, item, assignment):
+        """Retry release only; never replay the agent or mutate its result."""
+        from dark_factory.execution.cleanup import retry_replica_cleanup
+
+        directory = Path(item["directory"])
+        aid = assignment["claim"]["attempt_id"]
+        try:
+            retry_replica_cleanup(directory / "task", aid)
+            ack = self.request(
+                "cleanup",
+                {
+                    "attempt_id": aid,
+                    "result_digest": item["result_digest"],
+                },
+            )
+        except Exception as exc:
+            item["cleanup_error"] = str(exc)
+            self._write(journal, item)
+            return False
+        if (
+            not ack.get("accepted")
+            or ack.get("attempt_id") != aid
+            or ack.get("result_digest") != item["result_digest"]
+        ):
+            raise ValueError("controller did not verify cleanup settlement")
+        item.update(phase="settled", cleanup=True)
+        item.pop("cleanup_error", None)
+        self._write(journal, item)
         self._cleanup(item)
         journal.unlink()
         return True

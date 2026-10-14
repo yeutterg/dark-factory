@@ -219,6 +219,7 @@ class Worker:
         result = {"ok": False, "inputs": claimed["inputs"], "usage": {}, "checks": []}
         events = []
         archived = False
+        cleaned = False
 
         last_heartbeat = 0.0
 
@@ -520,6 +521,7 @@ class Worker:
                     try:
                         self.env.release(prepared)
                         self.controller.record_cleanup(attempt_id, "cleaned")
+                        cleaned = True
                     except Exception as exc:
                         self.controller.record_cleanup(attempt_id, "cleanup_failed")
                         self.store.audit(
@@ -527,7 +529,7 @@ class Worker:
                             "cleanup.failed",
                             {"attempt_id": attempt_id, "error": str(exc)},
                         )
-            if archived:
+            if archived and cleaned:
                 shutil.rmtree(runtime, ignore_errors=True)
         self.controller.finish_attempt(
             attempt_id,

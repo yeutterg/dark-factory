@@ -171,8 +171,12 @@ def validate_deployment(raw, routes):
     for role, rid in roles.items():
         if rid not in routes or role not in adapter_for(routes[rid].harness).roles:
             raise ConfigError("role route lacks harness capability")
-        if routes[rid].evidence_kind == "live" and routes[rid].role != role:
-            raise ConfigError("a live route serves only its configured role")
+        if routes[rid].role != role and not (
+            routes[rid].harness == "fake" and routes[rid].evidence_kind == "simulation"
+        ):
+            raise ConfigError(
+                "only a simulation fake route may serve another configured role"
+            )
     workers = raw.get("workers", {})
     if not isinstance(workers, dict) or not workers:
         raise ConfigError(
@@ -225,9 +229,12 @@ def selected_route(cfg, role):
 
     eligible = [r for r in cfg.routes.values() if role in adapter_for(r.harness).roles]
     exact = [r for r in eligible if r.role == role]
-    # A route approved for one role never silently serves another with live
-    # authority; simulation fixtures may share one route across roles.
-    shared = [r for r in eligible if r.evidence_kind == "simulation"]
+    # Only the deterministic fake fixture may span roles. A real CLI can spend,
+    # receive different tools, or expose project data even when its evidence is
+    # deliberately classified as simulation during qualification.
+    shared = [
+        r for r in eligible if r.harness == "fake" and r.evidence_kind == "simulation"
+    ]
     return (exact or shared or [None])[0]
 
 

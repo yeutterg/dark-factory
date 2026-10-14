@@ -152,18 +152,61 @@ def archive(
 def git_fingerprint(workspace: Path) -> str:
     """Digest of repository state that git status does not show.
 
-    Covers every ref (branches, tags, notes, stash), object counts and packs,
-    and index flags that can hide working-tree edits.
+    Covers every ref plus the owned Git directory's file identities. The latter
+    catches reflogs, config, hooks and other Git-only state that can change while
+    HEAD, refs, object counts and the worktree all return to their baseline.
     """
     from dark_factory.adapters.git.local import git
 
+    root = workspace.resolve()
+    dot_git = workspace / ".git"
+    git_dir = Path(git(workspace, "rev-parse", "--absolute-git-dir")).resolve()
+    if not git_dir.is_relative_to(root) or dot_git.is_symlink():
+        raise ValueError("archive optimization requires an owned Git directory")
+    # Run every Git command before sampling filesystem identities: read-only Git
+    # commands may refresh index metadata, which must not make an unchanged
+    # workspace differ from its own baseline.
     parts = [
         git(workspace, "rev-parse", "HEAD"),
         git(workspace, "for-each-ref", "--format=%(refname) %(objectname)"),
         git(workspace, "count-objects", "-v"),
         git(workspace, "ls-files", "-v"),
         git(workspace, "stash", "list"),
+        git(
+            workspace,
+            "status",
+            "--porcelain=v1",
+            "--ignored",
+            "--untracked-files=all",
+        ),
     ]
+    metadata: list[tuple[Any, ...]] = []
+    for path in sorted(git_dir.rglob("*")):
+        relative = str(path.relative_to(git_dir))
+        if path.is_dir() and not path.is_symlink():
+            # Child path identities already capture membership. Directory
+            # mtimes are noisy when Git atomically refreshes its index.
+            metadata.append((relative, "dir"))
+            continue
+        stat = path.lstat()
+        if relative == "index" or relative.startswith("sharedindex."):
+            # Git may atomically replace an unchanged index during a read. Its
+            # content, unlike its inode and timestamps, remains stable.
+            metadata.append((relative, "file", stat.st_size, digest(path)))
+            continue
+        metadata.append(
+            (
+                relative,
+                "link" if path.is_symlink() else "file",
+                stat.st_dev,
+                stat.st_ino,
+                stat.st_size,
+                stat.st_mtime_ns,
+                stat.st_ctime_ns,
+                str(path.readlink()) if path.is_symlink() else "",
+            )
+        )
+    parts.append(json.dumps(metadata, separators=(",", ":")))
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 
@@ -182,7 +225,7 @@ def workspace_matches(workspace: Path, commit: str, fingerprint: str) -> bool:
             )
             and git_fingerprint(workspace) == fingerprint
         )
-    except (RuntimeError, subprocess.TimeoutExpired):
+    except (RuntimeError, ValueError, subprocess.TimeoutExpired):
         return False
 
 

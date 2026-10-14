@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 import threading
 from pathlib import Path
 from urllib.error import HTTPError
@@ -205,6 +206,76 @@ def test_outbound_worker_process_and_verified_cleanup(tmp_path, monkeypatch):
         store.close()
 
 
+def test_remote_named_sandbox_release_retries_without_agent_replay(
+    tmp_path, monkeypatch
+):
+    cfg = deployment(tmp_path, monkeypatch)
+    raw = copy.deepcopy(cfg.raw)
+    driver = Path("tests/fixtures/sandbox_driver.py").resolve()
+    marker = tmp_path / "release-failed-once"
+    raw["environments"]["local"] = {
+        "kind": "command",
+        "argv": [
+            sys.executable,
+            str(driver),
+            "--fail-release-once",
+            str(marker),
+        ],
+        "driver_files": {str(driver): artifacts.digest(driver)},
+    }
+    cfg = validate_raw(raw, cfg.source_path, identity(raw))
+    store = Store(cfg.state_dir)
+    ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))
+    selected(ctrl)
+    server = serve(ctrl, "127.0.0.1", 0, cfg.worker_token)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = WorkerClient(
+            f"http://127.0.0.1:{server.server_port}",
+            cfg.project_id,
+            "worker1",
+            "first-worker-token-" + "a" * 32,
+            tmp_path / "worker",
+        )
+        request = client.request
+        dropped = False
+
+        def drop_first_cleanup(operation, payload):
+            nonlocal dropped
+            if operation == "cleanup" and not dropped:
+                dropped = True
+                raise RuntimeError("simulated lost cleanup acknowledgement")
+            return request(operation, payload)
+
+        client.request = drop_first_cleanup
+        assert not client.run_once()
+        assert marker.is_file(), "the first external release must have failed"
+        assert list(client.state.glob("att_*")), "unacknowledged replica must remain"
+        journal = json.loads((client.state / "dispatch.json").read_text())
+        assert journal["phase"] == "cleanup"
+        with pytest.raises(HTTPError) as rejected:
+            request(
+                "cleanup",
+                {
+                    "attempt_id": next(client.state.glob("att_*")).name,
+                    "result_digest": "0" * 64,
+                },
+            )
+        assert rejected.value.code == 409
+        client.request = request
+        assert client.run_once()
+        assert not list(client.state.glob("att_*"))
+        attempt = store.one("SELECT * FROM attempts")
+        assert attempt["cleanup_status"] == "cleaned"
+        assert len(store.query("SELECT id FROM attempts")) == 1
+        assert store.one("SELECT id FROM audit WHERE action='cleanup.remote_confirmed'")
+    finally:
+        server.shutdown()
+        server.server_close()
+        store.close()
+
+
 def test_nonlocal_plaintext_transport_rejected(tmp_path):
     with pytest.raises(ValueError, match="HTTPS"):
         WorkerClient(
@@ -256,5 +327,14 @@ def test_live_project_route_serves_only_its_configured_role(tmp_path, monkeypatc
     }
     route = cfg.routes["fake-coder"]
     route.evidence_kind = "live"
-    with pytest.raises(ConfigError, match="only its configured role"):
+    with pytest.raises(ConfigError, match="simulation fake route"):
+        validate_deployment(raw, cfg.routes)
+
+    route.harness = "pi"
+    route.evidence_kind = "simulation"
+    route.account_kind = "api"
+    route.auth_env = "PROJECT_ONE_FIXTURE_API_KEY"
+    route.provider = "fixture-api"
+    route.billing_account = "project-one-fixture-api"
+    with pytest.raises(ConfigError, match="simulation fake route"):
         validate_deployment(raw, cfg.routes)
