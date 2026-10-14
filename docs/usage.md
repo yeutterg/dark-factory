@@ -15,6 +15,7 @@ python -m pip install -e ".[dev]"
 cp examples/factory.toml factory.toml
 # Choose a new state_dir for this experiment.
 dark-factory --config factory.toml demo
+dark-factory --config factory.toml tui --actor greg
 ```
 
 `demo` uses explicit fake model routes but real disposable Git checkouts, a real candidate commit, and a canonical Python check. It auto-approves only this simulation, records `simulation-demo` as the actor, and stops at result review. It never calls a model provider, creates a PR or merges. Packaged skills use `@name`; project prompt/skill paths resolve relative to the profile.
@@ -72,6 +73,23 @@ The [Claude Code subscription adapter](claude-subscription.md) supports planner,
 
 ## Operate one controller
 
+Open the local terminal console when it will own the controller state:
+
+```bash
+dark-factory --config factory.toml tui --actor greg
+```
+
+The overview has independently scrollable execution and worker panes. `i`, `w`,
+and `s` open new work, worker, and settings views; `?` shows the full key map.
+New work uses the configured selected label to discover at most 50 open issues,
+shows observed parent/child scope, and still revalidates the selected root during
+intake. `dark-factory --config factory.toml discover` exposes the same read-only
+view as JSON. Candidate changes render from the bounded verified archive only
+when that issue is opened.
+The settings view reads the active profile and can request a validated reload,
+but `factory.toml` remains the source of truth. Human decisions are confirmed and
+recorded with the supplied actor.
+
 For interactive cancellation/approval while the worker runs, start the local service:
 
 ```bash
@@ -79,9 +97,10 @@ dark-factory --config factory.toml serve --worker
 # In another terminal, use the separate operator credential from the profile:
 dark-factory --config factory.toml --api-url http://127.0.0.1:8745 status
 dark-factory --config factory.toml --api-url http://127.0.0.1:8745 pause
+dark-factory --config factory.toml --api-url http://127.0.0.1:8745 tui --actor greg
 ```
 
-Operator commands accept the same arguments and return the same JSON with or without `--api-url`. `preflight`, `backup`, `restore`, `run-worker`, `serve`, `demo`, `adapter` and `execution-worker` run only locally. The API binds to loopback only. Worker credentials cannot invoke operator decisions. A process lock prevents a second controller from opening the same state directory. Pauses and drains stop new dispatch; cancellation is separate. `resume` clears pause; `undrain` clears drain. Active attempts retain their input snapshots. A valid reload changes future defaults; incompatible approved work stops for a new proposal. Invalid reload retains the last valid in-memory configuration and records an audit event.
+Operator commands accept the same arguments and return the same JSON with or without `--api-url`. The TUI is a local application in both modes: with `--api-url` it reads an authenticated, credential-free projection and never opens the controller's SQLite state. `preflight`, `backup`, `restore`, `run-worker`, `serve`, `demo`, `adapter` and `execution-worker` run only locally. The API binds to loopback unless the project-scoped TLS deployment requirements are met. Worker credentials cannot read the operator projection or invoke operator decisions. A process lock prevents a second controller from opening the same state directory. Pauses and drains stop new dispatch; cancellation is separate. `resume` clears pause; `undrain` clears drain. Active attempts retain their input snapshots. A valid reload changes future defaults; incompatible approved work stops for a new proposal. Invalid reload retains the last valid in-memory configuration and records an audit event.
 
 `cancel <job-id>` requests process termination and capture. `recover` fences expired leases, preserves unique work and records conservative estimated cost. It never replays an interrupted CLI. Unknown interrupted usage consumes the reserved allowance. Repairs default to zero. With `[continuation] max_repairs = 1`, the original proposal includes one conditional correctness repair followed by fresh checks and review, under the original limits. Other stopped outcomes require inspection and a revised plan/approval. There is no automatic provider fallback.
 

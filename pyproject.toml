@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Greg Yeutter" }]
 license = { text = "MIT" }
-dependencies = []
+dependencies = ["textual>=8.2,<9"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-xdist==3.8.0", "ruff==0.17.0", "mypy==2.4.0"]
@@ -27,6 +27,7 @@ dark_factory = [
   "agents/skills/*/SKILL.md",
   "adapters/workflow/pi_engine/*.ts",
   "adapters/workflow/pi_engine/package*.json",
+  "ui/*.tcss",
 ]
 
 [tool.pytest.ini_options]

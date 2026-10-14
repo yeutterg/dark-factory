@@ -31,3 +31,11 @@ Implementation authority remains the [specification](spec.md) and [constitution]
 - [x] Executive-summary assumptions and repairs, named human candidate-bound attestations, no waiver mechanism and rejection feedback into replanning.
 - [x] Real durable engine crash/restart fixtures and bounded-repair regressions without external inference spending.
 - [ ] Installed Codex isolation and live account qualification; required-child/cross-repository delivery and hosted-CI orchestration remain separate work.
+
+## Controller TUI increment
+
+- [x] Paper-derived controller overview with separate execution and worker scrolling, terminal-state progress suppression, and compact done-today summary.
+- [x] Issue activity/evidence tabs, proposal and candidate decisions, manual-gate evidence, explicit tracker-root intake, settings, and worker host/assignment/preflight views.
+- [x] Local controller transport plus authenticated remote projection and operator-command transport; no second owner opens controller state.
+- [x] Target-size and compact-terminal smoke coverage, authenticated projection tests, and command-boundary regressions.
+- [x] Bounded read-only tracker discovery with hierarchy metadata, complete-root selection guards, and on-demand native archived diff rendering.

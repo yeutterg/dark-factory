@@ -6,7 +6,7 @@ Run coding agents through a complete, reviewable workflow:
 
 You select the work and approve the plan. Dark Factory runs the jobs in isolated workspaces, checks the changes, and saves the code and evidence for review. Missing acceptance evidence keeps the work incomplete.
 
-The current bootstrap is a Python CLI for one repository and one worker. Task routes independently select Pi, [Claude Code](docs/claude-subscription.md) or [Codex CLI](docs/durable-execution.md). An optional Pi Durable runtime checkpoints dispatch without replacing those CLI agents or controller policy. Preapproved bounded repair continues through fresh checks and review; review packets disclose assumptions. Live-model qualification is still pending. Multi-repository work, a web UI and previews come later.
+The controller has a terminal operator console and a scriptable Python CLI. Task routes independently select Pi, [Claude Code](docs/claude-subscription.md) or [Codex CLI](docs/durable-execution.md). An optional Pi Durable runtime checkpoints dispatch without replacing those CLI agents or controller policy. Preapproved bounded repair continues through fresh checks and review; review packets disclose assumptions. Live-model qualification is still pending. Multi-repository work, a web UI and previews come later.
 
 [Project-scoped execution](docs/distributed-execution.md) separates the supervisor from execution workers. Pin each project's accounts, CLI/model routes and sandbox recipes; run workers locally or remotely over verified TLS. Portable assignments and verified result acknowledgements let disposable task replicas/builds be removed without deleting canonical review evidence. OCI and named VM/sandbox drivers remain independently qualified backends, not authority to provision infrastructure or change accounts.
 
@@ -22,6 +22,7 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 cp examples/factory.toml factory.toml
 dark-factory --config factory.toml demo
+dark-factory --config factory.toml tui --actor greg
 ```
 
 The demo uses simulated agents with real Git workspaces and checks. It makes no model calls and stops for review.

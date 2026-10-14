@@ -6,7 +6,7 @@ import hmac
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from dark_factory import operator_commands
 from dark_factory.controller import Controller, ControllerError
@@ -43,8 +43,33 @@ def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHand
             return
 
         def do_GET(self) -> None:  # noqa: N802
-            if urlparse(self.path).path == "/health":
+            try:
+                self._get()
+            except ControllerError as exc:
+                self._send(409, {"ok": False, "error": str(exc)})
+            except (ValueError, TypeError, KeyError) as exc:
+                self._send(400, {"ok": False, "error": str(exc)})
+
+        def _get(self) -> None:
+            path = urlparse(self.path).path
+            if path == "/health":
                 self._send(200, {"ok": True})
+                return
+            if path == "/operator/view":
+                if not self._auth(controller.cfg.operator_token):
+                    self._send(401, {"ok": False, "error": "unauthorized"})
+                    return
+                from dark_factory.ui.projection import controller_projection
+
+                query = parse_qs(urlparse(self.path).query)
+                detail_id = query.get("work_item_id", [None])[0]
+                self._send(
+                    200,
+                    {
+                        "ok": True,
+                        "result": controller_projection(controller, detail_id),
+                    },
+                )
                 return
             self._send(404, {"ok": False})
 

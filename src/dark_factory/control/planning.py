@@ -20,6 +20,23 @@ from dark_factory.store import new_id, now_iso
 class PlanningMixin(ControllerCore):
     """Select complete roots, plan them and record human decisions."""
 
+    def discover_issues(self) -> dict[str, Any]:
+        """Read bounded tracker candidates without selecting or mutating them."""
+        label = self.cfg.labels.get("selected")
+        if not label:
+            raise ControllerError("selected tracker label is not configured")
+        cmd = self.cfg.commands["tracking"]
+        result = self.runner.run_json(
+            cmd.command,
+            "list_candidate_issues",
+            {"repositories": self.cfg.repositories, "label": label, "limit": 50},
+            new_id("req"),
+            cmd.timeout_seconds,
+        )
+        if not result["ok"] or not isinstance(result.get("items"), list):
+            raise ControllerError(result.get("error", "tracking returned no items"))
+        return {"items": result["items"], "evidence": result["evidence"]}
+
     def intake_issues(
         self, issues: list[dict[str, Any]], actor="operator"
     ) -> list[str]:

@@ -46,6 +46,9 @@ COMMANDS: dict[str, OperatorCommand] = {
     for command in (
         OperatorCommand("status", lambda c, p, a: c.status(), render=_pretty),
         OperatorCommand(
+            "discover", lambda c, p, a: c.discover_issues(), render=_pretty
+        ),
+        OperatorCommand(
             "intake",
             lambda c, p, a: {"ids": c.intake_issues(p["issues"], a)},
             ("issues",),
@@ -123,6 +126,7 @@ LOCAL_ONLY = frozenset(
         "backup",  # Copies the owned state directory.
         "run-worker",  # Runs jobs in this process.
         "serve",  # Starts the API itself.
+        "tui",  # Local terminal application; may use the remote operator API.
         "demo",  # Simulation loop in this process.
     }
 )
