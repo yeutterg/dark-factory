@@ -187,7 +187,7 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.api_url:
         from urllib.request import Request, urlopen
 
-        if command is None:
+        if command is None or not command.api:
             raise ControllerError(f"{args.cmd} runs locally; omit --api-url")
         cfg = load_config(args.config)
         data = {

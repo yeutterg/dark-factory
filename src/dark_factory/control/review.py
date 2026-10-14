@@ -305,6 +305,8 @@ class ReviewMixin(ControllerCore):
             f"""SELECT w.* FROM work_items w LEFT JOIN ops o ON o.key='continuation:'||w.id
             WHERE w.status NOT IN {sql_set(TERMINAL_ROOT)}
             OR o.value IS NULL OR json_extract(o.value,'$.root_status') IS NOT w.status
+            OR EXISTS (SELECT 1 FROM jobs j WHERE j.work_item_id=w.id
+                       AND j.status IN ('leased','running','cancelling'))
             ORDER BY w.created_at,w.id"""
         ):
             if row["status"] in {"approved", "running"} and self._approval_current(row):

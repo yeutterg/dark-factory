@@ -60,23 +60,25 @@ class PolicyMixin(ControllerCore):
         """Share one policy evaluation across a complete controller decision.
 
         Policy inputs are re-read for every outermost decision, so on-disk or
-        in-memory changes between decisions are still detected.
+        in-memory changes between decisions are still detected. The scope is per
+        thread: API and worker threads never see each other's snapshot.
         """
-        self._decision_depth += 1
+        scope = self._decision_scope
+        scope.depth = getattr(scope, "depth", 0) + 1
         try:
             yield
         finally:
-            self._decision_depth -= 1
-            if not self._decision_depth:
-                self._policy_memo = None
+            scope.depth -= 1
+            if not scope.depth:
+                scope.policy = None
 
     def _policy(self) -> dict:
-        if self._decision_depth and self._policy_memo is not None:
-            return self._policy_memo
-        policy = self._evaluate_policy()
-        if self._decision_depth:
-            self._policy_memo = policy
-        return policy
+        scope = self._decision_scope
+        if not getattr(scope, "depth", 0):
+            return self._evaluate_policy()
+        if getattr(scope, "policy", None) is None:
+            scope.policy = self._evaluate_policy()
+        return scope.policy
 
     def _approval_current(self, row) -> bool:
         """Whether the recorded approval still covers the current inputs."""
@@ -92,27 +94,30 @@ class PolicyMixin(ControllerCore):
             for p in sorted(PACKAGE_ROOT.rglob("*.py"))
             if "node_modules" not in p.parts
         }
-        return {
-            "runner_code": package,
-            "routes": {k: vars(v) for k, v in self.cfg.routes.items()},
-            "commands": self._bindings(),
-            "assets": self._assets(),
-            "sources": self.cfg.sources,
-            "execution": self.cfg.execution,
-            "workflow": runtime_policy(self.cfg),
-            "operators": self.cfg.raw.get("operators", {}),
-            "continuation": self.cfg.raw.get(
-                "continuation", {"max_repairs": self.cfg.max_repairs}
-            ),
-            "budgets": self.cfg.raw.get("budgets", {}),
-            "geography": self.cfg.geography_policy,
-            "deployment": {
-                "project_id": self.cfg.project_id,
-                "role_routes": self.cfg.role_routes,
-                "environments": self.cfg.environments,
-                "workers": self.cfg.workers,
-            },
-        }
+        # Copied so a held snapshot never aliases mutable configuration objects.
+        return copy.deepcopy(
+            {
+                "runner_code": package,
+                "routes": {k: vars(v) for k, v in self.cfg.routes.items()},
+                "commands": self._bindings(),
+                "assets": self._assets(),
+                "sources": self.cfg.sources,
+                "execution": self.cfg.execution,
+                "workflow": runtime_policy(self.cfg),
+                "operators": self.cfg.raw.get("operators", {}),
+                "continuation": self.cfg.raw.get(
+                    "continuation", {"max_repairs": self.cfg.max_repairs}
+                ),
+                "budgets": self.cfg.raw.get("budgets", {}),
+                "geography": self.cfg.geography_policy,
+                "deployment": {
+                    "project_id": self.cfg.project_id,
+                    "role_routes": self.cfg.role_routes,
+                    "environments": self.cfg.environments,
+                    "workers": self.cfg.workers,
+                },
+            }
+        )
 
     def _assets(self) -> dict:
         assets: dict[str, Any] = {}

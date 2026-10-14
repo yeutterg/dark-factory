@@ -7,6 +7,7 @@ keeps the public import surface stable.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 from dark_factory.attempts import AttemptRecords
@@ -50,8 +51,7 @@ class Controller(
         self, cfg: FactoryConfig, store: Store, packaged_prompts: Path
     ) -> None:
         self.cfg, self.store, self.packaged_prompts = cfg, store, packaged_prompts
-        self._decision_depth = 0
-        self._policy_memo: dict | None = None
+        self._decision_scope = threading.local()
         identity = json.dumps(
             {
                 "project_id": cfg.project_id,

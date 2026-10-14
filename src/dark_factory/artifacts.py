@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
@@ -148,14 +149,23 @@ def workspace_matches(workspace: Path, commit: str) -> bool:
     from dark_factory.adapters.git.local import git
 
     try:
-        return git(workspace, "rev-parse", "HEAD") == commit and not git(
-            workspace,
-            "status",
-            "--porcelain=v1",
-            "--ignored",
-            "--untracked-files=all",
+        return (
+            git(workspace, "rev-parse", "HEAD") == commit
+            and not git(
+                workspace,
+                "status",
+                "--porcelain=v1",
+                "--ignored",
+                "--untracked-files=all",
+            )
+            # Index flags can hide edits from status; a stash keeps work in .git.
+            and all(
+                line.startswith("H ")
+                for line in git(workspace, "ls-files", "-v").splitlines()
+            )
+            and not git(workspace, "stash", "list")
         )
-    except RuntimeError:
+    except (RuntimeError, subprocess.TimeoutExpired):
         return False
 
 

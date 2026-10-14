@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -454,7 +455,9 @@ class Worker:
             error = str(exc)
             ok = False
             result["failure_kind"] = "execution"
-            timed_out = timed_out or isinstance(exc, (RunnerTimeout, TimeoutError))
+            timed_out = timed_out or isinstance(
+                exc, (RunnerTimeout, TimeoutError, subprocess.TimeoutExpired)
+            )
             cancelled = cancelled or stopped()
         finally:
             if prepared:

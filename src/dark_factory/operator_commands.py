@@ -32,6 +32,8 @@ class OperatorCommand:
     params: tuple[str, ...] = ()
     # How the CLI prints a result: (text or None, exit code).
     render: Callable[[Any], tuple[str | None, int]] = field(default=_compact)
+    # Code-host writes use controller credentials and stay a local CLI action.
+    api: bool = True
 
 
 def _plan(ctrl: Controller, p: dict[str, Any], actor: str) -> dict[str, Any]:
@@ -86,6 +88,7 @@ COMMANDS: dict[str, OperatorCommand] = {
             ),
             ("work_item_id", "payload"),
             render=_pretty,
+            api=False,
         ),
         OperatorCommand(
             "accept",

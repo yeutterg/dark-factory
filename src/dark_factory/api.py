@@ -108,7 +108,7 @@ def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHand
             data = self._read()
             if path == "/operator":
                 command = operator_commands.COMMANDS.get(str(data.get("cmd")))
-                if command is None:
+                if command is None or not command.api:
                     raise ControllerError("unsupported operator command")
                 params = {name: data[name] for name in command.params if name in data}
                 result = operator_commands.run(

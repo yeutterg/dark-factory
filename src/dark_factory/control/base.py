@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -25,8 +26,7 @@ class ControllerCore:
     store: Store
     runner: CommandRunner
     packaged_prompts: Path
-    _decision_depth: int
-    _policy_memo: dict | None
+    _decision_scope: threading.local
 
     if TYPE_CHECKING:
 

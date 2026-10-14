@@ -43,7 +43,14 @@ def git(cwd: Path, *args: str) -> str:
         "GIT_COMMITTER_EMAIL": "factory@localhost",
     }
     proc = subprocess.run(
-        [git_binary(), "-c", "core.hooksPath=/dev/null", *args],
+        [
+            git_binary(),
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            *args,
+        ],
         cwd=cwd,
         env=env,
         capture_output=True,

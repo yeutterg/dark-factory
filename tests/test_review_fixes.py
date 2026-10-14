@@ -138,3 +138,32 @@ def test_unchanged_read_only_attempts_archive_only_their_commit(tmp_path):
         assert ctrl.continuation(wid)["next_action"]["kind"] == "human_review"
     finally:
         store.close()
+
+
+def test_policy_snapshot_is_never_shared_across_threads(tmp_path):
+    import threading
+
+    cfg = cfg_for(tmp_path)
+    store = Store(cfg.state_dir)
+    ctrl = Controller(cfg, store, PROMPTS)
+    inside, release = threading.Event(), threading.Event()
+
+    def hold_decision():
+        with ctrl.decision():
+            ctrl._policy()
+            inside.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=hold_decision)
+    holder.start()
+    try:
+        assert inside.wait(10)
+        before = ctrl._policy()
+        cfg.routes["fake-coder"].region = "CA"
+        assert ctrl._policy() != before
+        with ctrl.decision():
+            assert ctrl._policy()["routes"]["fake-coder"]["region"] == "CA"
+    finally:
+        release.set()
+        holder.join()
+        store.close()

@@ -91,6 +91,8 @@ class OciEnvironment(NativeEnvironment):
             *docker_command(recipe),
             "run",
             "--rm",
+            # Harnesses send the brief on stdin; without -i the container sees none.
+            "--interactive",
             "--pull=never",
             "--name",
             name,

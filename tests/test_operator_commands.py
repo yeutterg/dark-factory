@@ -40,6 +40,7 @@ def test_api_accepts_shared_commands_and_rejects_local_only(tmp_path):
         for command, expected in (
             ("status", 200),
             *((n, 409) for n in sorted(operator_commands.LOCAL_ONLY)),
+            ("create-pr", 409),
         ):
             conn.request(
                 "POST", "/operator", body=json.dumps({"cmd": command}), headers=headers
