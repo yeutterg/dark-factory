@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -165,6 +166,14 @@ def installed_image():
 
 
 def test_installed_oci_denies_private_files_and_protected_writes(tmp_path):
+    # Docker-on-macOS commonly shares /Users, not pytest's /private/var/folders.
+    root = Path("state").resolve()
+    root.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="oci-qualification-", dir=root) as temporary:
+        _installed_oci_isolation(Path(temporary))
+
+
+def _installed_oci_isolation(tmp_path):
     selected = recipe(installed_image())
     selected["daemon_host"] = subprocess.run(
         ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
