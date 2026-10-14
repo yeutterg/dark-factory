@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
+from dark_factory import operator_commands
 from dark_factory.controller import Controller, ControllerError
 
 
@@ -58,8 +59,8 @@ def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHand
         def _post(self) -> None:
             path = urlparse(self.path).path
             if path.startswith("/v1/execution/"):
-                from dark_factory.execution.service import ExecutionService
                 from dark_factory.execution.packages import MAX_BYTES
+                from dark_factory.execution.service import ExecutionService
 
                 pieces = path.strip("/").split("/")
                 if len(pieces) != 5 or pieces[2] != controller.cfg.project_id:
@@ -84,7 +85,9 @@ def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHand
                 elif operation == "heartbeat":
                     result = service.heartbeat(worker, data["attempt_id"])
                 elif operation == "start":
-                    result = service.start(worker, data["attempt_id"], data["execution_id"])
+                    result = service.start(
+                        worker, data["attempt_id"], data["execution_id"]
+                    )
                 elif operation == "finish":
                     result = service.finish(worker, data)
                 else:
@@ -104,57 +107,13 @@ def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHand
             path = urlparse(self.path).path
             data = self._read()
             if path == "/operator":
-                command = data.get("cmd")
-                actor = data.get("actor") or "operator"
-                wid = data.get("work_item_id")
-                result = None
-                if command == "status":
-                    result = controller.status()
-                elif command == "approve":
-                    result = {"digest": controller.approve(wid, actor)}
-                elif command == "reject":
-                    controller.reject(wid, actor, data.get("reason", "rejected"))
-                elif command == "plan":
-                    result = {
-                        "jobs": [
-                            j.job_id for j in controller.start_planning(wid, actor).jobs
-                        ]
-                    }
-                elif command == "intake":
-                    result = {"ids": controller.intake_issues(data["issues"], actor)}
-                elif command == "proposal":
-                    result = controller.proposal(wid, data.get("version"))
-                elif command == "review":
-                    row = controller.store.one(
-                        "SELECT packet_json FROM work_items WHERE id=?", (wid,)
-                    )
-                    if not row:
-                        raise ControllerError("work item not found")
-                    result = json.loads(row["packet_json"] or "{}")
-                elif command == "pause":
-                    controller.pause(actor)
-                elif command == "resume":
-                    controller.resume(actor)
-                elif command == "drain":
-                    controller.drain(actor)
-                elif command == "undrain":
-                    controller.undrain(actor)
-                elif command == "cancel":
-                    controller.cancel_job(data["job_id"], actor)
-                elif command == "cleanup":
-                    result = {"cleaned": controller.cleanup(actor)}
-                elif command == "recover":
-                    result = {"recovered": controller.recover(actor)}
-                elif command == "reload":
-                    result = {"reloaded": controller.reload(actor)}
-                elif command == "manual-gate":
-                    controller.record_manual_gate(
-                        wid, data["name"], data["candidate"], actor, data["evidence"]
-                    )
-                elif command == "accept":
-                    controller.accept(wid, actor)
-                else:
+                command = operator_commands.COMMANDS.get(data.get("cmd"))
+                if command is None:
                     raise ControllerError("unsupported operator command")
+                params = {name: data[name] for name in command.params if name in data}
+                result = operator_commands.run(
+                    controller, command.name, params, data.get("actor") or "operator"
+                )
                 self._send(200, {"ok": True, "result": result})
                 return
             if path == "/claim":

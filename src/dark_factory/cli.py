@@ -7,6 +7,7 @@ import json
 import sys
 from pathlib import Path
 
+from dark_factory import operator_commands
 from dark_factory.config import ConfigError, load_config
 from dark_factory.controller import Controller, ControllerError
 from dark_factory.store import Store
@@ -23,7 +24,7 @@ def build_controller(config_path: str) -> tuple[Controller, Store]:
     return Controller(cfg, store, packaged_prompts()), store
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dark-factory", description="Dark Factory bootstrap controller"
     )
@@ -44,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_plan = sub.add_parser("plan")
     p_plan.add_argument("work_item_id")
+    p_plan.add_argument("--actor", default="operator")
     p_approve = sub.add_parser("approve")
     p_approve.add_argument("work_item_id")
     p_approve.add_argument("--actor", default="operator")
@@ -107,8 +109,11 @@ def main(argv: list[str] | None = None) -> int:
     demo.add_argument(
         "--issues-json", help="optional issues file; default uses a fixture"
     )
+    return parser
 
-    args = parser.parse_args(argv)
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     try:
         return _dispatch(args)
     except (ConfigError, ControllerError, RuntimeError, ValueError, OSError) as exc:
@@ -121,6 +126,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         import os
         import time
         import tomllib
+
         from dark_factory.execution.client import WorkerClient
 
         data = tomllib.loads(args.profile.read_text())
@@ -177,13 +183,18 @@ def _dispatch(args: argparse.Namespace) -> int:
 
         restore(Path(args.source), Path(args.destination))
         return 0
+    command = operator_commands.COMMANDS.get(args.cmd)
     if args.api_url:
         from urllib.request import Request, urlopen
 
+        if command is None:
+            raise ControllerError(f"{args.cmd} runs locally; omit --api-url")
         cfg = load_config(args.config)
-        data = vars(args).copy()
-        if args.cmd == "intake":
-            data["issues"] = json.loads(Path(args.issues_json).read_text())
+        data = {
+            "cmd": args.cmd,
+            "actor": _actor(args),
+            **_params(args, command),
+        }
         req = Request(
             args.api_url.rstrip("/") + "/operator",
             data=json.dumps(data).encode(),
@@ -203,86 +214,23 @@ def _dispatch(args: argparse.Namespace) -> int:
             raise ConfigError(
                 "project-scoped workers run separately; use execution-worker"
             )
+        if command is not None:
+            result = operator_commands.run(
+                ctrl, args.cmd, _params(args, command), _actor(args)
+            )
+            text, code = command.render(result)
+            if text is not None:
+                print(text)
+            return code
         if args.cmd == "backup":
             from dark_factory.artifacts import backup
 
             backup(store, Path(args.destination))
             return 0
-        if args.cmd == "manual-gate":
-            ctrl.record_manual_gate(
-                args.work_item_id, args.name, args.candidate, args.actor, args.evidence
-            )
-            return 0
-        if args.cmd == "create-pr":
-            result = ctrl.external_action(
-                args.work_item_id,
-                "create_pr",
-                json.loads(Path(args.payload_json).read_text()),
-                args.actor,
-            )
-            print(json.dumps(result, indent=2))
-            return 0
-        if args.cmd == "cleanup":
-            print(json.dumps({"cleaned": ctrl.cleanup()}))
-            return 0
-        if args.cmd == "recover":
-            print(json.dumps({"recovered": ctrl.recover()}))
-            return 0
-        if args.cmd == "reload":
-            return 0 if ctrl.reload() else 2
-        if args.cmd == "undrain":
-            ctrl.undrain("operator")
-            return 0
-        if args.cmd == "status":
-            print(json.dumps(ctrl.status(), indent=2))
-            return 0
-        if args.cmd == "intake":
-            issues = json.loads(Path(args.issues_json).read_text(encoding="utf-8"))
-            ids = ctrl.intake_issues(issues)
-            print(json.dumps({"ids": ids}))
-            return 0
-        if args.cmd == "plan":
-            graph = ctrl.start_planning(args.work_item_id)
-            print(json.dumps({"jobs": [j.job_id for j in graph.jobs]}))
-            return 0
-        if args.cmd == "approve":
-            digest = ctrl.approve(args.work_item_id, args.actor)
-            print(json.dumps({"digest": digest}))
-            return 0
-        if args.cmd == "reject":
-            ctrl.reject(args.work_item_id, args.actor, args.reason)
-            return 0
-        if args.cmd == "pause":
-            ctrl.pause("operator")
-            return 0
-        if args.cmd == "resume":
-            ctrl.resume("operator")
-            return 0
-        if args.cmd == "drain":
-            ctrl.drain("operator")
-            return 0
-        if args.cmd == "cancel":
-            ctrl.cancel_job(args.job_id, "operator")
-            return 0
         if args.cmd == "run-worker":
             worker = Worker(ctrl.cfg, store, ctrl, args.worker_id)
             n = worker.run_loop(args.max_jobs)
             print(json.dumps({"jobs_run": n}))
-            return 0
-        if args.cmd == "accept":
-            ctrl.accept(args.work_item_id, args.actor)
-            return 0
-        if args.cmd == "proposal":
-            print(json.dumps(ctrl.proposal(args.work_item_id, args.version), indent=2))
-            return 0
-        if args.cmd == "review":
-            row = store.one(
-                "SELECT packet_json, status FROM work_items WHERE id=?",
-                (args.work_item_id,),
-            )
-            if not row:
-                raise ControllerError("work item not found")
-            print(row["packet_json"] or "{}")
             return 0
         if args.cmd == "serve":
             from dark_factory.api import serve
@@ -337,6 +285,28 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 1
     finally:
         store.close()
+
+
+def _actor(args: argparse.Namespace) -> str:
+    return getattr(args, "actor", None) or "operator"
+
+
+def _params(
+    args: argparse.Namespace, command: operator_commands.OperatorCommand
+) -> dict:
+    params = {}
+    for name in command.params:
+        if name == "issues":
+            params[name] = json.loads(
+                Path(args.issues_json).read_text(encoding="utf-8")
+            )
+        elif name == "payload":
+            params[name] = json.loads(
+                Path(args.payload_json).read_text(encoding="utf-8")
+            )
+        else:
+            params[name] = getattr(args, name)
+    return params
 
 
 def _demo(ctrl: Controller, store: Store, issues_json: str | None) -> int:

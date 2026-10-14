@@ -92,7 +92,6 @@ def archive(
     from dark_factory.adapters.git.local import git
 
     for name in ephemeral_paths:
-        path = workspace / name
         if (
             Path(name).is_absolute()
             or ".." in Path(name).parts

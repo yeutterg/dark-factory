@@ -2251,6 +2251,12 @@ class Controller:
             raise ControllerError("proposal version not found")
         return json.loads(row["payload_json"])
 
+    def review_packet(self, wid):
+        row = self.store.one("SELECT packet_json FROM work_items WHERE id=?", (wid,))
+        if not row:
+            raise ControllerError("work item not found")
+        return json.loads(row["packet_json"] or "{}")
+
     def status(self):
         allowed, reason = self.dispatch_allowed()
         return {
