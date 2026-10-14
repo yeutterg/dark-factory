@@ -65,6 +65,47 @@ def test_container_whole_workspace_write_does_not_duplicate_mount(tmp_path):
     assert len(mounts) == 1 and not mounts[0].endswith("readonly")
 
 
+@pytest.mark.parametrize("returncode,remaining", [(1, ""), (0, "owned-container\n")])
+def test_container_cleanup_requires_confirmed_absence(
+    tmp_path, monkeypatch, returncode, remaining
+):
+    env = OciEnvironment(tmp_path / "workspaces", recipe())
+    env.containers.add("owned-container")
+    calls = iter(
+        [
+            subprocess.CompletedProcess([], 1, "", "inspect unavailable"),
+            subprocess.CompletedProcess([], returncode, remaining, ""),
+        ]
+    )
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: next(calls))
+    with pytest.raises(RuntimeError, match="cannot verify"):
+        env.stop(None)
+
+
+def test_container_cleanup_reads_back_successful_removal(tmp_path, monkeypatch):
+    import hashlib
+
+    env = OciEnvironment(tmp_path / "workspaces", recipe())
+    env.containers.add("owned-container")
+    owner = hashlib.sha256(str(env.root).encode()).hexdigest()[:24]
+    responses = iter(
+        [
+            subprocess.CompletedProcess([], 0, owner, ""),
+            subprocess.CompletedProcess([], 0, "", ""),
+            subprocess.CompletedProcess([], 0, "", ""),
+        ]
+    )
+    commands = []
+
+    def run(argv, **kwargs):
+        commands.append(argv)
+        return next(responses)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    env.stop(None)
+    assert commands[-1][3:5] == ["ps", "--all"]
+
+
 def test_project_network_rejects_shared_external_or_host_gateway(monkeypatch):
     base = {
         "Internal": True,
@@ -169,7 +210,9 @@ def test_installed_oci_denies_private_files_and_protected_writes(tmp_path):
     # Docker-on-macOS commonly shares /Users, not pytest's /private/var/folders.
     root = Path("state").resolve()
     root.mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="oci-qualification-", dir=root) as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="oci-qualification-", dir=root
+    ) as temporary:
         _installed_oci_isolation(Path(temporary))
 
 

@@ -29,3 +29,11 @@ Use disler/durable-pi's explicit device registry, versioned contracts, durable r
 - Fake/local provider fixtures are simulation. A backend is not live-qualified merely because its command can be constructed or its version probed.
 - No remote machine, VM, image pull, account purchase or running controller upgrade occurs as part of tests without separate authority.
 - All missing live/backend qualification remains explicit in preflight and the handoff; no claim that Increment A, the UI or full operational readiness is complete.
+
+## Verification record
+
+- Revision `99fa872` passed hosted CI: 242 tests passed, 12 environment-dependent tests skipped, and strict TypeScript checking passed. Local distributed protocol/recovery tests passed all 14 cases, including separate-process completion, TLS, cancellation, start fencing and ambiguous-acknowledgement retry without replay.
+- The installed cached OCI image passed an isolation test: permitted writes succeeded, protected writes and another project's private file were denied, and no host Docker socket was visible. Subsequent local qualification also encountered a 30-second container startup timeout; it is not evidence of stable live-route qualification.
+- A supervisor wheel/image was built from the initial implementation and its installed CLI ran read-only, without networking, as UID 10001. This smoke test is not a hosted deployment, full container workflow qualification or qualification of later source revisions.
+- Native live qualification is not green: installed Claude version drifted from the pinned fixture; Pi/Codex startup checks timed out or lacked the expected diagnostic. The unchanged readiness checkout reproduced the Codex diagnostic failure. Do not silently update approved pins or infer provider entitlement from these checks.
+- VM lifecycle coverage uses an explicitly non-isolating driver fixture. An actual VM adapter, inference gateway, dedicated billing/subscription accounts and remote host still require separate setup and qualification. No inference spending, provisioning, merge or controller upgrade was performed.

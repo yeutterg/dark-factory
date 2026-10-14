@@ -186,7 +186,8 @@ class OciEnvironment(NativeEnvironment):
                 timeout=10,
             )
             if result.returncode:
-                continue  # --rm already removed the completed container.
+                self._verify_absent(name)
+                continue  # Confirmed --rm already removed the completed container.
             if result.stdout.strip() != owner:
                 raise RuntimeError("refusing removal of an unowned container")
             result = subprocess.run(
@@ -196,6 +197,29 @@ class OciEnvironment(NativeEnvironment):
             )
             if result.returncode:
                 raise RuntimeError("owned container teardown failed")
+            self._verify_absent(name)
+
+    def _verify_absent(self, name):
+        import subprocess
+
+        result = subprocess.run(
+            [
+                *docker_command(self.recipe),
+                "ps",
+                "--all",
+                "--filter",
+                "name=^/" + name + "$",
+                "--format",
+                "{{.Names}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode or name in result.stdout.splitlines():
+            raise RuntimeError(
+                "cannot verify owned container removal; resources retained"
+            )
 
 
 class CommandEnvironment(NativeEnvironment):
