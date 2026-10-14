@@ -8,10 +8,16 @@ The package remains under `src/dark_factory/`. One controller owns one local sta
 | `models.py` | Normalized job/graph and record definitions |
 | `store.py` | SQLite schema, process lock, transactions, audit and restored path resolution |
 | `contracts.py`, `runner.py` | Versioned JSON and bounded process supervision |
-| `controller.py` | Proposal versions, approval, budgets, leases, packets, external intentions and human acceptance |
+| `controller.py` | Composes the controller; the only object that changes execution state |
+| `control/policy.py` | Exact approval inputs, evaluated once per decision and compared at approval, dispatch and acceptance |
+| `control/planning.py` | Intake, proposal versions, approval and rejection |
+| `control/dispatch.py` | Budgets, claims, leases, recovery, cancellation and cleanup |
+| `control/results.py`, `control/roles.py` | Attempt settlement, role output validation and the preapproved repair branch |
+| `control/review.py`, `control/external.py` | Coverage, packets, continuations, human acceptance and external intentions |
+| `attempts.py` | Attempt facts a worker reports through the controller or a remote replica |
 | `worker.py` | Prepare, execute, capture, archive, cleanup |
 | `artifacts.py` | Hash manifests, filesystem synchronization, backup/restore |
-| `api.py`, `cli.py` | Local worker/operator surfaces; separate decision credential |
+| `operator_commands.py`, `api.py`, `cli.py` | One operator command table for local and API surfaces; separate decision credential |
 
 Three application-owned lifecycle protocols remain: WorkflowRuntime, Harness and Environment. WorkflowRuntime selects native execution or the pinned Pi Durable dispatch adapter; the controller retains scheduling policy and acceptance authority. The harness registry selects Pi, Claude Code or Codex CLI independently for each task route. The macOS environment enforces file/network/process policy. FakeHarness is limited to deterministic tests and explicitly labeled demonstrations. GitHub tracker/code-host modules are named command adapters; local Git operations are helpers rather than another integration protocol. See [durable execution design](durable-runtime.md).
 
