@@ -28,9 +28,15 @@ class Worker:
             worker_id,
         )
         self.env = NativeEnvironment(cfg.state_dir / "workspaces")
+        self._base_cfg = cfg
 
     def _harness(self, route=None):
-        return adapter_for(route["harness"] if route else "fake").open(self.cfg, route)
+        return adapter_for(route["harness"] if route else "fake").open(
+            self.cfg,
+            route,
+            getattr(self, "_harness_prefix", None),
+            getattr(self, "_harness_env", None),
+        )
 
     def _context(self, claimed, workspace):
         root = claimed["work_item"]
@@ -183,11 +189,28 @@ class Worker:
             self.controller.reconcile_continuations()
 
     def _execute(self, claimed):
+        self.cfg = self._base_cfg
         attempt_id = claimed["attempt_id"]
         job = claimed["job"]
         spec = claimed["spec"]
         snapshot = claimed["snapshot"]
         runtime = self.cfg.state_dir / "runtime" / attempt_id
+        from dark_factory.adapters.env.registry import environment_for
+        from dark_factory.execution.policy import recipe_for
+
+        route = claimed["inputs"].get("route")
+        recipe = claimed["inputs"].get("environment") or recipe_for(self.cfg, route)
+        if route and route["harness"] in recipe.get("harness_binaries", {}):
+            import copy
+
+            self.cfg = copy.copy(self.cfg)
+            self.cfg.execution = {
+                **self.cfg.execution,
+                adapter_for(route["harness"]).binary_key: recipe["harness_binaries"][
+                    route["harness"]
+                ],
+            }
+        self.env = environment_for(self.cfg.state_dir / "workspaces", recipe, route)
         runtime.mkdir(parents=True, mode=0o700)
         archive = self.cfg.state_dir / "archives" / attempt_id
         prepared = None
@@ -253,7 +276,7 @@ class Worker:
                 (str(prepared.workspace), attempt_id),
             )
             env = process_environment(runtime)
-            live = self.cfg.execution.get("profile") == "macos-sandbox"
+            live = recipe["kind"] != "native"
             role = spec.get("role")
             prefix = []
             readable_files = []
@@ -261,7 +284,7 @@ class Worker:
             if role:
                 adapter = adapter_for(claimed["inputs"]["route"]["harness"])
                 immutable_runtime_files = adapter.immutable_runtime_files
-                if adapter.binary_key:
+                if adapter.binary_key and recipe["kind"] == "macos-sandbox":
                     binary = adapter.binary(self.cfg)
                     readable_files = [Path(shutil.which(binary) or binary).resolve()]
             if live:
@@ -291,6 +314,21 @@ class Worker:
                             f"route credential unavailable: {route['auth_env']}"
                         )
                     env[route["auth_env"]] = secret
+                # Version probes run in the same execution backend, without credential-file mounts.
+                probe_runtime = runtime / "version-probe"
+                version_prefix = (
+                    self.env.prefix(
+                        prepared,
+                        probe_runtime,
+                        network=False,
+                        writable=[],
+                        protected=[],
+                    )
+                    if recipe["kind"] in {"oci", "command"}
+                    else []
+                )
+                self._harness_prefix = version_prefix
+                self._harness_env = process_environment(probe_runtime)
                 harness = self._harness(route)
                 prompt = self._context(claimed, prepared.workspace)
                 (runtime / "prompt.txt").write_text(prompt)
@@ -379,15 +417,26 @@ class Worker:
                 for cid in snapshot["source"]["checks"]:
                     binding = snapshot["bindings"][cid]
                     for path, expected in binding["files"].items():
-                        if artifacts.digest(Path(path)) != expected:
+                        if path == binding["argv"][0] and cid in recipe.get(
+                            "command_binaries", {}
+                        ):
+                            continue  # The approved OCI image digest pins the target executable instead.
+                        if artifacts.digest(self.store.resolve_path(path)) != expected:
                             raise RuntimeError("trusted command binding changed")
                     argv = [
                         arg.replace("{workspace}", str(prepared.workspace)).replace(
                             "{trusted}",
                             str(self.store.resolve_path(snapshot["input_repo"])),
                         )
-                        for arg in binding["argv"]
+                        for arg in [
+                            str(self.store.resolve_path(a))
+                            if a in binding["files"] and a != binding["argv"][0]
+                            else a
+                            for a in binding["argv"]
+                        ]
                     ]
+                    if cid in recipe.get("command_binaries", {}):
+                        argv[0] = recipe["command_binaries"][cid]
                     code, stdout, stderr = CommandRunner(
                         prepared.workspace, self.cfg.max_output_bytes
                     )._run(
@@ -402,6 +451,7 @@ class Worker:
                     record = {
                         "command": cid,
                         "argv": binding["argv"],
+                        "execution_argv": argv,
                         "exit_code": code,
                         "stdout": stdout.decode(errors="replace"),
                         "stderr": stderr.decode(errors="replace"),
@@ -462,6 +512,7 @@ class Worker:
                         archive,
                         {"attempt_id": attempt_id, "job_id": job["id"], "ok": ok},
                         files,
+                        ephemeral_paths=snapshot["source"].get("ephemeral_paths", []),
                     )
                     archived = True
                     self.store.execute(

@@ -36,14 +36,18 @@ class HarnessAdapter:
     def available(self, cfg):
         return not self.binary_key or self.factory.available(self.binary(cfg))
 
-    def open(self, cfg, route):
+    def open(self, cfg, route, prefix=None, env=None):
         if not self.binary_key:
             return self.factory()
         binary = self.binary(cfg)
-        actual = CommandRunner(cfg.source_path.parent).run_plain(
-            [binary, "--version"], 10
+        code, out, _ = CommandRunner(cfg.source_path.parent)._run(
+            [*(prefix or []), binary, "--version"],
+            b"",
+            10,
+            cfg.source_path.parent,
+            env or dict(os.environ),
         )
-        if actual[0] or actual[1].strip() != route["harness_version"]:
+        if code or out.decode().strip() != route["harness_version"]:
             raise RuntimeError(f"{self.name} version differs from pinned route")
         return self.factory(binary)
 
@@ -97,6 +101,11 @@ def adapter_for(name):
 def capabilities(cfg):
     return [
         "native",
+        *(
+            "environment:" + name
+            for name, recipe in cfg.raw.get("environments", {}).items()
+            if recipe["kind"] in {"native", "macos-sandbox"}
+        ),
         *(name for name, adapter in ADAPTERS.items() if adapter.available(cfg)),
     ]
 

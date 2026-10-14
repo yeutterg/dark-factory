@@ -219,6 +219,30 @@ class Controller:
         self, cfg: FactoryConfig, store: Store, packaged_prompts: Path
     ) -> None:
         self.cfg, self.store, self.packaged_prompts = cfg, store, packaged_prompts
+        identity = json.dumps(
+            {
+                "project_id": cfg.project_id,
+                "project_name": cfg.project_name,
+                "repositories": sorted(cfg.repositories),
+            },
+            sort_keys=True,
+        )
+        with store.transaction():
+            owner = store.one("SELECT value FROM meta WHERE key='project_identity'")
+            if owner and owner["value"] != identity:
+                raise ControllerError("state belongs to a different project")
+            if (
+                not owner
+                and cfg.project_id
+                and store.one("SELECT id FROM work_items LIMIT 1")
+            ):
+                raise ControllerError(
+                    "project-scoped deployment requires fresh state; legacy adoption is not implicit"
+                )
+            store.execute(
+                "INSERT OR IGNORE INTO meta(key,value) VALUES ('project_identity',?)",
+                (identity,),
+            )
         self.runner = CommandRunner(cfg.source_path.parent, cfg.max_output_bytes)
         self._save_config()
         self.scrub_retired_credentials()
@@ -257,6 +281,12 @@ class Controller:
             candidate = load_config(self.cfg.source_path)
             if candidate.state_dir != self.cfg.state_dir:
                 raise ConfigError("reload cannot move controller state")
+            if (
+                candidate.project_id != self.cfg.project_id
+                or candidate.project_name != self.cfg.project_name
+                or candidate.repositories != self.cfg.repositories
+            ):
+                raise ConfigError("reload cannot change project ownership")
         except (ConfigError, OSError) as exc:
             self.store.audit(actor, "config.reload_failed", {"error": str(exc)})
             return False
@@ -435,6 +465,12 @@ class Controller:
             "continuation": self.cfg.raw.get("continuation", {"max_repairs": 0}),
             "budgets": self.cfg.raw.get("budgets", {}),
             "geography": self.cfg.geography_policy,
+            "deployment": {
+                "project_id": self.cfg.project_id,
+                "role_routes": self.cfg.raw.get("role_routes", {}),
+                "environments": self.cfg.raw.get("environments", {}),
+                "workers": self.cfg.raw.get("workers", {}),
+            },
         }
 
     def _require_root_scope(self, row):
@@ -740,6 +776,7 @@ class Controller:
         if (
             any(r.harness == "pi" for r in self.cfg.routes.values())
             and self.cfg.execution.get("profile") != "macos-sandbox"
+            and not self.cfg.project_id
         ):
             raise ControllerError("live execution is not qualified")
         if not self.dispatch_allowed()[0]:
@@ -789,23 +826,29 @@ class Controller:
                 role = spec.get("role")
                 route = None
                 if role:
-                    eligible = [
-                        r
-                        for r in self.cfg.routes.values()
-                        if role in adapter_for(r.harness).roles
-                    ]
-                    if not eligible:
+                    from dark_factory.execution.policy import selected_route
+
+                    route = selected_route(self.cfg, role)
+                    if route is None:
                         continue
-                    candidates = [r for r in eligible if r.role == role]
-                    route = (candidates or eligible)[0]
                     if (
                         route.harness != "fake"
                         and self.cfg.execution.get("profile") != "macos-sandbox"
+                        and not self.cfg.project_id
                     ):
                         raise ControllerError("live execution is not qualified")
                     required = {"native", route.harness}
                 else:
                     required = {"native"}
+                if self.cfg.project_id:
+                    environment = (
+                        route.environment
+                        if route
+                        else self.cfg.routes[
+                            self.cfg.raw["role_routes"]["coder"]
+                        ].environment
+                    )
+                    required.add("environment:" + environment)
                 if not required.issubset(set(capabilities)):
                     continue
                 need = spec["budget_cents"]
@@ -847,13 +890,22 @@ class Controller:
                     "route": vars(route) if route else None,
                     "commands": snapshot["bindings"],
                     "role": role,
+                    "project_id": self.cfg.project_id,
+                    "lease_seconds": self.cfg.raw.get("workers", {})
+                    .get(worker_id, {})
+                    .get("lease_seconds", 30),
+                    "environment": self.cfg.raw.get("environments", {}).get(environment)
+                    if self.cfg.project_id
+                    else None,
                 }
                 self.store.execute(
                     "UPDATE jobs SET status='leased',worker_id=?,lease_until=? WHERE id=?",
                     (
                         worker_id,
                         min(
-                            deadline, datetime.now(timezone.utc) + timedelta(seconds=30)
+                            deadline,
+                            datetime.now(timezone.utc)
+                            + timedelta(seconds=inputs["lease_seconds"]),
                         ).isoformat(),
                         job["id"],
                     ),
@@ -1034,7 +1086,18 @@ class Controller:
         )
         self.store.execute(
             "UPDATE jobs SET lease_until=? WHERE id=?",
-            (min(deadline, now + timedelta(seconds=30)).isoformat(), attempt["job_id"]),
+            (
+                min(
+                    deadline,
+                    now
+                    + timedelta(
+                        seconds=json.loads(attempt["inputs_json"]).get(
+                            "lease_seconds", 30
+                        )
+                    ),
+                ).isoformat(),
+                attempt["job_id"],
+            ),
         )
         return True
 
@@ -1842,6 +1905,18 @@ class Controller:
                 datetime.fromisoformat(attempt["lease_until"]),
             ) > datetime.now(timezone.utc):
                 continue
+            if (
+                attempt["status"] == "leased"
+                and attempt["worker_id"] in self.cfg.raw.get("workers", {})
+                and not self.store.get_op("execution-start:" + attempt["id"], "")
+            ):
+                if self.release_unstarted_claim(
+                    attempt["id"],
+                    attempt["worker_id"],
+                    "remote delivery expired before authorized execution",
+                ):
+                    count += 1
+                    continue
             # An OS-supervised live child cannot be safely replaced merely on missing heartbeat.
             # Stop the recorded owned process group, then preserve workspace for inspection.
             import os

@@ -1,0 +1,13 @@
+# Installed on the worker, not the supervisor. No factory.toml or operator token needed.
+url = "http://127.0.0.1:8745" # Use HTTPS on another host, or an explicit authenticated tunnel.
+project_id = "example-project"
+worker_id = "worker1"
+token_env = "EXAMPLE_PROJECT_WORKER1_TOKEN"
+state_dir = "./state/example-worker"
+# ca_file = "/absolute/path/to/private-ca.pem"
+
+# For each real account, pin the SAME identity as the project route:
+# [accounts."project-provider-account-reference"]
+# provider = "together"
+# account_kind = "api"
+# auth_env = "EXAMPLE_PROJECT_TOGETHER_KEY"

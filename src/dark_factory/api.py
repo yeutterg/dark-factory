@@ -19,9 +19,9 @@ def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHand
             header = self.headers.get("Authorization", "")
             return hmac.compare_digest(header, f"Bearer {expected}")
 
-        def _read(self) -> dict[str, Any]:
+        def _read(self, maximum=None) -> dict[str, Any]:
             length = int(self.headers.get("Content-Length") or 0)
-            if length < 0 or length > controller.cfg.max_output_bytes:
+            if length < 0 or length > (maximum or controller.cfg.max_output_bytes):
                 raise ValueError("invalid request size")
             if not length:
                 return {}
@@ -57,6 +57,45 @@ def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHand
 
         def _post(self) -> None:
             path = urlparse(self.path).path
+            if path.startswith("/v1/execution/"):
+                from dark_factory.execution.service import ExecutionService
+                from dark_factory.execution.packages import MAX_BYTES
+
+                pieces = path.strip("/").split("/")
+                if len(pieces) != 5 or pieces[2] != controller.cfg.project_id:
+                    self._send(401, {"ok": False, "error": "unauthorized"})
+                    return
+                worker, operation = pieces[3:]
+                service = ExecutionService(controller)
+                header = self.headers.get("Authorization", "")
+                credential = (
+                    header.removeprefix("Bearer ")
+                    if header.startswith("Bearer ")
+                    else ""
+                )
+                if not service.authenticate(worker, credential):
+                    self._send(401, {"ok": False, "error": "unauthorized"})
+                    return
+                data = self._read(MAX_BYTES * 2)
+                if operation == "preflight":
+                    result = service.preflight(worker)
+                elif operation == "claim":
+                    result = service.claim(worker, data["request_id"])
+                elif operation == "heartbeat":
+                    result = service.heartbeat(worker, data["attempt_id"])
+                elif operation == "start":
+                    result = service.start(worker, data["attempt_id"], data["execution_id"])
+                elif operation == "finish":
+                    result = service.finish(worker, data)
+                else:
+                    raise ValueError("unsupported execution operation")
+                self._send(200, {"ok": True, "result": result})
+                return
+            if controller.cfg.project_id and path != "/operator":
+                self._send(
+                    401, {"ok": False, "error": "legacy worker channel disabled"}
+                )
+                return
             if not self._auth(
                 controller.cfg.operator_token if path == "/operator" else token
             ):
@@ -158,11 +197,24 @@ def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHand
 
 
 def serve(
-    controller: Controller, host: str, port: int, token: str
+    controller: Controller, host: str, port: int, token: str, tls=None
 ) -> ThreadingHTTPServer:
-    if host not in {"127.0.0.1", "localhost", "::1"}:
+    if host not in {"127.0.0.1", "localhost", "::1"} and not (
+        controller.cfg.project_id and tls
+    ):
         raise ControllerError(
             "bootstrap API is local-only; remote workers require later qualification"
         )
     server = ThreadingHTTPServer((host, port), make_handler(controller, token))
+    if tls:
+        import ssl
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        try:
+            context.load_cert_chain(*tls)
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+        except BaseException:
+            server.server_close()
+            raise
     return server

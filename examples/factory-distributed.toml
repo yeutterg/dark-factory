@@ -1,0 +1,56 @@
+# Separated supervisor/worker fixture. External values are never examples of real credentials.
+schema_version = 1
+repositories = ["example/project"]
+skills = ["@archive-before-delete", "@redesign"]
+
+[project]
+id = "example-project"
+name = "example-project"
+state_dir = "./state/example-supervisor"
+
+[runtime]
+worker_token_env = "EXAMPLE_PROJECT_LEGACY_WORKER_TOKEN"
+operator_token_env = "EXAMPLE_PROJECT_OPERATOR_TOKEN"
+api_host = "127.0.0.1"
+api_port = 8745
+
+[budgets]
+root_cents = 2000
+planning_cents = 100
+account_cents = 2000
+
+[role_routes]
+planner = "fixture"
+critic = "fixture"
+coder = "fixture"
+reviewer = "fixture"
+
+[environments.local]
+kind = "native" # Fake-only fixture; never admits a real CLI without isolation.
+
+[workers.worker1]
+token_env = "EXAMPLE_PROJECT_WORKER1_TOKEN"
+environments = ["local"]
+lease_seconds = 120 # Bounded preparation/transport tolerance, not a task deadline extension.
+
+[routes.fixture]
+project_id = "example-project"
+account_kind = "simulation"
+environment = "local"
+model = "fake-local"
+harness = "fake"
+harness_version = "0.1"
+provider = "none"
+endpoint = "local"
+billing_account = "example-project-fixture"
+region = "LOCAL"
+role = "coder"
+max_cents = 500
+
+[commands.tracking]
+argv = ["python3", "-m", "dark_factory.adapters.projects.github"]
+timeout_seconds = 30
+
+[commands.code_host]
+argv = ["python3", "-m", "dark_factory.adapters.git.github"]
+timeout_seconds = 30

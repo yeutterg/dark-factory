@@ -43,6 +43,9 @@ class Route:
     max_tokens: int = 8192
     pricing: dict[str, float] = field(default_factory=dict)
     pricing_evidence: str = ""
+    project_id: str = ""
+    account_kind: str = ""
+    environment: str = ""
 
 
 @dataclass
@@ -85,6 +88,7 @@ class FactoryConfig:
     sources: dict[str, dict[str, Any]] = field(default_factory=dict)
     execution: dict[str, Any] = field(default_factory=dict)
     operator_token: str = ""
+    project_id: str = ""
 
 
 def _require(d: dict[str, Any], key: str, typ: type) -> Any:
@@ -157,11 +161,14 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             "workflow",
             "operators",
             "continuation",
+            "role_routes",
+            "environments",
+            "workers",
         },
         "profile",
     )
     for key, allowed in {
-        "project": {"name", "state_dir"},
+        "project": {"name", "state_dir", "id"},
         "runtime": {
             "worker_token",
             "worker_token_env",
@@ -262,6 +269,9 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
                 "max_tokens",
                 "pricing",
                 "pricing_evidence",
+                "project_id",
+                "account_kind",
+                "environment",
             },
             "route",
         )
@@ -332,6 +342,9 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             max_tokens=_integer(item, "max_tokens", 8192, 1),
             pricing=dict(pricing),
             pricing_evidence=str(item.get("pricing_evidence", "")),
+            project_id=str(item.get("project_id", "")),
+            account_kind=str(item.get("account_kind", "")),
+            environment=str(item.get("environment", "")),
         )
     if not routes:
         raise ConfigError("at least one route is required")
@@ -476,6 +489,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
                 "protected_paths",
                 "manual_acceptance",
                 "require_live_evidence",
+                "ephemeral_paths",
             },
             "source",
         )
@@ -487,7 +501,13 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         revision = _require(source, "revision", str)
         if not revision or revision.startswith("-"):
             raise ConfigError("source revision is required")
-        for key in ("checks", "allowed_paths", "protected_paths", "manual_acceptance"):
+        for key in (
+            "checks",
+            "allowed_paths",
+            "protected_paths",
+            "manual_acceptance",
+            "ephemeral_paths",
+        ):
             values = source.get(key, [])
             if not isinstance(values, list) or not all(
                 isinstance(v, str) and v for v in values
@@ -515,6 +535,27 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
                     "scope paths must be literal repository-relative files or directories"
                 )
         normalized_sources[repo] = {**source, "path": str(path), "revision": revision}
+        for ephemeral in source.get("ephemeral_paths", []):
+            if (
+                Path(ephemeral).is_absolute()
+                or ".." in Path(ephemeral).parts
+                or ephemeral in {".", ".git", ""}
+                or any(c in ephemeral for c in "*?[\n")
+            ):
+                raise ConfigError(
+                    "ephemeral paths must be literal owned output directories"
+                )
+            for required_path in (
+                source["allowed_paths"] + source["protected_paths"] + [".git"]
+            ):
+                if (
+                    ephemeral == required_path
+                    or ephemeral.startswith(required_path + "/")
+                    or required_path.startswith(ephemeral + "/")
+                ):
+                    raise ConfigError(
+                        "ephemeral outputs cannot overlap source or protected inputs"
+                    )
     execution = raw.get("execution", {})
     if not isinstance(execution, dict):
         raise ConfigError("execution must be a table")
@@ -554,7 +595,9 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             except ValueError as exc:
                 raise ConfigError(str(exc)) from exc
         if adapter.binary_key:
-            if profile != "macos-sandbox" or not normalized_sources:
+            if (
+                profile != "macos-sandbox" and not route.environment
+            ) or not normalized_sources:
                 raise ConfigError(
                     "live harness requires sources and macos-sandbox execution"
                 )
@@ -592,6 +635,9 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     for key, default in (("planning_cents", 100), ("account_cents", 10000)):
         _integer(raw.get("budgets", {}), key, default, 1)
 
+    from dark_factory.execution.policy import validate_deployment
+
+    project_id = validate_deployment(raw, routes)
     return FactoryConfig(
         schema_version=version,
         project_name=name,
@@ -616,6 +662,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         sources=normalized_sources,
         execution=dict(execution),
         operator_token=operator_token,
+        project_id=project_id,
     )
 
 
