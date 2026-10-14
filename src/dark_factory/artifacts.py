@@ -31,7 +31,14 @@ def digest_cached(path: Path) -> str:
     """
     path = Path(path).resolve()
     stat = path.stat()
-    key = (str(path), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    key = (
+        str(path),
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_size,
+        stat.st_mtime_ns,
+        stat.st_ctime_ns,
+    )
     value = _DIGESTS.get(key)
     if value is None:
         value = _DIGESTS[key] = digest(path)

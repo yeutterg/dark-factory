@@ -14,7 +14,11 @@ PROMPTS = Path("src/dark_factory/agents/prompts")
 
 
 def issue(number):
-    return {"repo": "yeutterg/dark-factory", "number": number, "title": f"Root {number}"}
+    return {
+        "repo": "yeutterg/dark-factory",
+        "number": number,
+        "title": f"Root {number}",
+    }
 
 
 def test_stale_root_does_not_block_other_roots(tmp_path):
@@ -104,9 +108,7 @@ def test_legacy_jobs_are_backfilled_and_ordered_numerically(tmp_path):
     store.close()
     store = Store(tmp_path)
     try:
-        rows = store.query(
-            "SELECT logical_id,plan_version FROM jobs ORDER BY position"
-        )
+        rows = store.query("SELECT logical_id,plan_version FROM jobs ORDER BY position")
         assert [tuple(r) for r in rows] == [("job2", 1), ("job10", 1)]
     finally:
         store.close()

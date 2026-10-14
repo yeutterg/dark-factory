@@ -136,7 +136,9 @@ class CommandRunner:
                         raise RunnerCancelled("command cancelled")
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        raise RunnerTimeout(f"command timed out after {timeout_seconds}s")
+                        raise RunnerTimeout(
+                            f"command timed out after {timeout_seconds}s"
+                        )
                     for key, _ in selector.select(min(remaining, 0.1)):
                         data = os.read(key.fileobj.fileno(), 65536)
                         if not data:
@@ -144,7 +146,9 @@ class CommandRunner:
                             continue
                         total += len(data)
                         if total > self.max_output_bytes:
-                            raise OutputLimitExceeded("stdout/stderr exceeded output limit")
+                            raise OutputLimitExceeded(
+                                "stdout/stderr exceeded output limit"
+                            )
                         chunks[key.data].extend(data)
                         if on_output:
                             on_output(key.data, data)

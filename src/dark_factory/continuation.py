@@ -6,11 +6,7 @@ import json
 
 
 def describe(root, jobs, coverage, dispatch_reason=""):
-    succeeded = {
-        j["logical_id"]
-        for j in jobs
-        if j["status"] == "succeeded"
-    }
+    succeeded = {j["logical_id"] for j in jobs if j["status"] == "succeeded"}
     work = []
     for job in jobs:
         missing = [dep for dep in json.loads(job["depends_on"]) if dep not in succeeded]

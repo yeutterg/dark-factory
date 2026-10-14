@@ -1880,9 +1880,7 @@ class Controller:
             )
         if not reason and row["status"] in {"approved", "running"}:
             succeeded = {
-                j["logical_id"]
-                for j in self._jobs(wid)
-                if j["status"] == "succeeded"
+                j["logical_id"] for j in self._jobs(wid) if j["status"] == "succeeded"
             }
             eligible = [
                 j
@@ -1922,14 +1920,10 @@ class Controller:
             OR o.value IS NULL OR json_extract(o.value,'$.root_status') IS NOT w.status
             ORDER BY w.created_at,w.id"""
         ):
-            if row["status"] in {"approved", "running"} and self._approval_current(
-                row
-            ):
+            if row["status"] in {"approved", "running"} and self._approval_current(row):
                 jobs = self._jobs(row["id"])
                 succeeded = {
-                    j["logical_id"]
-                    for j in jobs
-                    if j["status"] == "succeeded"
+                    j["logical_id"] for j in jobs if j["status"] == "succeeded"
                 }
                 for job in jobs:
                     if (
