@@ -229,7 +229,7 @@ class CodexHarness:
         def run():
             nonlocal error
             try:
-                code, _, _ = CommandRunner(workspace, extra["max_output_bytes"])._run(
+                code, _, _ = CommandRunner(workspace, extra["max_output_bytes"]).supervise(
                     argv,
                     prompt.encode(),
                     extra["timeout_seconds"],

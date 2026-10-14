@@ -258,7 +258,7 @@ class ClaudeCodeHarness:
             try:
                 started = time.monotonic()
                 runner = CommandRunner(workspace, extra["max_output_bytes"])
-                code, out, _ = runner._run(
+                code, out, _ = runner.supervise(
                     [*base, "auth", "status"],
                     b"",
                     min(15, extra["timeout_seconds"]),
@@ -281,7 +281,7 @@ class ClaudeCodeHarness:
                 remaining = extra["timeout_seconds"] - (time.monotonic() - started)
                 if remaining <= 0:
                     raise TimeoutError("Claude attempt timed out during authentication")
-                code, _, stderr = runner._run(
+                code, _, stderr = runner.supervise(
                     argv,
                     prompt.encode(),
                     remaining,

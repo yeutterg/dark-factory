@@ -35,11 +35,11 @@ def test_runtime_configuration_is_read_only_but_sessions_can_write(tmp_path):
         agent / "settings.json",
         runtime / "sandbox.sb",
     ):
-        code, _, _ = runner._run(
+        code, _, _ = runner.supervise(
             prefix + ["/usr/bin/touch", str(path)], b"", 10, prepared.workspace, env
         )
         assert code != 0
-    code, _, _ = runner._run(
+    code, _, _ = runner.supervise(
         prefix + ["/usr/bin/touch", str(agent / "session-fixture")],
         b"",
         10,

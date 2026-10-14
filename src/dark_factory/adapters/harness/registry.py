@@ -40,7 +40,7 @@ class HarnessAdapter:
         if not self.binary_key:
             return self.factory()
         binary = self.binary(cfg)
-        code, out, _ = CommandRunner(cfg.source_path.parent)._run(
+        code, out, _ = CommandRunner(cfg.source_path.parent).supervise(
             [*(prefix or []), binary, "--version"],
             b"",
             10,

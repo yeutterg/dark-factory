@@ -19,6 +19,18 @@ class RunnerError(RuntimeError):
     pass
 
 
+class RunnerTimeout(RunnerError):
+    pass
+
+
+class RunnerCancelled(RunnerError):
+    pass
+
+
+class OutputLimitExceeded(RunnerError):
+    pass
+
+
 class CommandRunner:
     def __init__(self, workdir: Path, max_output_bytes: int = 2_000_000) -> None:
         self.workdir = Path(workdir)
@@ -40,7 +52,7 @@ class CommandRunner:
         merged = os.environ.copy()
         if env:
             merged.update(env)
-        code, stdout, stderr = self._run(
+        code, stdout, stderr = self.supervise(
             argv, stdin, timeout_seconds, self.workdir, merged
         )
         if code != 0:
@@ -60,7 +72,7 @@ class CommandRunner:
         cwd: Optional[Path] = None,
         env: Optional[dict[str, str]] = None,
     ) -> tuple[int, str, str]:
-        code, stdout, stderr = self._run(
+        code, stdout, stderr = self.supervise(
             argv,
             b"",
             timeout_seconds,
@@ -73,7 +85,7 @@ class CommandRunner:
             stderr.decode("utf-8", errors="replace"),
         )
 
-    def _run(
+    def supervise(
         self,
         argv,
         stdin,
@@ -85,6 +97,11 @@ class CommandRunner:
         on_output=None,
         on_start=None,
     ):
+        """Run argv in its own process group with bounded time and output.
+
+        The whole group is killed before returning or raising, so descendants
+        cannot outlive the call.
+        """
         if not argv or not all(isinstance(x, str) for x in argv):
             raise RunnerError("argv must be a non-empty list of strings")
         if timeout_seconds <= 0 or self.max_output_bytes <= 0:
@@ -116,10 +133,10 @@ class CommandRunner:
                     selector.register(stream, selectors.EVENT_READ, name)
                 while selector.get_map() or proc.poll() is None:
                     if should_stop and should_stop():
-                        raise RunnerError("command cancelled")
+                        raise RunnerCancelled("command cancelled")
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        raise RunnerError(f"command timed out after {timeout_seconds}s")
+                        raise RunnerTimeout(f"command timed out after {timeout_seconds}s")
                     for key, _ in selector.select(min(remaining, 0.1)):
                         data = os.read(key.fileobj.fileno(), 65536)
                         if not data:
@@ -127,7 +144,7 @@ class CommandRunner:
                             continue
                         total += len(data)
                         if total > self.max_output_bytes:
-                            raise RunnerError("stdout/stderr exceeded output limit")
+                            raise OutputLimitExceeded("stdout/stderr exceeded output limit")
                         chunks[key.data].extend(data)
                         if on_output:
                             on_output(key.data, data)

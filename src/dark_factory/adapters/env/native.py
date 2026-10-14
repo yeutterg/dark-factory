@@ -125,7 +125,7 @@ class NativeEnvironment:
         prefix = self.prefix(
             prepared, runtime, network=False, writable=[], protected=[]
         )
-        code, out, err = CommandRunner(cwd)._run(
+        code, out, err = CommandRunner(cwd).supervise(
             prefix + argv, b"", timeout_seconds, cwd, process_environment(runtime)
         )
         return code, out.decode(errors="replace"), err.decode(errors="replace")

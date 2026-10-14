@@ -15,7 +15,7 @@ from dark_factory.adapters.harness.registry import (
     capabilities,
     credential_for,
 )
-from dark_factory.runner import CommandRunner
+from dark_factory.runner import CommandRunner, RunnerTimeout
 from dark_factory.workflow import runtime_for
 
 
@@ -439,7 +439,7 @@ class Worker:
                         argv[0] = recipe["command_binaries"][cid]
                     code, stdout, stderr = CommandRunner(
                         prepared.workspace, self.cfg.max_output_bytes
-                    )._run(
+                    ).supervise(
                         prefix + argv,
                         b"",
                         min(spec["timeout_seconds"], binding["timeout_seconds"]),
@@ -478,7 +478,7 @@ class Worker:
             error = str(exc)
             ok = False
             result["failure_kind"] = "execution"
-            timed_out = timed_out or "timed out" in error
+            timed_out = timed_out or isinstance(exc, (RunnerTimeout, TimeoutError))
             cancelled = cancelled or stopped()
         finally:
             if prepared:

@@ -92,7 +92,7 @@ def test_broken_engine_only_subpath_cannot_lease_or_charge(tmp_path, monkeypatch
         )
         for filename, body in files.items():
             (directory / filename).write_text(body)
-    code, _, _ = CommandRunner(engine)._run(
+    code, _, _ = CommandRunner(engine).supervise(
         [
             "node",
             "--input-type=module",

@@ -19,7 +19,7 @@ def api(path, method="GET", payload=None):
     runner = CommandRunner(Path.cwd())
     import os
 
-    code, out, err = runner._run(
+    code, out, err = runner.supervise(
         argv,
         json.dumps(payload).encode() if payload is not None else b"",
         60,

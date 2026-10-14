@@ -263,7 +263,7 @@ class PiHarness:
         def execute():
             try:
                 runner = CommandRunner(workspace, extra["max_output_bytes"])
-                code, stdout, stderr = runner._run(
+                code, stdout, stderr = runner.supervise(
                     argv,
                     b"",
                     extra["timeout_seconds"],

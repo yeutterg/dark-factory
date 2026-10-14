@@ -68,11 +68,11 @@ def test_installed_codex_command_sandbox_denies_dummy_credentials(tmp_path):
         "permissions.factory.network.enabled=false",
     ]
     runner = CommandRunner(workspace)
-    code, out, _ = runner._run(
+    code, out, _ = runner.supervise(
         argv + ["/bin/cat", str(workspace / "public.txt")], b"", 10, workspace, env
     )
     assert code == 0 and out == b"PUBLIC_FIXTURE"
-    code, out, _ = runner._run(
+    code, out, _ = runner.supervise(
         argv + ["/bin/cat", str(credential)], b"", 10, workspace, env
     )
     assert code != 0 and b"DUMMY_CREDENTIAL_FIXTURE" not in out
@@ -114,14 +114,14 @@ def test_installed_codex_nested_sandbox_fails_closed(tmp_path, monkeypatch):
     auth["tokens"]["account_id"] = "fixture-account"
     auth["last_refresh"] = "2026-10-13T00:00:00Z"
     diagnostics = []
-    original = CommandRunner._run
+    original = CommandRunner.supervise
 
     def observed(self, *args, **kwargs):
         result = original(self, *args, **kwargs)
         diagnostics.append(result)
         return result
 
-    monkeypatch.setattr(CommandRunner, "_run", observed)
+    monkeypatch.setattr(CommandRunner, "supervise", observed)
     harness = CodexHarness(str(BINARY))
     list(
         harness.start(
