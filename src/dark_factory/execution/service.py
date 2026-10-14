@@ -256,7 +256,15 @@ class ExecutionService:
                 raise ControllerError("result has no authorized execution start")
             if (
                 set(receipt)
-                != {"ok", "output", "cost", "error", "timed_out", "cancelled"}
+                != {
+                    "ok",
+                    "output",
+                    "cost",
+                    "error",
+                    "timed_out",
+                    "cancelled",
+                    "cleanup_status",
+                }
                 or any(
                     type(receipt[k]) is not bool
                     for k in ("ok", "timed_out", "cancelled")
@@ -266,6 +274,10 @@ class ExecutionService:
                 or not isinstance(receipt["output"], str)
                 or receipt["error"] is not None
                 and not isinstance(receipt["error"], str)
+                or receipt["cleanup_status"]
+                not in {"cleaned", "cleanup_failed", "archive_failed"}
+                or bool(data.get("archive"))
+                != (receipt["cleanup_status"] in {"cleaned", "cleanup_failed"})
             ):
                 raise ValueError("invalid execution receipt")
             destination = self.store.state_dir / "archives" / aid
@@ -302,7 +314,36 @@ class ExecutionService:
                 receipt["timed_out"],
                 receipt["cancelled"],
             )
+            self.ctrl.record_cleanup(aid, receipt["cleanup_status"])
             self.store.set_op(key, request, "execution")
             self.store.set_op("workflow-settled:" + aid, "remote-settled", "execution")
             self.ctrl.reconcile_continuations()
             return {"accepted": True, "attempt_id": aid, "result_digest": request}
+
+    def cleanup(self, worker, aid, result_digest):
+        """Acknowledge a post-settlement release retry by the owning worker."""
+        with self.store.transaction():
+            row = self._owned(worker, aid)
+            expected = self.store.get_op("result:" + aid, "")
+            if not expected or result_digest != expected:
+                raise ControllerError("cleanup is not bound to the settled result")
+            if row["cleanup_status"] == "cleaned":
+                return {
+                    "accepted": True,
+                    "attempt_id": aid,
+                    "result_digest": expected,
+                }
+            if row["cleanup_status"] != "cleanup_failed" or not row["archive_path"]:
+                raise ControllerError("attempt cleanup is not retryable")
+            artifacts.verify(self.store.resolve_path(row["archive_path"]))
+            self.ctrl.record_cleanup(aid, "cleaned")
+            self.store.audit(
+                worker,
+                "cleanup.remote_confirmed",
+                {"attempt_id": aid, "result_digest": expected},
+            )
+            return {
+                "accepted": True,
+                "attempt_id": aid,
+                "result_digest": expected,
+            }

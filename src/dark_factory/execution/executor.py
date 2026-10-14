@@ -79,6 +79,9 @@ class AttemptController(AttemptRecords):
     def finish_attempt(
         self, aid, ok, output, cost, archive, error, timed_out, cancelled
     ):
+        attempt = self.store.one(
+            "SELECT cleanup_status FROM attempts WHERE id=?", (aid,)
+        )
         self.receipt = {
             "ok": ok,
             "output": output,
@@ -86,6 +89,7 @@ class AttemptController(AttemptRecords):
             "error": error,
             "timed_out": timed_out,
             "cancelled": cancelled,
+            "cleanup_status": attempt["cleanup_status"],
         }
 
 

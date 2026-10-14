@@ -230,6 +230,24 @@ def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch, tamper_ru
         'role = "coder"',
         'role = "coder"\nauth_env = "FACTORY_TEST_KEY"\ngeography_evidence = "Deterministic loopback fixture; no inference"\napi = "openai-completions"\npricing = { input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }\npricing_evidence = "Fixture estimate; not provider billing"',
     )
+    for role in ("planner", "critic", "reviewer"):
+        text += f'''\n[routes.pi-{role}]
+model = "fixture-model"
+harness = "pi"
+harness_version = "{version}"
+provider = "fixture-provider"
+endpoint = "http://127.0.0.1:{server.server_port}/v1"
+billing_account = "local"
+region = "US"
+role = "{role}"
+max_cents = 500
+evidence_kind = "simulation"
+auth_env = "FACTORY_TEST_KEY"
+geography_evidence = "Deterministic loopback fixture; no inference"
+api = "openai-completions"
+pricing = {{ input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }}
+pricing_evidence = "Fixture estimate; not provider billing"
+'''
     text += '\n[execution]\nprofile = "macos-sandbox"\n'
     text += f'\n[sources."yeutterg/dark-factory"]\npath = "{source["path"]}"\nrevision = "HEAD"\nchecks = ["verify"]\nallowed_paths = ["message.py"]\nprotected_paths = ["verify.py", "AGENTS.md"]\nmanual_acceptance = []\n'
     python = shutil.which("python3.12") or "/usr/bin/python3"

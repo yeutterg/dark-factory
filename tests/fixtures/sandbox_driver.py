@@ -8,6 +8,7 @@ from pathlib import Path
 parser = argparse.ArgumentParser()
 parser.add_argument("--factory-policy", required=True)
 parser.add_argument("--operation")
+parser.add_argument("--fail-release-once", type=Path)
 args, command = parser.parse_known_args()
 policy = json.loads(args.factory_policy)
 runtime = Path(policy["runtime"])
@@ -17,6 +18,10 @@ with (runtime / "driver-events.jsonl").open("a") as output:
         json.dumps({"operation": args.operation or "execute", "policy": policy}) + "\n"
     )
 if args.operation:
+    if args.operation == "release" and args.fail_release_once:
+        if not args.fail_release_once.exists():
+            args.fail_release_once.write_text("retry")
+            raise SystemExit(75)
     raise SystemExit(0)
 if command and command[0] == "--":
     command.pop(0)
