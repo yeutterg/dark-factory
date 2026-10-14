@@ -13,7 +13,7 @@ from dark_factory.adapters.harness.pi import PiHarness, resolve_credential
 from dark_factory.runner import CommandRunner
 
 
-def explicit_credential(route):
+def explicit_credential(route, binary=None):
     return os.environ.get(route.get("auth_env", ""), "")
 
 
@@ -24,7 +24,7 @@ class HarnessAdapter:
     binary_key: str = ""
     binary_default: str = ""
     roles: frozenset[str] = frozenset({"planner", "critic", "coder", "reviewer"})
-    credential_resolver: Callable[[dict], str] = explicit_credential
+    credential_resolver: Callable[[dict, str], str] = explicit_credential
     supports_effort: bool = False
     session_paths: tuple[str, ...] = ()
     credential_files: tuple[str, ...] = ()
@@ -110,5 +110,7 @@ def capabilities(cfg):
     ]
 
 
-def credential_for(route):
-    return adapter_for(route.get("harness", "pi")).credential_resolver(route)
+def credential_for(route, cfg=None):
+    adapter = adapter_for(route.get("harness", "pi"))
+    binary = adapter.binary(cfg) if cfg else adapter.binary_default
+    return adapter.credential_resolver(route, binary)

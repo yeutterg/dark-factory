@@ -308,7 +308,7 @@ class Worker:
             if role:
                 route = claimed["inputs"]["route"]
                 if route["harness"] != "fake":
-                    secret = _route_secret(route)
+                    secret = _route_secret(route, self.cfg)
                     if not secret:
                         raise RuntimeError(
                             f"route credential unavailable: {route['auth_env']}"
@@ -574,5 +574,5 @@ class Worker:
         return count
 
 
-def _route_secret(route: dict) -> str:
-    return credential_for(route)
+def _route_secret(route: dict, cfg=None) -> str:
+    return credential_for(route, cfg)

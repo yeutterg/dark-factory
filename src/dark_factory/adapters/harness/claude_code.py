@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import json
 import math
-import queue
+import re
 import shutil
-import threading
 import time
 from pathlib import Path
 
 from dark_factory.adapters.harness.base import HarnessEvent, HarnessResult
+from dark_factory.adapters.harness.streaming import JsonLines, StreamingCliHarness
 from dark_factory.runner import CommandRunner
 
+READ_ROLES = {"planner", "critic", "reviewer"}
 READ_TOOLS = {"Read", "Grep", "Glob"}
 SETTINGS = {
     "forceLoginMethod": "claudeai",
@@ -62,41 +63,38 @@ def subscription_environment(base, runtime, token):
     return env
 
 
-class ClaudeCodeHarness:
+def validate_claude_route(route: dict, role: str) -> None:
+    """Shared by profile validation and dispatch; route is the dict form."""
+    if role not in READ_ROLES:
+        raise ValueError("Claude Code subscription routes are read-only")
+    if (
+        route.get("provider") != "claude-subscription"
+        or route.get("endpoint") != "https://api.anthropic.com"
+    ):
+        raise ValueError("Claude Code requires the first-party subscription route")
+    if (
+        not route.get("auth_env")
+        or route["auth_env"] in {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
+        or route.get("api")
+    ):
+        raise ValueError(
+            "Claude Code requires a subscription OAuth token reference, never an API key"
+        )
+    if not re.fullmatch(
+        r"claude-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]+(?:-[0-9]+)*", route.get("model") or ""
+    ):
+        raise ValueError("Claude Code requires an explicit model ID, not an alias")
+
+
+class ClaudeCodeHarness(StreamingCliHarness):
     name = "claude-code"
 
     @staticmethod
     def validate_route(route):
-        import re
-
-        if route.role not in {"planner", "critic", "reviewer"}:
-            raise ValueError("Claude Code subscription routes are read-only")
-        if (
-            route.provider != "claude-subscription"
-            or route.endpoint != "https://api.anthropic.com"
-        ):
-            raise ValueError("Claude Code requires the first-party subscription route")
-        if (
-            not route.auth_env
-            or route.auth_env in {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
-            or route.api
-        ):
-            raise ValueError(
-                "Claude Code requires a subscription OAuth token reference, never an API key"
-            )
-        if not re.fullmatch(
-            r"claude-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]+(?:-[0-9]+)*", route.model
-        ):
-            raise ValueError("Claude Code requires an explicit model ID, not an alias")
+        validate_claude_route(vars(route), route.role)
 
     def __init__(self, binary="claude"):
-        self.binary = str(Path(shutil.which(binary) or binary).resolve())
-        self._cancel = threading.Event()
-        self._result = HarnessResult(False, "", {}, None, error="not started")
-
-    @classmethod
-    def available(cls, binary="claude"):
-        return shutil.which(binary) is not None
+        super().__init__(str(Path(shutil.which(binary) or binary).resolve()))
 
     def _base_argv(self, prefix, model=None):
         settings = {**SETTINGS, **({"availableModels": [model]} if model else {})}
@@ -114,19 +112,7 @@ class ClaudeCodeHarness:
     def start(self, prompt, workspace, extra=None):
         extra = extra or {}
         route = extra["route"]
-        if extra["role"] not in {"planner", "critic", "reviewer"}:
-            raise ValueError("Claude Code subscription adapter is read-only")
-        if (
-            route["provider"] != "claude-subscription"
-            or route["endpoint"] != "https://api.anthropic.com"
-        ):
-            raise ValueError(
-                "Claude Code requires the native first-party subscription route"
-            )
-        if not route.get("auth_env") or route.get("api"):
-            raise ValueError(
-                "a subscription OAuth token reference is required; API credentials are not permitted"
-            )
+        validate_claude_route(route, extra["role"])
         if not extra.get("prefix") and route.get("evidence_kind") != "simulation":
             raise ValueError("Claude Code requires an isolated execution environment")
         runtime = Path(extra["runtime"])
@@ -164,8 +150,6 @@ class ClaudeCodeHarness:
             "--max-budget-usd",
             f"{extra['budget_cents'] / 100:.2f}",
         ]
-        events = queue.Queue()
-        pending = bytearray()
         terminal = None
         session_id = None
         initialized = False
@@ -177,16 +161,11 @@ class ClaudeCodeHarness:
             "reported_cost": False,
         }
 
-        def output(name, data):
-            nonlocal terminal, session_id, initialized, error
-            if name != "stdout":
-                return
-            pending.extend(data)
-            while b"\n" in pending:
-                line, _, rest = pending.partition(b"\n")
-                pending[:] = rest
-                if not line.strip():
-                    continue
+        def run(emit):
+            nonlocal error
+
+            def handle(line):
+                nonlocal terminal, session_id, initialized, error
                 try:
                     item = json.loads(line)
                     if not isinstance(item, dict):
@@ -248,13 +227,12 @@ class ClaudeCodeHarness:
                                 raise ValueError("Claude attempt budget reached")
                         usage["tokens"] = item.get("usage", {})
                         usage["model_usage"] = models
-                    events.put(HarnessEvent(kind or "event", data=item))
+                    emit(HarnessEvent(kind or "event", data=item))
                 except (ValueError, TypeError, AttributeError) as exc:
                     error = str(exc)
                     self.cancel()
 
-        def execute():
-            nonlocal error
+            lines = JsonLines(handle)
             try:
                 started = time.monotonic()
                 runner = CommandRunner(workspace, extra["max_output_bytes"])
@@ -288,11 +266,10 @@ class ClaudeCodeHarness:
                     workspace,
                     env,
                     should_stop=self._cancel.is_set,
-                    on_output=output,
+                    on_output=lines,
                     on_start=extra.get("on_start"),
                 )
-                if pending.strip():
-                    output("stdout", b"\n")
+                lines.flush()
                 if not initialized or not session_id or terminal is None:
                     error = error or "incomplete Claude event stream"
                 elif (
@@ -327,27 +304,8 @@ class ClaudeCodeHarness:
                     cost_cents=extra["budget_cents"],
                     error=error or str(exc),
                 )
-            finally:
-                events.put(None)
 
-        thread = threading.Thread(target=execute, daemon=True)
-        thread.start()
-        while True:
-            try:
-                event = events.get(timeout=0.1)
-            except queue.Empty:
-                yield HarnessEvent("heartbeat")
-                continue
-            if event is None:
-                break
-            yield event
-        thread.join()
-
-    def wait(self):
-        return self._result
-
-    def cancel(self):
-        self._cancel.set()
+        yield from self._stream(run)
 
     def attach_command(self, session_id):
         raise NotImplementedError(

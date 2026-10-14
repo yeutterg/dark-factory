@@ -86,9 +86,12 @@ def run_fixture(tmp_path, usage, budget=100, *, rates=RATES, tail="", evidence="
         },
     ]
     binary = tmp_path / "pi-fixture"
+    invocation = tmp_path / "invocation.json"
     binary.write_text(
-        f"#!{sys.executable}\nimport json\nfor event in {events!r}: print(json.dumps(event),flush=True)\n"
-        + tail
+        f"#!{sys.executable}\nimport json, sys\n"
+        f"open({str(invocation)!r}, 'w').write(json.dumps("
+        "{'argv': sys.argv, 'stdin': sys.stdin.read()}))\n"
+        f"for event in {events!r}: print(json.dumps(event),flush=True)\n" + tail
     )
     binary.chmod(0o700)
     runtime = tmp_path / "runtime"
@@ -198,3 +201,11 @@ def test_direct_unclassified_pi_dispatch_is_rejected(tmp_path):
             )
         )
     assert not (tmp_path / "runtime").exists()
+
+
+def test_brief_travels_on_stdin_not_argv(tmp_path):
+    result, _ = run_fixture(tmp_path, {"input": 100, "output": 10})
+    invocation = json.loads((tmp_path / "invocation.json").read_text())
+    assert result.ok
+    assert invocation["stdin"] == "Fixture brief"
+    assert "Fixture brief" not in invocation["argv"]

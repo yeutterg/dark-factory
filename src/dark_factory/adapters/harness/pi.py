@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 import math
-import queue
 import shutil
-import threading
 from decimal import Decimal
 from pathlib import Path
 
 from dark_factory.adapters.harness.base import HarnessEvent, HarnessResult
+from dark_factory.adapters.harness.streaming import JsonLines, StreamingCliHarness
 from dark_factory.runner import CommandRunner
 
 
@@ -36,37 +35,31 @@ def validate_pricing(pricing, evidence, required=False):
         )
 
 
-class PiHarness:
+def validate_pi_route(route: dict) -> None:
+    if route.get("evidence_kind") not in {"simulation", "live"}:
+        raise ValueError("Pi requires explicit live or simulation classification")
+    validate_pricing(
+        route.get("pricing", {}),
+        route.get("pricing_evidence", ""),
+        route.get("evidence_kind") == "live" and bool(route.get("api")),
+    )
+
+
+class PiHarness(StreamingCliHarness):
     name = "pi"
 
     @staticmethod
     def validate_route(route):
-        validate_pricing(
-            route.pricing,
-            route.pricing_evidence,
-            route.evidence_kind == "live" and bool(route.api),
-        )
+        validate_pi_route(vars(route))
 
     def __init__(self, binary: str = "pi") -> None:
-        self.binary = shutil.which(binary) or binary
-        self._cancel = threading.Event()
-        self._result = HarnessResult(False, "", {}, None, error="not started")
-
-    @classmethod
-    def available(cls, binary: str = "pi") -> bool:
-        return shutil.which(binary) is not None
+        super().__init__(shutil.which(binary) or binary)
 
     def start(self, prompt: str, workspace: Path, extra=None):
         extra = extra or {}
         route = extra["route"]
-        if route.get("evidence_kind") not in {"simulation", "live"}:
-            raise ValueError("Pi requires explicit live or simulation classification")
+        validate_pi_route(route)
         pricing = route.get("pricing", {})
-        validate_pricing(
-            pricing,
-            route.get("pricing_evidence", ""),
-            route.get("evidence_kind") == "live" and bool(route.get("api")),
-        )
         if route.get("evidence_kind") == "live" and not extra.get("prefix"):
             raise ValueError("Pi requires an isolated execution environment")
         runtime = Path(extra["runtime"])
@@ -138,10 +131,7 @@ class PiHarness:
             tools,
             "--session-dir",
             str(agent / "sessions"),
-            prompt,
         ]
-        events = queue.Queue()
-        pending = bytearray()
         messages = []
         usage = {"input": 0, "output": 0, "cost": 0.0, "reported_cost": False}
         cost_known = False
@@ -150,22 +140,15 @@ class PiHarness:
         parse_error = None
         self._cancel.clear()
 
-        def output(name, data):
-            nonlocal session_id, parse_error, cost_known, estimated_cost
-            if name != "stdout":
-                return
-            pending.extend(data)
-            while b"\n" in pending:
-                line, _, remainder = pending.partition(b"\n")
-                pending[:] = remainder
-                if not line.strip():
-                    continue
+        def run(emit):
+            def handle(line):
+                nonlocal session_id, parse_error, cost_known, estimated_cost
                 try:
                     item = json.loads(line)
                 except ValueError:
                     parse_error = "invalid Pi JSON event"
                     self.cancel()
-                    continue
+                    return
                 if item.get("type") == "session":
                     session_id = item.get("id")
                 message = item.get("message", {})
@@ -212,7 +195,7 @@ class PiHarness:
                         parse_error = "invalid Pi usage; cost is unknown"
                         cost_known = False
                         self.cancel()
-                        continue
+                        return
                     usage["input"] += u.get("input", 0)
                     usage["output"] += u.get("output", 0)
                     if pricing:
@@ -258,23 +241,24 @@ class PiHarness:
                     if math.ceil(usage["cost"] * 100) > extra["budget_cents"]:
                         parse_error = "attempt budget reached"
                         self.cancel()
-                events.put(HarnessEvent(item.get("type", "event"), data=item))
+                emit(HarnessEvent(item.get("type", "event"), data=item))
 
-        def execute():
+            lines = JsonLines(handle)
             try:
                 runner = CommandRunner(workspace, extra["max_output_bytes"])
+                # The brief travels on stdin: it can exceed argv limits and must
+                # not be visible in the process table.
                 code, stdout, stderr = runner.supervise(
                     argv,
-                    b"",
+                    prompt.encode(),
                     extra["timeout_seconds"],
                     workspace,
                     env,
                     should_stop=self._cancel.is_set,
-                    on_output=output,
+                    on_output=lines,
                     on_start=extra.get("on_start"),
                 )
-                if pending.strip():
-                    output("stdout", b"\n")
+                lines.flush()
                 error = parse_error or (
                     stderr.decode(errors="replace")[-2000:] if code else None
                 )
@@ -304,33 +288,14 @@ class PiHarness:
                     ),
                     error=parse_error or str(exc),
                 )
-            finally:
-                events.put(None)
 
-        thread = threading.Thread(target=execute, daemon=True)
-        thread.start()
-        while True:
-            try:
-                event = events.get(timeout=0.1)
-            except queue.Empty:
-                yield HarnessEvent("heartbeat")
-                continue
-            if event is None:
-                break
-            yield event
-        thread.join()
-
-    def wait(self):
-        return self._result
-
-    def cancel(self):
-        self._cancel.set()
+        yield from self._stream(run)
 
     def attach_command(self, session_id: str) -> list[str]:
         return [self.binary, "--session", session_id]
 
 
-def resolve_credential(route: dict) -> str:
+def resolve_credential(route: dict, binary: str = "pi") -> str:
     """Only Pi routes may discover Pi's native provider authentication."""
     import os
     import subprocess
@@ -346,7 +311,7 @@ def resolve_credential(route: dict) -> str:
     if route.get("provider") == "together" and name == "TOGETHER_API_KEY":
         proc = subprocess.run(
             [
-                shutil.which("pi") or "pi",
+                shutil.which(binary) or binary,
                 "auth",
                 "print-api-key",
                 "--provider",
