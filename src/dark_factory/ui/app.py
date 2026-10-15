@@ -27,7 +27,11 @@ class DarkFactoryApp(App[None]):
     CSS_PATH = "dark_factory.tcss"
     TITLE = "dark-factory"
     ENABLE_COMMAND_PALETTE = False
-    BINDINGS = [Binding("q", "quit", "Quit", priority=True)]
+    BINDINGS = [
+        Binding("q", "quit", "Quit", priority=True),
+        Binding("ctrl+q", "quit", "Quit", priority=True, show=False),
+        Binding("ctrl+c", "quit", "Quit", priority=True, show=False),
+    ]
 
     def __init__(self, transport: OperatorTransport, actor: str = "operator") -> None:
         super().__init__()

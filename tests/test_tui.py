@@ -357,3 +357,23 @@ def test_primary_screens_mount_in_compact_terminal():
             assert app.screen.size.height == 24
 
     asyncio.run(exercise())
+
+
+def test_tui_quit_bindings_exit_cleanly():
+    quit_keys = {
+        binding.key for binding in DarkFactoryApp.BINDINGS if binding.action == "quit"
+    }
+    assert quit_keys == {"q", "ctrl+q", "ctrl+c"}
+
+    async def exercise(key: str) -> None:
+        app = DarkFactoryApp(FixtureTransport(), "greg")
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            assert app.is_running
+            await pilot.press(key)
+            await pilot.pause()
+            assert not app.is_running
+            assert app.return_code == 0
+
+    asyncio.run(exercise("ctrl+q"))
+    asyncio.run(exercise("ctrl+c"))

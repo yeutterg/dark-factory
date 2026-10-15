@@ -122,7 +122,7 @@ class Help(ModalScreen[None]):
                 "Shift+R        recover expired leases\n"
                 "r              refresh\n"
                 "Esc            back\n"
-                "q              quit\n\n"
+                "q / Ctrl+Q / Ctrl+C  quit this TUI only\n\n"
                 "All mutations use the controller's operator command boundary."
             )
 
