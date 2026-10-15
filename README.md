@@ -25,16 +25,16 @@ You drive it from a terminal console (`dark-factory tui`) or a scriptable CLI. B
 
 This is just one example, and it's totally customizable. Each stage is a route or adapter in `factory.toml`, so you can swap any piece for the tools you already use.
 
-| Stage | Example tools | How it connects | Today |
-| --- | --- | --- | --- |
-| Intake | GitHub Issues and Projects | Tracking adapter reads labeled issues and their sub-issues | Issues built in; Projects needs an adapter update |
-| Planning | GPT Astra via Codex CLI | Planner route | Supported harness |
-| Critique | Claude Opus via Claude Code | Critic route, on a different model from the planner | Supported harness |
-| Approval | You, in the TUI | Recorded human decision with a spending limit | Built in |
-| Implementation | DeepSeek Flash via Pi, on the Pi Durable runtime | Coder route through a provider Pi supports, such as Together | Supported harness and runtime |
-| Checks | Your test, lint, and build commands; GitHub Actions | Canonical commands run in the sandbox; PR checks are read back | Built in |
-| Review | Devin and Bugbot on the draft PR, plus the factory's reviewer | Reviewer route; outside reviewers' PR checks are read back | Reviewer route built in; PR review comments aren't read yet, and outside reviews don't count as evidence yet |
-| Accept and merge | You | Accept in the TUI, then merge under your branch rules | Built in; merging stays with you |
+| Stage | Example tools | How it connects |
+| --- | --- | --- |
+| Intake | GitHub Issues and Projects | Tracking adapter lists labeled issues and open issues on your project boards, grouped by project and theme |
+| Planning | GPT Astra via Codex CLI | Planner route |
+| Critique | Claude Opus via Claude Code | Critic route, on a different model from the planner |
+| Approval | You, in the TUI | Recorded human decision with a spending limit |
+| Implementation | DeepSeek Flash via Pi, on the Pi Durable runtime | Coder route through a provider Pi supports, such as Together |
+| Checks | Your test, lint, and build commands; GitHub Actions | Canonical commands run in the sandbox; CI results on the PR can be required too |
+| Review | Devin and Bugbot on the PR, plus the factory's reviewer | Reviewer route, plus required outside reviews read from the PR; they count only on the exact candidate commit |
+| Accept and merge | You | Accept in the TUI, then merge under your branch rules |
 
 Routes pin each model's provider, account, and processing region. A route to a region your policy blocks won't run.
 
