@@ -1,14 +1,31 @@
 # Dark Factory
 
-Run coding agents through a complete, reviewable workflow:
+Modular framework for building an autonomous software factory with durable coding agents. Provider-agnostic, and adapts to your CI/CD, tracker, and preferred tools. Every acceptance criterion needs evidence and a human decision.
+
+Pick issues from your tracker and approve a plan. Agents then run the work in isolated workspaces: plan, implement, run your checks, and review. The factory keeps the code and the evidence for each acceptance criterion, and you decide what ships.
 
 **Plan → approve → implement → check → review → accept.**
 
-You select the work and approve the plan. Dark Factory runs the jobs in isolated workspaces, checks the changes, and saves the code and evidence for review. Missing acceptance evidence keeps the work incomplete.
+## Built to fit your stack
 
-The controller has a terminal operator console and a scriptable Python CLI. Task routes independently select Pi, [Claude Code](docs/claude-subscription.md) or [Codex CLI](docs/durable-execution.md). An optional Pi Durable runtime checkpoints dispatch without replacing those CLI agents or controller policy. Preapproved bounded repair continues through fresh checks and review; review packets disclose assumptions. Live-model qualification is still pending. Multi-repository work, a web UI and previews come later.
+The controller enforces scheduling, budgets, leases, and approvals. Everything specific to your tools is a replaceable adapter:
 
-[Project-scoped execution](docs/distributed-execution.md) separates the supervisor from execution workers. Pin each project's accounts, CLI/model routes and sandbox recipes; run workers locally or remotely over verified TLS. Portable assignments and verified result acknowledgements let disposable task replicas/builds be removed without deleting canonical review evidence. OCI and named VM/sandbox drivers remain independently qualified backends, not authority to provision infrastructure or change accounts.
+- **Coding agents:** Each role (planner, critic, coder, and reviewer) is routed to a harness and model. [Claude Code](docs/claude-subscription.md), [Codex CLI](docs/durable-execution.md), and [Pi](docs/pi-together.md) are supported. With Pi, you can use any provider it supports, such as Together. Routes pin the provider, account, region, and spending limit.
+- **Trackers and code hosts:** Work comes in and goes out through small JSON command adapters. GitHub adapters are included; another tracker or code host needs a script that speaks the same commands.
+- **Checks and CI/CD:** Acceptance is tied to the canonical commands you already run, such as tests, linters, and builds. Manual gates cover anything else. Results bind to the exact commit, so a passing exit code alone never counts as acceptance.
+- **Execution environments:** Workers can run locally or on [remote machines over verified TLS](docs/distributed-execution.md), under native macOS isolation. OCI and VM sandbox drivers plug into the same interface and are qualified separately.
+- **Durable runs:** Attempts are leased, budgeted, and checkpointed. An optional [durable workflow runtime](docs/durable-execution.md) checkpoints dispatch. Every workspace is archived and verified before it's removed.
+- **Prompts and skills:** Packaged defaults can be overridden per project in `factory.toml`.
+
+You drive it from a terminal console (`dark-factory tui`) or a scriptable CLI. Both work locally or against a remote controller.
+
+## Principles
+
+- **People own intent.** The factory doesn't choose the roadmap. Implementation and acceptance need recorded human decisions.
+- **Models judge; code enforces.** Models can't waive checks, expand their budget or permissions, or accept their own work.
+- **Evidence has exact inputs.** Checks and reviews are tied to the commit and environment that produced them.
+
+See the [constitution](.specify/memory/constitution.md) for the full set.
 
 ## Try it
 
@@ -22,13 +39,17 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 cp examples/factory.toml factory.toml
 dark-factory --config factory.toml demo
-dark-factory --config factory.toml tui --actor greg
+dark-factory --config factory.toml tui --actor you
 ```
 
-The demo uses simulated agents with real Git workspaces and checks. It makes no model calls and stops for review.
+The demo uses simulated agents with real Git workspaces and checks. It makes no model calls and stops for your review.
 
 Run tests with `python -m pytest -n auto`; lint and type-check with `ruff check src tests` and `mypy`.
 
-[Usage guide](docs/usage.md) · [Pi + Together](docs/pi-together.md) · [Live configuration](examples/factory-live.toml) · [Qualification status](specs/qualification.md) · [Roadmap](specs/tasks.md)
+## Status
+
+This is early. The control plane, adapters, and isolation are tested end to end with simulated and loopback providers. Live-model qualification is still pending. Multi-repository work, a web UI, and previews come later.
+
+[Usage guide](docs/usage.md) · [Live configuration](examples/factory-live.toml) · [Qualification status](specs/qualification.md) · [Roadmap](specs/tasks.md)
 
 MIT licensed.
