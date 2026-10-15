@@ -19,9 +19,11 @@ The controller enforces scheduling, budgets, leases, and approvals. Everything s
 
 You drive it from a terminal console (`dark-factory tui`) or a scriptable CLI. Both work locally or against a remote controller.
 
+![The Dark Factory terminal console: issues waiting on you, running work with stage progress, and workers](docs/images/tui-overview.png)
+
 ## Example stack
 
-One way a team might wire it up. Each stage is a route or adapter in `factory.toml`, so any piece can be swapped.
+This is just one example, and it's totally customizable. Each stage is a route or adapter in `factory.toml`, so you can swap any piece for the tools you already use.
 
 | Stage | Example tools | How it connects | Today |
 | --- | --- | --- | --- |
