@@ -1,165 +1,317 @@
-$df-background: #090b0d;
-$df-surface: #101418;
-$df-panel: #0c1013;
-$df-foreground: #d7dbd8;
-$df-muted: #79817e;
-$df-line: #26302d;
-$df-mint: #8fe3c0;
-$df-amber: #e8b86d;
-$df-blue: #79aee8;
+/* Paper "Dark Factory TUI" tokens. */
+$df-bg: #161616;
+$df-chrome: #1f1f1f;
+$df-cursor: #262626;
+$df-line: #333333;
+$df-fg: #e6e6e6;
+$df-dim: #7a7a7a;
+$df-faint: #4a4a4a;
+$df-mint: #58c4a0;
+$df-amber: #f0b84a;
+$df-blue: #8dbce8;
 
 Screen {
-    background: $df-background;
-    color: $df-foreground;
-}
-
-.screen-title {
-    height: auto;
-    min-height: 2;
+    background: $df-bg;
+    color: $df-fg;
     padding: 0 1;
-    color: $df-foreground;
-    border-bottom: solid $df-line;
+    overflow: hidden;
 }
 
-.subtle {
-    height: auto;
-    color: $df-muted;
-    padding: 0 1 1 1;
+#crumb {
+    dock: top;
+    height: 3;
+    padding: 1 0;
 }
 
-.section-label {
-    height: 1;
-    color: $df-muted;
-    margin: 0 1;
+#keybar {
+    dock: bottom;
+    height: 2;
+    border-top: solid $df-line;
+}
+
+.panel {
+    width: 1fr;
+    border: solid $df-line;
+    background: $df-bg;
+    padding: 0 1;
+}
+
+.panel:focus-within {
+    border: solid #4a4a4a;
+}
+
+OptionList {
+    background: $df-bg;
+    border: none;
+    padding: 0;
+    scrollbar-size-vertical: 1;
+    scrollbar-background: $df-bg;
+    scrollbar-color: $df-line;
+    scrollbar-color-hover: $df-faint;
+    scrollbar-color-active: $df-dim;
+}
+
+OptionList:focus {
+    border: none;
+    background-tint: transparent;
+}
+
+OptionList > .option-list--option {
+    padding: 0;
+}
+
+OptionList > .option-list--option-highlighted {
+    background: $df-bg;
+    text-style: none;
+}
+
+OptionList:focus > .option-list--option-highlighted {
+    background: $df-cursor;
+}
+
+OptionList > .option-list--option-hover {
+    background: $df-chrome;
+}
+
+OptionList > .option-list--option-disabled {
+    color: $df-fg;
+    text-style: none;
+}
+
+VerticalScroll {
+    scrollbar-size-vertical: 1;
+    scrollbar-background: $df-bg;
+    scrollbar-color: $df-line;
+}
+
+/* DF1 overview */
+#overview-body {
+    height: 1fr;
+    overflow: hidden;
+}
+
+#exec-panel {
+    height: 1fr;
+    min-height: 8;
+}
+
+#exec-head {
+    margin: 1 0 0 0;
 }
 
 #execution-table {
-    height: 2fr;
-    min-height: 8;
-    margin: 0 1;
-    background: $df-panel;
-    border: solid $df-line;
+    height: 1fr;
+}
+
+#done-today {
+    margin-bottom: 1;
+}
+
+#workers-panel {
+    height: auto;
+    max-height: 9;
+    margin-top: 1;
+}
+
+#workers-head {
+    margin-top: 1;
 }
 
 #workers-table {
-    height: 1fr;
-    min-height: 5;
-    margin: 0 1;
-    background: $df-panel;
-    border: solid $df-line;
-}
-
-#execution-table:focus, #workers-table:focus, DataTable:focus {
-    border: solid $df-blue;
-}
-
-DataTable {
-    background: $df-panel;
-    color: $df-foreground;
-}
-
-DataTable > .datatable--header {
-    color: $df-muted;
-    background: $df-surface;
-    text-style: bold;
-}
-
-DataTable > .datatable--cursor {
-    background: #192822;
-    color: $df-foreground;
-}
-
-.done-line {
-    height: 3;
-    color: $df-muted;
-    padding: 0 2;
-}
-
-Footer {
-    background: $df-surface;
-    color: $df-muted;
-}
-
-Footer > .footer--key {
-    color: $df-mint;
-}
-
-#issue-summary {
     height: auto;
-    padding: 1;
-    color: $df-amber;
+    max-height: 6;
+    margin-bottom: 1;
+}
+
+/* DF2 issue */
+#issue-body {
+    height: 1fr;
+}
+
+#issue-left {
+    width: 42%;
+    min-width: 40;
+    margin-right: 1;
+}
+
+#links {
+    height: auto;
+    padding: 1 0;
+    border-bottom: solid $df-line;
+}
+
+#steps-head {
+    margin-top: 1;
+}
+
+#steps {
+    height: auto;
+    max-height: 12;
+    margin: 1 0;
+}
+
+#acceptance-scroll {
+    height: 1fr;
+}
+
+#issue-right {
+    width: 1fr;
+}
+
+#tab-bar {
+    margin: 1 0 0 0;
+    padding-bottom: 1;
+    height: 3;
+    border-bottom: solid $df-line;
 }
 
 #issue-tabs {
     height: 1fr;
 }
 
-TabPane VerticalScroll, SettingsScreen VerticalScroll, WorkerScreen VerticalScroll {
-    padding: 1 2;
-    background: $df-panel;
+#issue-tabs > VerticalScroll {
+    padding: 1 0;
 }
 
-ContentSwitcher {
-    background: $df-panel;
+#next-line {
+    height: 3;
+    padding-top: 1;
+    border-top: solid $df-line;
 }
 
-#routes-table {
+/* DF3 settings */
+#settings-body {
     height: 1fr;
-    min-height: 9;
-    margin: 1;
-    border: solid $df-line;
 }
 
-#settings-detail {
+#settings-nav {
+    width: 28;
+    margin-right: 1;
+}
+
+#sections {
+    margin-top: 1;
+}
+
+#settings-main {
+    width: 1fr;
+}
+
+#settings-scroll {
     height: 1fr;
-    margin: 0 1;
-    border: solid $df-line;
+    padding: 1 0;
 }
 
-NewWorkScreen > Static, NewWorkScreen > Input {
-    margin: 1 2;
+#save-bar {
+    height: auto;
+    padding: 1 0;
+    border-top: solid $df-line;
+}
+
+/* DF4 new work */
+#new-work-body {
+    height: 1fr;
+}
+
+#repo-nav {
+    width: 30;
+    margin-right: 1;
+    padding-top: 1;
+}
+
+#repos {
+    margin-top: 1;
+}
+
+#issues-panel {
+    width: 1fr;
+}
+
+#issues-head {
+    margin: 1 0;
 }
 
 #candidate-table {
     height: 1fr;
-    min-height: 7;
-    margin: 0 2;
-    border: solid $df-line;
 }
 
 #new-work-summary {
-    height: 8;
-    padding: 1;
-    border: solid $df-line;
-    background: $df-panel;
-}
-
-#done-table, #all-workers {
-    height: 1fr;
-    margin: 1;
-    border: solid $df-line;
-}
-
-#worker-detail {
-    height: 1fr;
-    margin: 1;
-    border: solid $df-line;
+    height: auto;
+    padding: 1 0;
+    border-top: solid $df-line;
 }
 
 Input {
-    background: $df-surface;
-    border: tall $df-line;
+    background: $df-chrome;
+    border: none;
+    height: 1;
+    padding: 0 1;
+    margin-bottom: 1;
 }
 
 Input:focus {
-    border: tall $df-mint;
+    border: none;
+    background: $df-cursor;
 }
 
-Tabs {
-    background: $df-surface;
-    color: $df-muted;
+/* Lists, workers and hosts */
+#done-table, #all-workers {
+    height: 1fr;
+    margin: 1 0;
 }
 
-Tab.-active {
-    color: $df-mint;
+#worker-body {
+    height: 1fr;
+}
+
+#host-panel {
+    width: 42%;
+    margin-right: 1;
+    padding-top: 1;
+}
+
+#assignment-panel {
+    width: 1fr;
+    padding-top: 1;
+}
+
+/* Dialogs */
+ModalScreen {
+    align: center middle;
+    background: rgba(0, 0, 0, 0.6);
+}
+
+.dialog {
+    width: 72;
+    height: auto;
+    max-height: 32;
+    border: solid $df-faint;
+    background: $df-chrome;
+    padding: 1 2;
+}
+
+.dialog Input {
+    margin: 1 0;
+}
+
+.dialog-keys {
+    margin-top: 1;
+}
+
+.dialog-buttons {
+    height: auto;
+    margin-top: 1;
+}
+
+.dialog-buttons Button {
+    min-width: 10;
+    height: 1;
+    border: none;
+    margin-right: 2;
+    background: $df-cursor;
+    color: $df-fg;
+}
+
+Toast {
+    background: $df-chrome;
 }

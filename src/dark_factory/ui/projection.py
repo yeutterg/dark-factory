@@ -108,10 +108,93 @@ def _candidate_diff(
     return data[:limit].decode("utf-8", errors="replace") + suffix
 
 
+def _steps(controller: Controller, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per planned job with its latest attempt and recorded spend."""
+
+    steps = []
+    for job in jobs:
+        spec = _json(job["spec_json"], {})
+        attempts = controller.store.query(
+            """SELECT id,status,worker_id,route_id,started_at,ended_at,deadline,
+            cost_cents,error FROM attempts WHERE job_id=? ORDER BY started_at,id""",
+            (job["id"],),
+        )
+        latest = dict(attempts[-1]) if attempts else {}
+        steps.append(
+            {
+                "id": job["id"],
+                "name": spec.get("job_id") or job["kind"],
+                "kind": job["kind"],
+                "status": job["status"],
+                "repair": bool(spec.get("repair")),
+                "role": spec.get("role"),
+                "checks": spec.get("check_names", []),
+                "budget_cents": spec.get("budget_cents", 0),
+                "timeout_seconds": spec.get("timeout_seconds", 0),
+                "attempt_count": len(attempts),
+                "spent_cents": sum(a["cost_cents"] or 0 for a in attempts),
+                "attempt_id": latest.get("id"),
+                "attempt_status": latest.get("status"),
+                "worker_id": latest.get("worker_id") or job["worker_id"],
+                "route_id": latest.get("route_id"),
+                "started_at": latest.get("started_at"),
+                "ended_at": latest.get("ended_at"),
+                "deadline": latest.get("deadline"),
+                "error": latest.get("error"),
+            }
+        )
+    return steps
+
+
+def _summary(row: Any, steps: list[dict[str, Any]], next_action: dict) -> list[str]:
+    """Up to three plain-language lines for an item that needs a person."""
+
+    status = row["status"]
+    proposal = _json(row["plan_json"], {}).get("proposal", {})
+    lines: list[str] = []
+    if status == "awaiting_approval":
+        if proposal.get("what"):
+            lines.append(str(proposal["what"]))
+        planned = [s for s in steps if not s["repair"]]
+        reserve = len(steps) - len(planned)
+        line = f"{len(planned)} steps within {_cents(row['spending_ceiling_cents'])}."
+        if reserve:
+            line += " One fix is held in reserve inside the same budget."
+        lines.append(line)
+        assumptions = proposal.get("assumptions") or []
+        if assumptions:
+            lines.append("Assumes " + str(assumptions[0]).rstrip(".") + ".")
+    elif status == "awaiting_review":
+        if proposal.get("what"):
+            lines.append(str(proposal["what"]))
+        if next_action.get("kind") == "human_review":
+            lines.append("All automated checks and the independent review passed.")
+        elif next_action.get("reason"):
+            lines.append(str(next_action["reason"]).capitalize() + ".")
+    elif status == "selected":
+        lines.append("Not planned yet. Planning reads the issue and proposes steps.")
+    elif next_action.get("kind") == "blocked":
+        failed = next(
+            (s for s in steps if s["status"] in {"failed", "timed_out"}), None
+        )
+        if failed and failed.get("error"):
+            lines.append(f"{failed['name']} stopped: {failed['error']}")
+        elif next_action.get("reason"):
+            lines.append(str(next_action["reason"]).capitalize() + ".")
+        if next_action.get("next_step"):
+            lines.append(str(next_action["next_step"]))
+    return lines[:3]
+
+
+def _cents(cents: int) -> str:
+    return f"${cents / 100:,.2f}"
+
+
 def _work_item(
     controller: Controller, row: Any, include_detail: bool = False
 ) -> dict[str, Any]:
     jobs = controller.jobs(row["id"])
+    steps = _steps(controller, jobs)
     continuation = controller.continuation(row["id"])
     work = continuation["work"]
     active = next((item for item in work if item["state"] == "running"), None)
@@ -184,8 +267,14 @@ def _work_item(
         "jobs_complete": complete,
         "jobs_total": total,
         "current_job": current["kind"] if current else "",
-        "progress_visible": status not in TERMINAL
-        and status not in {"approved", "awaiting_approval", "awaiting_review"},
+        "progress_visible": status not in {"accepted", "cancelled"},
+        "plan_version": row["plan_version"],
+        "approved_at": row["approved_at"],
+        "steps": steps,
+        "summary": _summary(row, steps, next_action),
+        "acceptance": controller.coverage(row["id"])
+        if include_detail and row["snapshot_json"] and row["plan_json"]
+        else [],
         "lane": "done"
         if status == "accepted"
         else "needs_you"
@@ -257,6 +346,17 @@ def controller_projection(
                     "environments": configured.get("environments", []),
                     "lease_seconds": lease_seconds,
                     "active": dict(active) if active else None,
+                    "recent": [
+                        dict(recent)
+                        for recent in controller.store.query(
+                            """SELECT a.status,a.ended_at,a.error,j.kind,w.title,
+                            w.external_id FROM attempts a JOIN jobs j ON j.id=a.job_id
+                            JOIN work_items w ON w.id=j.work_item_id
+                            WHERE a.worker_id=? AND a.ended_at IS NOT NULL
+                            ORDER BY a.ended_at DESC LIMIT 5""",
+                            (worker_id,),
+                        )
+                    ],
                 }
             )
         routes = [_safe_route(route) for route in controller.cfg.routes.values()]

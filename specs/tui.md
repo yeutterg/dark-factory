@@ -10,8 +10,9 @@ CLI. It never opens a remote controller's SQLite state.
 
 - **DF1 overview** groups roots into needs-you, running, and done-today sections,
   followed by a separately scrollable workers pane. Keyboard help remains in the
-  footer. Terminal approved, accepted, and done rows have no progress rail. The
-  done-today section is a count and `d show`, with no checkboxes or trailing rows.
+  footer. Every open item shows a seven-stage rail (plan → accept) coloured by who
+  must act; accepted and cancelled items have none. The done-today section is a
+  count and `d show`, with no checkboxes or trailing rows.
 - **DF2 issue** exposes activity, plan, critique, changes, checks, review, and full
   log tabs. Human approval, rejection, and acceptance use controller commands.
   Budget exhaustion is a paused state with explicit continuation guidance; the UI
@@ -33,10 +34,19 @@ CLI. It never opens a remote controller's SQLite state.
 - `j`/`k` moves within the focused list; Tab changes focus between independently
   scrollable execution and worker panes.
 - `Enter` opens the selected root or worker. `i`, `w`, and `s` open new work,
-  workers, and settings. `Esc` returns to the overview. `?` shows keys.
+  workers, and settings from every screen. `Esc` returns to the overview. `?`
+  shows keys.
+- On a needs-you item, `y` approves a plan, accepts a result, or starts planning;
+  `n` rejects and asks why; `m` records a manual check. On an issue, `1`–`7`
+  switch tabs, `c` stops the running step, `gi`/`gb`/`gp` open GitHub links, and
+  `]f`/`[f` move between changed files.
+- In new work, `space` or `Enter` toggles the highlighted complete root, `/`
+  filters or adds an explicit `owner/repo#number`, and `y` starts planning.
 - `P`, `D`, and `R` invoke pause/resume, drain/undrain, and recovery through the
   command boundary. Destructive or human-decision actions require a confirmation
   modal and a named actor.
+- Settings `Enter` opens the local `factory.toml` in `$VISUAL`/`$EDITOR`, then
+  offers a validated reload. Remote consoles cannot edit configuration.
 - The projection contains operational facts and credential references only; no
   credential value is serialized.
 

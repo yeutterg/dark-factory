@@ -9,13 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from test_loop import cfg_for
-from textual.widgets import Input
 
 from dark_factory.api import serve
 from dark_factory.controller import Controller, ControllerError
 from dark_factory.store import Store, now_iso
 from dark_factory.ui.app import (
     DarkFactoryApp,
+    IssueScreen,
     NewWorkScreen,
     OverviewScreen,
     SettingsScreen,
@@ -89,7 +89,8 @@ def test_projection_hides_terminal_progress_and_counts_done_today(tmp_path):
         by_id = {item["id"]: item for item in projection["items"]}
         assert by_id[selected]["progress_visible"] is True
         assert by_id[accepted]["progress_visible"] is False
-        assert by_id[approved]["progress_visible"] is False
+        assert by_id[approved]["progress_visible"] is True
+        assert by_id[selected]["steps"] == []
         assert by_id[accepted]["lane"] == "done"
         assert projection["done_today"] == 1
         assert projection["workers"][0]["id"] == "worker-a"
@@ -306,8 +307,14 @@ def test_overview_panes_scroll_independently_and_navigate():
             assert isinstance(app.screen, OverviewScreen)
             assert app.focused is not None
             assert app.focused.id == "execution-table"
-            await pilot.press("j")
-            assert app.focused.cursor_row == 1
+            assert app.focused.highlighted_option.id == "work_1"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, IssueScreen)
+            assert app.screen.work_item_id == "work_1"
+            await pilot.press("escape")
+            await pilot.pause()
+            assert isinstance(app.screen, OverviewScreen)
             await pilot.press("tab")
             assert app.focused is not None
             assert app.focused.id == "workers-table"
@@ -320,10 +327,57 @@ def test_overview_panes_scroll_independently_and_navigate():
             assert isinstance(app.screen, OverviewScreen)
             await pilot.press("i")
             await pilot.pause()
-            assert isinstance(app.screen, NewWorkScreen)
-            await pilot.press("shift+tab", "space")
-            field = app.screen.query_one("#issue-input", Input)
-            assert field.value == "example/project#13"
+            screen = app.screen
+            assert isinstance(screen, NewWorkScreen)
+            assert app.focused is not None
+            assert app.focused.id == "candidate-table"
+            await pilot.press("space")
+            assert screen.selected == ["example/project#13"]
+            await pilot.press("enter")
+            assert screen.selected == []
+            await pilot.press("enter", "y")
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause()
+            assert (
+                "intake",
+                {"issues": [{"repo": "example/project", "number": 13}]},
+                "greg",
+            ) in transport.commands
+
+    asyncio.run(exercise())
+
+
+def test_issue_screen_decisions_and_github_keys():
+    async def exercise() -> None:
+        transport = FixtureTransport()
+        app = DarkFactoryApp(transport, "greg")
+        opened: list[str] = []
+        app.open_url = lambda url, **_: opened.append(url)  # type: ignore[method-assign]
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, IssueScreen)
+            await pilot.press("g", "i")
+            assert opened == ["https://example.test/12"]
+            assert isinstance(app.screen, IssueScreen)
+            await pilot.press("4")
+            assert app.screen.tab == "changes"
+            await pilot.press("y")
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause()
+            assert ("approve", {"work_item_id": "work_1"}, "greg") in transport.commands
+            await pilot.press("n")
+            await pilot.pause()
+            await pilot.press(*"scope too wide", "enter")
+            await pilot.pause()
+            assert (
+                "reject",
+                {"work_item_id": "work_1", "reason": "scope too wide"},
+                "greg",
+            ) in transport.commands
 
     asyncio.run(exercise())
 
@@ -353,8 +407,9 @@ def test_primary_screens_mount_in_compact_terminal():
             for key in ("s", "escape", "i", "escape", "w"):
                 await pilot.press(key)
                 await pilot.pause()
-            assert app.screen.size.width == 80
-            assert app.screen.size.height == 24
+            assert app.size == (80, 24)
+            keybar = app.screen.query_one("#keybar")
+            assert keybar.region.bottom == 24
 
     asyncio.run(exercise())
 
