@@ -94,6 +94,14 @@ COMMANDS: dict[str, OperatorCommand] = {
             api=False,
         ),
         OperatorCommand(
+            "pr-evidence",
+            lambda c, p, a: c.read_pr_evidence(
+                p.get("work_item_id"), p.get("number"), a
+            ),
+            ("work_item_id", "number"),
+            render=_pretty,
+        ),
+        OperatorCommand(
             "accept",
             lambda c, p, a: c.accept(p.get("work_item_id"), a),
             ("work_item_id",),

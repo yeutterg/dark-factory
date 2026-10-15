@@ -224,6 +224,7 @@ class PlanningMixin(ControllerCore):
             "policy": self._policy(),
             "simulation": simulation,
             "manual_acceptance": source.get("manual_acceptance", []),
+            "external_acceptance": source.get("external_acceptance", []),
             "deadline": (
                 datetime.now(UTC) + timedelta(seconds=self.cfg.max_seconds)
             ).isoformat(),
@@ -268,6 +269,8 @@ class PlanningMixin(ControllerCore):
             "commands": bindings,
             "allowed_paths": source["allowed_paths"],
             "protected_paths": source.get("protected_paths", []),
+            "manual_acceptance": snapshot["manual_acceptance"],
+            "external_acceptance": snapshot["external_acceptance"],
             "repair_policy": {
                 "max_repairs": self.cfg.max_repairs,
                 "shared_scope_budget_deadline": True,

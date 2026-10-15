@@ -38,6 +38,8 @@ Only `macos-sandbox` admits live Pi. The qualified native profile denies reads o
 
 Select the complete root outcome. The GitHub adapter reads parent relationships and child counts; caller flags cannot turn a live child into a root. Bootstrap rejects child-only selection and roots with required children because child-graph execution is not implemented yet. Preserve the root and use an appropriate orchestration path; do not substitute one child to fit bootstrap. Standalone single-repository outcomes remain supported. Custom tracker commands must supply truthful `parent_id`, `is_root` and `required_child_count` metadata; unresolved relationships must fail rather than imply a root.
 
+`discover` lists open issues carrying the `selected` label. To also take work from GitHub Projects, add `--project owner/number` (repeatable) to the tracking command's argv, plus `--theme-field <name>` if the board's theme field isn't called `Theme`. Discovery then lists open issues on those boards from configured repositories, with each item's project, status and theme; the TUI groups new work by project and theme. Project boards need a token with the `read:project` scope, and an unreadable board fails discovery instead of being skipped. Projects only change what is listed: intake, root scope and planning are the same.
+
 Supply selected issues as JSON. With `repo` and `number`, the GitHub adapter reads the real issue. A supplied `title` explicitly selects caller-provided fixture data and is labeled in intake evidence.
 
 ```bash
@@ -65,7 +67,17 @@ dark-factory --config factory.toml manual-gate <work-item-id> \
 dark-factory --config factory.toml accept <work-item-id> --actor greg
 ```
 
-Acceptance does not perform a merge or release. Projects that require merge before acceptance must declare and record that manual gate. Bootstrap leaves Git publishing, merge authorization and installation upgrades with the operator. To create a draft PR for an already published candidate branch, `create-pr <work-item-id> --payload-json pr.json --actor greg` uses an exact `repo`, `head`, `base`, `head_sha`, `title` and `body`. The action is recorded before writing, reconciled after ambiguous failures, and verified by read-back. Changed PR heads require a new decision. `inspect_pr` returns observed checks/statuses and explicitly leaves branch/ruleset requirements to the human merger; it cannot waive them.
+Acceptance does not perform a merge or release. Projects that require merge before acceptance must declare and record that manual gate. Bootstrap leaves Git publishing, merge authorization and installation upgrades with the operator. To create a draft PR for an already published candidate branch, `create-pr <work-item-id> --payload-json pr.json --actor greg` uses an exact `repo`, `head`, `base`, `head_sha`, `title` and `body`. The action is recorded before writing, reconciled after ambiguous failures, and verified by read-back. Changed PR heads require a new decision. `inspect_pr` returns observed checks, statuses, reviews and review comments, and explicitly leaves branch/ruleset requirements to the human merger; it cannot waive them.
+
+### Outside reviews as evidence
+
+A source can require outside reviewers or CI before acceptance with `external_acceptance`, for example `["Cursor Bugbot", "devin-ai-integration[bot]", "ci/build"]`. The list is frozen into the plan snapshot, so it is part of what you approve. Each name matches a PR check run, a commit status context or a reviewer login. Once the candidate is on a PR, read it:
+
+```bash
+dark-factory --config factory.toml pr-evidence <work-item-id> --number 42 --actor greg
+```
+
+`--number` defaults to the PR opened by `create-pr`. The PR head must be the exact reviewed candidate, or nothing is recorded. A name passes only when every matching source passes on that commit: the latest check run concluded `success`, the status is `success`, or the reviewer's latest review of that commit is `APPROVED`. Comments alone never pass, so reviewers that only comment should report a check or status. `accept` refuses while any required name is missing or failing, and the result packet lists outside reviews, their comments and `external:` missing evidence. Read the PR again after new pushes or reviews; in the TUI, `o` does this.
 
 ## Claude subscription planning
 

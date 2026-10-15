@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from test_loop import cfg_for
+from textual.widgets import OptionList
 
 from dark_factory.api import serve
 from dark_factory.controller import Controller, ControllerError
@@ -280,6 +281,8 @@ class FixtureTransport(OperatorTransport):
         if name == "pause":
             self.data["dispatch"]["pause"] = "on"
             self.data["dispatch"]["allowed"] = False
+        if name == "pr-evidence":
+            return {"remaining": ["Cursor Bugbot"]}
         if name == "discover":
             return {
                 "items": [
@@ -432,3 +435,119 @@ def test_tui_quit_bindings_exit_cleanly():
 
     asyncio.run(exercise("ctrl+q"))
     asyncio.run(exercise("ctrl+c"))
+
+
+def test_issue_screen_reads_outside_reviews_before_accepting():
+    async def exercise() -> None:
+        transport = FixtureTransport()
+        item = transport.data["items"][0]
+        item.update(
+            status="awaiting_review",
+            lane="needs_you",
+            next_action={"kind": "human_review"},
+            packet={
+                "manual_remaining": [],
+                "external_remaining": ["Cursor Bugbot"],
+                "external_reviews": {
+                    "required": [
+                        {
+                            "name": "Cursor Bugbot",
+                            "passed": False,
+                            "observed": [
+                                {
+                                    "source": "check",
+                                    "passed": False,
+                                    "detail": "failure",
+                                }
+                            ],
+                        }
+                    ],
+                    "remaining": ["Cursor Bugbot"],
+                    "pr": {
+                        "number": 42,
+                        "url": "https://example.test/pull/42",
+                        "read_at": "2026-10-15T08:00:00+00:00",
+                        "read_by": "greg",
+                    },
+                    "reviews": [],
+                    "comments": [
+                        {
+                            "author": "cursor[bot]",
+                            "path": "app.py",
+                            "line": 3,
+                            "body": "Bug",
+                        }
+                    ],
+                },
+            },
+        )
+        app = DarkFactoryApp(transport, "greg")
+        opened: list[str] = []
+        app.open_url = lambda url, **_: opened.append(url)  # type: ignore[method-assign]
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, IssueScreen)
+            await pilot.press("g", "p")
+            assert opened == ["https://example.test/pull/42"]
+            review = app.screen.query_one("#issue-review").render()
+            assert "Cursor Bugbot" in str(review)
+            assert "cursor[bot]" in str(review)
+            await pilot.press("o")
+            await pilot.pause()
+            assert (
+                "pr-evidence",
+                {"work_item_id": "work_1", "number": 42},
+                "greg",
+            ) in transport.commands
+            await pilot.press("y")
+            await pilot.pause()
+            assert not any(name == "accept" for name, *_ in transport.commands)
+
+    asyncio.run(exercise())
+
+
+def test_new_work_groups_project_issues_by_theme():
+    async def exercise() -> None:
+        transport = FixtureTransport()
+        board = {
+            "id": "example/3",
+            "title": "Roadmap",
+            "url": "https://example.test/projects/3",
+            "status": "Todo",
+            "theme": "Reliability",
+        }
+        original = transport.command
+
+        def command(name, params=None, actor="operator"):
+            result = original(name, params, actor)
+            if name == "discover":
+                result["items"][0]["project"] = board
+            return result
+
+        transport.command = command  # type: ignore[method-assign]
+        app = DarkFactoryApp(transport, "greg")
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("i")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, NewWorkScreen)
+            sources = screen.query_one("#repos", OptionList)
+            ids = [
+                sources.get_option_at_index(i).id for i in range(sources.option_count)
+            ]
+            assert ids[:3] == [
+                "all",
+                "project:example/3",
+                "theme:example/3|Reliability",
+            ]
+            sources.highlighted = 1
+            await pilot.pause()
+            assert screen.repo == "project:example/3"
+            table = screen.query_one("#candidate-table", OptionList)
+            assert table.get_option_at_index(0).id == "heading:Reliability"
+            assert "Todo" in str(table.get_option_at_index(1).prompt)
+
+    asyncio.run(exercise())

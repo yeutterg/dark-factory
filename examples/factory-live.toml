@@ -56,12 +56,15 @@ checks = ["verify"]
 allowed_paths = ["src"]
 protected_paths = ["tests", "pyproject.toml", "AGENTS.md"]
 manual_acceptance = ["Inspect candidate diff", "Confirm authorized human merge"]
+# Optional: PR checks, statuses or reviewer logins that must pass on the candidate.
+# external_acceptance = ["Cursor Bugbot", "devin-ai-integration[bot]"]
 
 [commands.verify]
 argv = ["/opt/homebrew/bin/python3.12", "-m", "unittest", "discover", "-s", "tests"]
 timeout_seconds = 300
 
 [commands.tracking]
+# Add "--project", "owner/number" to also list open issues from a GitHub Project.
 argv = ["python3", "-m", "dark_factory.adapters.projects.github"]
 timeout_seconds = 60
 

@@ -60,9 +60,16 @@ def handle(request):
         sha = pr["head"]["sha"]
         checks = api(f"repos/{repo}/commits/{sha}/check-runs?per_page=100")
         statuses = api(f"repos/{repo}/commits/{sha}/status?per_page=100")
-        if checks.get("total_count", 0) > 100 or statuses.get("total_count", 0) > 100:
+        reviews = api(f"repos/{repo}/pulls/{number}/reviews?per_page=100")
+        comments = api(f"repos/{repo}/pulls/{number}/comments?per_page=100")
+        if (
+            checks.get("total_count", 0) > 100
+            or statuses.get("total_count", 0) > 100
+            or len(reviews) >= 100
+            or len(comments) >= 100
+        ):
             raise ContractError(
-                "check pagination exceeds bootstrap limit; required evidence incomplete"
+                "check or review pagination exceeds bootstrap limit; required evidence incomplete"
             )
         result["evidence"] = {
             "external_id": f"github:{repo}:pr:{number}",
@@ -75,6 +82,29 @@ def handle(request):
             "mergeable": pr["mergeable"],
             "checks": checks["check_runs"],
             "statuses": statuses["statuses"],
+            "reviews": [
+                {
+                    "author": (review.get("user") or {}).get("login", ""),
+                    "state": review.get("state", ""),
+                    "commit_id": review.get("commit_id", ""),
+                    "submitted_at": review.get("submitted_at", ""),
+                    "body": review.get("body") or "",
+                    "url": review.get("html_url", ""),
+                }
+                for review in reviews
+            ],
+            "review_comments": [
+                {
+                    "author": (comment.get("user") or {}).get("login", ""),
+                    "path": comment.get("path", ""),
+                    "line": comment.get("line") or comment.get("original_line"),
+                    "commit_id": comment.get("commit_id", ""),
+                    "created_at": comment.get("created_at", ""),
+                    "body": comment.get("body") or "",
+                    "url": comment.get("html_url", ""),
+                }
+                for comment in comments
+            ],
             "required_check_policy": "unknown; GitHub branch/ruleset requirements must be checked by the human merger",
         }
     elif op in {"create_pr", "reconcile_create_pr"}:

@@ -17,8 +17,115 @@ from dark_factory.models import (
 from dark_factory.store import now_iso
 
 
+def _latest(entries, key):
+    return max(entries, key=lambda entry: str(entry.get(key) or ""), default=None)
+
+
+def assess_external(names, evidence, sha):
+    """Judge each required outside check or reviewer on the exact candidate only.
+
+    A name matches a check run, a commit status context or a reviewer login. Every
+    kind that matches must pass: the latest check run concluded ``success``, the
+    status is ``success``, or the reviewer's latest review of this commit is
+    ``APPROVED``. Comments alone never pass.
+    """
+    results = []
+    for name in names:
+        found = []
+        if evidence and evidence.get("head_sha") == sha:
+            run = _latest(
+                [c for c in evidence.get("checks", []) if c.get("name") == name],
+                "started_at",
+            )
+            if run:
+                found.append(
+                    {
+                        "source": "check",
+                        "passed": run.get("status") == "completed"
+                        and run.get("conclusion") == "success",
+                        "detail": run.get("conclusion") or run.get("status") or "",
+                        "url": run.get("html_url", ""),
+                    }
+                )
+            status = _latest(
+                [s for s in evidence.get("statuses", []) if s.get("context") == name],
+                "updated_at",
+            )
+            if status:
+                found.append(
+                    {
+                        "source": "status",
+                        "passed": status.get("state") == "success",
+                        "detail": status.get("state", ""),
+                        "url": status.get("target_url") or "",
+                    }
+                )
+            review = _latest(
+                [
+                    r
+                    for r in evidence.get("reviews", [])
+                    if str(r.get("author", "")).lower() == name.lower()
+                    and r.get("commit_id") == sha
+                    and r.get("state") in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}
+                ],
+                "submitted_at",
+            )
+            if review:
+                found.append(
+                    {
+                        "source": "review",
+                        "passed": review.get("state") == "APPROVED",
+                        "detail": review.get("state", "").lower().replace("_", " "),
+                        "url": review.get("url", ""),
+                    }
+                )
+        results.append(
+            {
+                "name": name,
+                "passed": bool(found) and all(f["passed"] for f in found),
+                "observed": found,
+            }
+        )
+    return results
+
+
 class ReviewMixin(ControllerCore):
     """Compute completion from candidate-bound facts and record acceptance."""
+
+    def _external(self, wid, row=None):
+        """Outside reviews recorded for the current candidate, judged by code."""
+        row = row or self.store.one("SELECT * FROM work_items WHERE id=?", (wid,))
+        snapshot = json.loads(row["snapshot_json"] or "{}")
+        names = snapshot.get("external_acceptance", [])
+        sha = (
+            json.loads(row["candidate_commits"] or "{}")
+            .get(row["repo"], {})
+            .get("commit")
+        )
+        recorded = (
+            self.store.one(
+                "SELECT * FROM external_reviews WHERE root_id=? AND candidate=?",
+                (wid, sha),
+            )
+            if sha
+            else None
+        )
+        evidence = json.loads(recorded["payload_json"]) if recorded else None
+        results = assess_external(names, evidence, sha)
+        return {
+            "required": results,
+            "remaining": [r["name"] for r in results if not r["passed"]],
+            "pr": {
+                "number": recorded["pr_number"],
+                "url": recorded["url"],
+                "read_at": recorded["at"],
+                "read_by": recorded["actor"],
+            }
+            if recorded
+            else None,
+            "reviews": evidence.get("reviews", []) if evidence else [],
+            "comments": evidence.get("review_comments", []) if evidence else [],
+        }
 
     def _packet(self, wid, error=None):
         row = self.store.one("SELECT * FROM work_items WHERE id=?", (wid,))
@@ -60,6 +167,7 @@ class ReviewMixin(ControllerCore):
         for candidate in candidate_map.values():
             candidate["archive"] = str(self.store.resolve_path(candidate["archive"]))
             candidate["diff"] = str(Path(candidate["archive"]) / "diff.patch")
+        external = self._external(wid, row)
         assumptions = list(plan.get("proposal", {}).get("assumptions", []))
         implementation_assumptions_recorded = False
         if candidate_sha:
@@ -94,6 +202,7 @@ class ReviewMixin(ControllerCore):
                     for name in snapshot["manual_acceptance"]
                     if name not in completed_gates
                 ],
+                "remaining_outside_reviews": external["remaining"],
             },
             "What changed": row["title"],
             "What to review": "Exact candidate diff, canonical checks and fresh independent review in the archives.",
@@ -142,6 +251,8 @@ class ReviewMixin(ControllerCore):
                 for name in snapshot["manual_acceptance"]
                 if name not in completed_gates
             ],
+            "external_reviews": external,
+            "external_remaining": external["remaining"],
             "missing_evidence": [
                 missing
                 for criterion in self.coverage(wid)
@@ -151,7 +262,8 @@ class ReviewMixin(ControllerCore):
                 "manual:" + name
                 for name in snapshot["manual_acceptance"]
                 if name not in completed_gates
-            ],
+            ]
+            + ["external:" + name for name in external["remaining"]],
             "error": error,
             "recommended_next_step": "Accepted candidate; retain the review and recovery artifacts."
             if row["status"] == "accepted"
@@ -403,6 +515,11 @@ class ReviewMixin(ControllerCore):
             )
             if not gate or not gate["passed"]:
                 raise ControllerError(f"manual gate missing: {name}")
+        remaining = self._external(work_item_id, row)["remaining"]
+        if remaining:
+            raise ControllerError(
+                "outside review missing on this candidate: " + ", ".join(remaining)
+            )
         coverage = self.coverage(work_item_id)
         if not coverage or any(c["status"] != "verified" for c in coverage):
             raise ControllerError("approved acceptance criteria remain incomplete")

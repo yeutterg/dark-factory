@@ -145,6 +145,7 @@ def test_candidate_discovery_is_read_only_bounded_and_scope_aware(monkeypatch):
             "is_root": True,
             "parent_id": None,
             "required_child_count": 0,
+            "project": None,
         }
     ]
     assert observed == ["graphql"]

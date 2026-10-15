@@ -572,6 +572,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
                 "allowed_paths",
                 "protected_paths",
                 "manual_acceptance",
+                "external_acceptance",
                 "require_live_evidence",
                 "ephemeral_paths",
             },
@@ -590,6 +591,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             "allowed_paths",
             "protected_paths",
             "manual_acceptance",
+            "external_acceptance",
             "ephemeral_paths",
         ):
             values = source.get(key, [])

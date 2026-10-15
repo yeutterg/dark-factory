@@ -135,6 +135,13 @@ class DarkFactoryApp(App[None]):
                     severity="warning",
                 )
                 return
+            outside = item.get("packet", {}).get("external_remaining", [])
+            if outside:
+                self.notify(
+                    f"Waiting on {', '.join(outside)} in the PR; o reads it again",
+                    severity="warning",
+                )
+                return
             await self.confirm_command(
                 "accept",
                 f"Accept {number} as it is? Merging stays with you.",
@@ -213,6 +220,53 @@ class DarkFactoryApp(App[None]):
                 f"What did you check for “{gate}”?", "What you inspected and saw"
             ),
             run,
+        )
+
+    async def read_outside_reviews(self, item: dict[str, Any]) -> None:
+        if item["status"] != "awaiting_review":
+            self.notify(
+                "Outside reviews are read once the result is ready",
+                severity="warning",
+            )
+            return
+        pr = (item.get("packet", {}).get("external_reviews") or {}).get("pr")
+
+        async def run(number: int | None) -> bool:
+            """Read the PR; False when the controller needs a PR number."""
+            try:
+                result = await self._run(
+                    "pr-evidence", {"work_item_id": item["id"], "number": number}
+                )
+            except (ControllerError, OSError, ValueError) as exc:
+                if number is None and "name the pull request" in str(exc):
+                    return False
+                self.notify(str(exc), severity="error", timeout=8)
+                return True
+            waiting = result.get("remaining", [])
+            self.notify(
+                f"Still waiting on {', '.join(waiting)}"
+                if waiting
+                else "Outside reviews passed on this candidate"
+            )
+            return True
+
+        # A known PR, or one opened by create-pr, is read without asking.
+        if await run(pr["number"] if pr else None):
+            return
+
+        async def ask(answer: str | None) -> None:
+            digits = (answer or "").strip().lstrip("#")
+            if digits.isdigit():
+                await run(int(digits))
+            elif digits:
+                self.notify("Enter a PR number", severity="warning")
+
+        self.push_screen(
+            TextPrompt(
+                f"Which pull request holds the candidate for #{item['number']}?",
+                "PR number, e.g. 42",
+            ),
+            ask,
         )
 
     async def start_planning(self, issues: list[dict[str, Any]]) -> None:

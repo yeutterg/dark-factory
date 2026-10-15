@@ -76,6 +76,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_pr.add_argument("work_item_id")
     p_pr.add_argument("--payload-json", required=True)
     p_pr.add_argument("--actor", required=True)
+    p_evidence = sub.add_parser(
+        "pr-evidence",
+        help="Read a PR's checks and reviews as outside evidence for the candidate",
+    )
+    p_evidence.add_argument("work_item_id")
+    p_evidence.add_argument(
+        "--number", type=int, help="PR number; default is the PR made by create-pr"
+    )
+    p_evidence.add_argument("--actor", default="operator")
     p_cancel = sub.add_parser("cancel")
     p_cancel.add_argument("job_id")
     p_run = sub.add_parser("run-worker")
@@ -108,6 +117,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_adapter = sub.add_parser("adapter")
     p_adapter.add_argument("name", choices=["github-tracking", "github-codehost"])
+    p_adapter.add_argument(
+        "adapter_args",
+        nargs=argparse.REMAINDER,
+        help="tracking options such as --project owner/number",
+    )
     demo = sub.add_parser("demo")
     demo.add_argument(
         "--issues-json", help="optional issues file; default uses a fixture"
@@ -174,7 +188,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         if args.name == "github-tracking":
             from dark_factory.adapters.projects.github import main as tracking_main
 
-            tracking_main()
+            tracking_main(args.adapter_args)
             return 0
         from dark_factory.adapters.git.github import main as git_main
 

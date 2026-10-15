@@ -227,6 +227,10 @@ class Store:
             root_id TEXT NOT NULL, candidate TEXT NOT NULL, name TEXT NOT NULL,
             actor TEXT NOT NULL, at TEXT NOT NULL, passed INTEGER NOT NULL,
             evidence TEXT NOT NULL, PRIMARY KEY(root_id, candidate, name));
+        CREATE TABLE IF NOT EXISTS external_reviews (
+            root_id TEXT NOT NULL, candidate TEXT NOT NULL, pr_number INTEGER NOT NULL,
+            url TEXT NOT NULL, actor TEXT NOT NULL, at TEXT NOT NULL,
+            payload_json TEXT NOT NULL, PRIMARY KEY(root_id, candidate));
         """)
         # Jobs created before these columns existed carry the same facts in spec_json
         # and a numeric position prefix in their identifier.

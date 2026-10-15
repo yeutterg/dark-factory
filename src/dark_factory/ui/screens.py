@@ -168,6 +168,7 @@ class Help(ModalScreen[None]):
             ("gi gb gp", "open the issue, branch or pull request on GitHub"),
             ("c", "stop the running step"),
             ("m", "record a manual check"),
+            ("o", "read checks and reviews from the PR"),
             ("i", "new work"),
             ("w", "workers"),
             ("s", "settings"),
@@ -534,6 +535,55 @@ def _paragraph(title: str, value: Any) -> Text:
     return out
 
 
+def _outside_reviews(item: dict[str, Any]) -> Text:
+    """Outside checks and reviewers from the PR, judged on the exact candidate."""
+
+    external = item.get("packet", {}).get("external_reviews") or {}
+    required = external.get("required") or []
+    out = Text()
+    if not required and not external.get("reviews") and not external.get("comments"):
+        return out
+    pr = external.get("pr")
+    out.append("outside reviews", style=f"bold {r.DIM}")
+    out.append(
+        f"  PR #{pr['number']} · read {pr['read_at'][11:16]}\n"
+        if pr
+        else "  not read yet · o reads the PR\n",
+        style=r.DIM,
+    )
+    for result in required:
+        seen = result.get("observed") or []
+        if result["passed"]:
+            glyph, style = "✓", r.MINT
+        elif seen:
+            glyph, style = "×", r.HAZARD
+        else:
+            glyph, style = "○", r.DIM
+        out.append(f"{glyph} ", style=style)
+        out.append(result["name"], style=r.FG)
+        detail = " · ".join(f"{o['source']} {o['detail']}".strip() for o in seen)
+        out.append(
+            f"  {detail or 'nothing on this commit yet'}\n",
+            style=r.DIM,
+        )
+    comments = external.get("comments") or []
+    reviews = [rv for rv in external.get("reviews") or [] if rv.get("body")]
+    if reviews or comments:
+        out.append(f"\n{len(reviews) + len(comments)} comments\n", style=r.DIM)
+    for review in reviews:
+        out.append(f"  {review['author']}", style=r.FG)
+        out.append(f"  {review['state'].lower().replace('_', ' ')}\n", style=r.DIM)
+        out.append(f"    {review['body'].strip().splitlines()[0][:160]}\n", style=r.FG)
+    for comment in comments:
+        where = f"{comment.get('path', '')}:{comment.get('line') or ''}".rstrip(":")
+        out.append(f"  {comment['author']}", style=r.FG)
+        out.append(f"  {where}\n", style=r.DIM)
+        first = (comment.get("body") or "").strip().splitlines() or [""]
+        out.append(f"    {first[0][:160]}\n", style=r.FG)
+    out.append("\n")
+    return out
+
+
 class IssueScreen(FactoryScreen):
     KEYS = [
         ("esc", "back"),
@@ -551,6 +601,7 @@ class IssueScreen(FactoryScreen):
         Binding("y", "decide", "Approve / accept", show=False),
         Binding("n", "reject", "Reject", show=False),
         Binding("m", "manual_gate", "Record manual check", show=False),
+        Binding("o", "outside_reviews", "Read PR reviews", show=False),
         Binding("c", "stop", "Stop step", show=False),
         Binding("g", "prefix('g')", show=False),
         Binding("right_square_bracket", "prefix(']')", show=False),
@@ -640,6 +691,10 @@ class IssueScreen(FactoryScreen):
             "manual_remaining"
         ):
             hints.append(("m", "record manual check"))
+        if item["status"] == "awaiting_review" and item.get("packet", {}).get(
+            "external_remaining"
+        ):
+            hints.append(("o", "read PR reviews"))
         self.query_one("#keybar", Line).set(
             r.keys(
                 [
@@ -675,10 +730,13 @@ class IssueScreen(FactoryScreen):
             if commit
             else Text("none yet · made by the build step", style=r.FAINT),
         )
+        pr = (item.get("packet", {}).get("external_reviews") or {}).get("pr")
         grid.add_row(
-            Text("gp", style=r.FAINT),
+            "gp" if pr else Text("gp", style=r.FAINT),
             "pull request",
-            Text("none yet · you open it after review", style=r.FAINT),
+            Text(f"#{pr['number']} ↗", style=r.BLUE)
+            if pr
+            else Text("none yet · you open it after review", style=r.FAINT),
         )
         self.query_one("#links", Static).update(grid)
 
@@ -862,9 +920,12 @@ class IssueScreen(FactoryScreen):
             text = "you approve the plan (y) → build → check → independent review"
         elif kind == "human_review":
             remaining = item.get("packet", {}).get("manual_remaining") or []
+            outside = item.get("packet", {}).get("external_remaining") or []
             text = (
                 f"you check “{remaining[0]}” (m) → accept (y)"
                 if remaining
+                else f"waiting on {', '.join(outside)} in the PR (o reads it) → accept (y)"
+                if outside
                 else "you check the result and accept it (y)"
             )
         elif kind == "complete":
@@ -1115,6 +1176,7 @@ class IssueScreen(FactoryScreen):
         if remaining:
             out.append_text(_bullet_list("left for you (m records one)", remaining))
             out.append("\n")
+        out.append_text(_outside_reviews(item))
         tests = item.get("packet", {}).get("What to test") or []
         if tests:
             out.append_text(
@@ -1173,6 +1235,8 @@ class IssueScreen(FactoryScreen):
             self.app.open_url(item["url"])
         elif which == "b":
             self.notify("The candidate isn't pushed to a branch yet.")
+        elif pr := (item.get("packet", {}).get("external_reviews") or {}).get("pr"):
+            self.app.open_url(pr["url"])
         else:
             self.notify("No pull request yet. You open it after review.")
 
@@ -1202,6 +1266,11 @@ class IssueScreen(FactoryScreen):
         item = self._item()
         if item:
             await self.factory.record_manual_gate(item)
+
+    async def action_outside_reviews(self) -> None:
+        item = self._item()
+        if item:
+            await self.factory.read_outside_reviews(item)
 
     async def action_stop(self) -> None:
         item = self._item()
@@ -1562,7 +1631,7 @@ class SettingsScreen(FactoryScreen):
 class NewWorkScreen(FactoryScreen):
     KEYS = [
         ("j/k", "move"),
-        ("↹", "repos ⇄ issues"),
+        ("↹", "sources ⇄ issues"),
         ("/", "filter or add owner/repo#n"),
         ("r", "refresh from GitHub"),
         ("esc", "back"),
@@ -1591,7 +1660,7 @@ class NewWorkScreen(FactoryScreen):
         yield Line(crumb("new work"), id="crumb")
         with Horizontal(id="new-work-body"):
             with Vertical(id="repo-nav", classes="panel"):
-                yield Line(Text("repos", style=f"bold {r.DIM}"), fill="─")
+                yield Line(Text("sources", style=f"bold {r.DIM}"), fill="─")
                 yield OptionList(id="repos")
             with Vertical(id="issues-panel", classes="panel"):
                 yield Line(id="issues-head", fill="─")
@@ -1650,49 +1719,113 @@ class NewWorkScreen(FactoryScreen):
                 Text(f"has {children} sub-issues · can't run these yet", style=r.AMBER),
                 False,
             )
+        board_status = (issue.get("project") or {}).get("status")
+        if board_status:
+            return Text.assemble(("ready", r.MINT), (f" · {board_status}", r.DIM)), True
         return Text("ready", style=r.MINT), True
+
+    def _in_scope(self, issue: dict[str, Any], scope: str) -> bool:
+        """Whether an issue belongs to a sidebar entry: all, a project, a theme or a repo."""
+
+        project = issue.get("project") or {}
+        if scope == "all":
+            return True
+        if scope.startswith("project:"):
+            return project.get("id") == scope.removeprefix("project:")
+        if scope.startswith("theme:"):
+            board, _, theme = scope.removeprefix("theme:").partition("|")
+            return project.get("id") == board and (project.get("theme") or "") == theme
+        return issue["repo"] == scope
+
+    def _scope_label(self) -> str:
+        if self.repo == "all":
+            return "all issues"
+        if self.repo.startswith(("project:", "theme:")):
+            board, _, theme = (
+                self.repo.removeprefix("project:").removeprefix("theme:").partition("|")
+            )
+            title = next(
+                (
+                    i["project"]["title"]
+                    for i in self.candidates.values()
+                    if (i.get("project") or {}).get("id") == board
+                ),
+                board,
+            )
+            return (
+                f"{title} › {theme or 'no theme'}"
+                if self.repo.startswith("theme:")
+                else title
+            )
+        return self.repo
+
+    def _nav_option(
+        self, label: Text, scope: str, width: int, indent: int = 0
+    ) -> Option:
+        count = sum(self._in_scope(i, scope) for i in self.candidates.values())
+        return Option(
+            r.spread(
+                Text.assemble(" " * indent, label),
+                Text(str(count), style=r.DIM),
+                width,
+            ),
+            id=scope,
+        )
 
     def render_snapshot(self) -> None:
         repos_widget = self.query_one("#repos", OptionList)
-        repos = sorted({i["repo"] for i in self.candidates.values()})
         nav_width = self.width_of(repos_widget)
-        set_options(
-            repos_widget,
-            [
-                Option(
-                    r.spread(
-                        Text("all repos", style=r.FG),
-                        Text(str(len(self.candidates)), style=r.DIM),
-                        nav_width,
-                    ),
-                    id="all",
+        boards: dict[str, dict[str, Any]] = {}
+        for issue in self.candidates.values():
+            project = issue.get("project")
+            if project:
+                board = boards.setdefault(
+                    project["id"], {"title": project["title"], "themes": set()}
                 )
-            ]
-            + [
-                Option(
-                    r.spread(
-                        Text(repo, style=r.FG),
-                        Text(
-                            str(
-                                sum(i["repo"] == repo for i in self.candidates.values())
-                            ),
-                            style=r.DIM,
-                        ),
-                        nav_width,
-                    ),
-                    id=repo,
+                board["themes"].add(project.get("theme") or "")
+        nav = [self._nav_option(Text("all issues", style=r.FG), "all", nav_width)]
+        for board_id, board in sorted(boards.items(), key=lambda b: b[1]["title"]):
+            nav.append(
+                self._nav_option(
+                    Text(board["title"], style=f"bold {r.FG}"),
+                    f"project:{board_id}",
+                    nav_width,
                 )
-                for repo in repos
-            ],
-            prefer=self.repo,
-        )
+            )
+            for theme in sorted(board["themes"], key=lambda t: (not t, t)):
+                nav.append(
+                    self._nav_option(
+                        Text(theme or "no theme", style=r.FG if theme else r.DIM),
+                        f"theme:{board_id}|{theme}",
+                        nav_width,
+                        indent=2,
+                    )
+                )
+        if boards:
+            nav.append(
+                Option(
+                    Text("repos", style=f"bold {r.DIM}"), id="repos-head", disabled=True
+                )
+            )
+        nav += [
+            self._nav_option(
+                Text(repo, style=r.FG), repo, nav_width, 2 if boards else 0
+            )
+            for repo in sorted({i["repo"] for i in self.candidates.values()})
+        ]
+        set_options(repos_widget, nav, prefer=self.repo)
         table = self.query_one("#candidate-table", OptionList)
         width = self.width_of(table)
-        label = "all repos" if self.repo == "all" else self.repo
+        on_board = self.repo.startswith(("project:", "theme:"))
         self.query_one("#issues-head", Line).set(
             Text.assemble(
-                (label, f"bold {r.FG}"),
-                ("  open issues labeled for the factory", r.DIM),
+                (self._scope_label(), f"bold {r.FG}"),
+                (
+                    "  open issues on this project"
+                    if on_board
+                    else "  open issues for the factory",
+                    r.DIM,
+                ),
             ),
             Text(
                 f"/ {self.query_text}" if self.query_text else "/ filter", style=r.DIM
@@ -1701,12 +1834,23 @@ class NewWorkScreen(FactoryScreen):
         visible = {
             key: issue
             for key, issue in self.candidates.items()
-            if (self.repo == "all" or issue["repo"] == self.repo)
+            if self._in_scope(issue, self.repo)
             and (
                 not self.query_text
                 or self.query_text.lower() in f"{key} {issue.get('title', '')}".lower()
             )
         }
+        if self.repo.startswith("project:"):
+            # Group a board's issues under their themes, as the board does.
+            visible = dict(
+                sorted(
+                    visible.items(),
+                    key=lambda kv: (
+                        not (kv[1].get("project") or {}).get("theme"),
+                        (kv[1].get("project") or {}).get("theme") or "",
+                    ),
+                )
+            )
         children: dict[str, list[str]] = {}
         for key, issue in visible.items():
             parent = issue.get("parent_id")
@@ -1735,9 +1879,21 @@ class NewWorkScreen(FactoryScreen):
                     id=key,
                 )
             )
+        theme_heading = None
         for key, issue in visible.items():
             if key in nested:
                 continue
+            if self.repo.startswith("project:"):
+                theme = (issue.get("project") or {}).get("theme") or "no theme"
+                if theme != theme_heading:
+                    theme_heading = theme
+                    options.append(
+                        Option(
+                            r.section(theme, width=width),
+                            id=f"heading:{theme}",
+                            disabled=True,
+                        )
+                    )
             options.append(
                 Option(self._row(key, issue, width, 0, key in children), id=key)
             )
@@ -1756,7 +1912,7 @@ class NewWorkScreen(FactoryScreen):
             message = (
                 "Loading issues from GitHub…"
                 if not self.loaded
-                else "No open issues carry the factory label. Press / to add one by number."
+                else "No open issues are labeled or on a project board. Press / to add one by number."
             )
             options.append(
                 Option(Text(message, style=r.DIM), id="empty", disabled=True)

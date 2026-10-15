@@ -21,8 +21,9 @@ CLI. It never opens a remote controller's SQLite state.
   and people from the active config. Configuration remains `factory.toml`-owned;
   the screen may request a validated reload but does not synthesize or silently
   expand configuration.
-- **DF4 new work** discovers a bounded set of labeled tracker issues through the
-  versioned read-only adapter, shows hierarchy scope, and accepts either highlighted
+- **DF4 new work** discovers a bounded set of labeled or project-board tracker
+  issues through the versioned read-only adapter, groups them by project and theme
+  or by repository, shows hierarchy scope, and accepts either highlighted
   complete roots or explicit `owner/repo#number` selections. Intake and planning
   remain separately recorded controller commands behind one confirmed operator action.
 - **H1/H2/H3 worker views** show host overview, active assignment limits and
@@ -37,7 +38,8 @@ CLI. It never opens a remote controller's SQLite state.
   workers, and settings from every screen. `Esc` returns to the overview. `?`
   shows keys.
 - On a needs-you item, `y` approves a plan, accepts a result, or starts planning;
-  `n` rejects and asks why; `m` records a manual check. On an issue, `1`–`7`
+  `n` rejects and asks why; `m` records a manual check; `o` reads the PR's checks
+  and reviews as outside evidence for the exact candidate. On an issue, `1`–`7`
   switch tabs, `c` stops the running step, `gi`/`gb`/`gp` open GitHub links, and
   `]f`/`[f` move between changed files.
 - In new work, `space` or `Enter` toggles the highlighted complete root, `/`

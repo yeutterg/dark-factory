@@ -1,8 +1,15 @@
-"""Read explicitly selected GitHub issues; fixture input is labeled as such."""
+"""Read explicitly selected GitHub issues; fixture input is labeled as such.
+
+Candidate discovery reads labeled issues and, when the command is given
+``--project owner/number``, open issues on those GitHub Projects with their
+status and theme. ``--theme-field`` names the project field used as the theme.
+"""
 
 from __future__ import annotations
 
+import argparse
 import json
+import re
 import sys
 
 from dark_factory.adapters.git.github import api, repository
@@ -49,6 +56,130 @@ def relationships(repo, number):
         ) from exc
 
 
+def _candidate(repo, issue, project=None):
+    """Normalize one GraphQL issue node; partial hierarchy is never a root."""
+    number = issue["number"]
+    parent = issue["parent"]
+    child_count = issue["subIssues"]["totalCount"]
+    if type(number) is not int or number <= 0:
+        raise ValueError("invalid issue number")
+    if type(child_count) is not int or child_count < 0:
+        raise ValueError("invalid child count")
+    parent_id = None
+    if parent is not None:
+        parent_repo = repository(parent["repository"]["nameWithOwner"])
+        parent_number = parent["number"]
+        if type(parent_number) is not int or parent_number <= 0:
+            raise ValueError("invalid parent number")
+        parent_id = f"github:{parent_repo}:issue:{parent_number}"
+    return {
+        "repo": repo,
+        "number": number,
+        "title": issue.get("title", ""),
+        "url": issue.get("url", ""),
+        "is_root": parent_id is None,
+        "parent_id": parent_id,
+        "required_child_count": child_count,
+        "project": project,
+    }
+
+
+def project_reference(value):
+    match = re.fullmatch(r"([A-Za-z0-9_.-]+)/([0-9]+)", value or "")
+    if not match or int(match[2]) <= 0:
+        raise ContractError("project must be owner/number")
+    return match[1], int(match[2])
+
+
+def _field_text(value):
+    if not isinstance(value, dict):
+        return None
+    for key in ("name", "text", "title"):
+        if isinstance(value.get(key), str) and value[key]:
+            return value[key]
+    return None
+
+
+PROJECT_QUERY = """query($owner:String!,$number:Int!,$theme:String!) {
+  repositoryOwner(login:$owner) {
+    ... on ProjectV2Owner {
+      projectV2(number:$number) {
+        title url
+        items(first:100) {
+          nodes {
+            status: fieldValueByName(name:"Status") { ...value }
+            theme: fieldValueByName(name:$theme) { ...value }
+            content {
+              ... on Issue {
+                number title url state
+                repository { nameWithOwner }
+                parent { number repository { nameWithOwner } }
+                subIssues { totalCount }
+              }
+            }
+          }
+          pageInfo { hasNextPage }
+        }
+      }
+    }
+  }
+}
+fragment value on ProjectV2ItemFieldValue {
+  ... on ProjectV2ItemFieldSingleSelectValue { name }
+  ... on ProjectV2ItemFieldTextValue { text }
+  ... on ProjectV2ItemFieldIterationValue { title }
+}"""
+
+
+def project_issues(project, theme_field, repositories):
+    """Open issues on one project board that belong to configured repositories."""
+    owner, number = project_reference(project)
+    result = api(
+        "graphql",
+        "POST",
+        {
+            "query": PROJECT_QUERY,
+            "variables": {"owner": owner, "number": number, "theme": theme_field},
+        },
+    )
+    try:
+        if result.get("errors"):
+            raise ValueError("partial GraphQL response")
+        board = result["data"]["repositoryOwner"]["projectV2"]
+        if board is None:
+            raise ValueError("project not found")
+        items = []
+        for node in board["items"]["nodes"]:
+            issue = node.get("content") or {}
+            if "number" not in issue or issue.get("state") != "OPEN":
+                continue  # Drafts, pull requests and closed issues are not work.
+            repo = repository(issue["repository"]["nameWithOwner"])
+            if repo not in repositories:
+                continue
+            items.append(
+                _candidate(
+                    repo,
+                    issue,
+                    {
+                        "id": f"{owner}/{number}",
+                        "title": board["title"],
+                        "url": board["url"],
+                        "status": _field_text(node.get("status")),
+                        "theme": _field_text(node.get("theme")),
+                    },
+                )
+            )
+        has_next = board["items"]["pageInfo"]["hasNextPage"]
+        if type(has_next) is not bool:
+            raise ValueError("invalid page information")
+        return items, has_next
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ContractError(
+            f"GitHub project {project} is incomplete or unreadable; "
+            "the token needs the read:project scope"
+        ) from exc
+
+
 def candidate_issues(repo, label, limit):
     """Read one bounded issue page with hierarchy in a single GraphQL call."""
     owner, name = repo.split("/")
@@ -82,31 +213,7 @@ def candidate_issues(repo, label, limit):
         connection = result["data"]["repository"]["issues"]
         items = []
         for issue in connection["nodes"]:
-            number = issue["number"]
-            parent = issue["parent"]
-            child_count = issue["subIssues"]["totalCount"]
-            if type(number) is not int or number <= 0:
-                raise ValueError("invalid issue number")
-            if type(child_count) is not int or child_count < 0:
-                raise ValueError("invalid child count")
-            parent_id = None
-            if parent is not None:
-                parent_repo = repository(parent["repository"]["nameWithOwner"])
-                parent_number = parent["number"]
-                if type(parent_number) is not int or parent_number <= 0:
-                    raise ValueError("invalid parent number")
-                parent_id = f"github:{parent_repo}:issue:{parent_number}"
-            items.append(
-                {
-                    "repo": repo,
-                    "number": number,
-                    "title": issue.get("title", ""),
-                    "url": issue.get("url", ""),
-                    "is_root": parent_id is None,
-                    "parent_id": parent_id,
-                    "required_child_count": child_count,
-                }
-            )
+            items.append(_candidate(repo, issue))
         has_next = connection["pageInfo"]["hasNextPage"]
         if type(has_next) is not bool:
             raise ValueError("invalid page information")
@@ -117,7 +224,7 @@ def candidate_issues(repo, label, limit):
         ) from exc
 
 
-def handle(request):
+def handle(request, projects=(), theme_field="Theme"):
     validate_request(request)
     op = request["operation"]
     payload = request["input"]
@@ -135,19 +242,39 @@ def handle(request):
             or limit > 50
         ):
             raise ContractError("repositories, label and a limit from 1 to 50 required")
+        repositories = [repository(value) for value in repositories]
         items = []
         observations = []
-        for value in repositories:
+        seen = {}
+        for project in projects:
+            visible, has_next = project_issues(project, theme_field, repositories)
+            added = 0
+            for item in visible:
+                key = (item["repo"], item["number"])
+                if key in seen or len(items) >= limit:
+                    has_next = has_next or key not in seen
+                    continue
+                seen[key] = item
+                items.append(item)
+                added += 1
+            observations.append(
+                {"project": project, "returned": added, "truncated": has_next}
+            )
+        for repo in repositories:
             remaining = limit - len(items)
             if remaining <= 0:
                 break
-            repo = repository(value)
             visible, has_next = candidate_issues(repo, label, remaining)
-            items.extend(visible)
+            added = 0
+            for item in visible:
+                if (item["repo"], item["number"]) not in seen:
+                    seen[(item["repo"], item["number"])] = item
+                    items.append(item)
+                    added += 1
             observations.append(
                 {
                     "repo": repo,
-                    "returned": len(visible),
+                    "returned": added,
                     "truncated": has_next,
                 }
             )
@@ -158,6 +285,7 @@ def handle(request):
             "operation": op,
             "evidence": {
                 "label": label,
+                "projects": list(projects),
                 "count": len(items),
                 "truncated": len(items) == limit
                 or any(item["truncated"] for item in observations),
@@ -221,9 +349,15 @@ def handle(request):
     }
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="dark_factory.adapters.projects.github")
+    parser.add_argument("--project", action="append", default=[])
+    parser.add_argument("--theme-field", default="Theme")
+    args = parser.parse_args(argv)
     try:
-        print(json.dumps(handle(json.load(sys.stdin))))
+        for project in args.project:
+            project_reference(project)
+        print(json.dumps(handle(json.load(sys.stdin), args.project, args.theme_field)))
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(1) from exc
