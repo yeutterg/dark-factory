@@ -19,6 +19,23 @@ The controller enforces scheduling, budgets, leases, and approvals. Everything s
 
 You drive it from a terminal console (`dark-factory tui`) or a scriptable CLI. Both work locally or against a remote controller.
 
+## Example stack
+
+One way a team might wire it up. Each stage is a route or adapter in `factory.toml`, so any piece can be swapped.
+
+| Stage | Example tools | How it connects | Today |
+| --- | --- | --- | --- |
+| Intake | GitHub Issues and Projects | Tracking adapter reads labeled issues and their sub-issues | Issues built in; Projects needs an adapter update |
+| Planning | GPT Astra via Codex CLI | Planner route | Supported harness |
+| Critique | Claude Opus via Claude Code | Critic route, on a different model from the planner | Supported harness |
+| Approval | You, in the TUI | Recorded human decision with a spending limit | Built in |
+| Implementation | DeepSeek Flash via Pi, on the Pi Durable runtime | Coder route through a provider Pi supports, such as Together | Supported harness and runtime |
+| Checks | Your test, lint, and build commands; GitHub Actions | Canonical commands run in the sandbox; PR checks are read back | Built in |
+| Review | Devin and Bugbot on the draft PR, plus the factory's reviewer | Reviewer route; outside reviewers' PR checks are read back | Reviewer route built in; PR review comments aren't read yet, and outside reviews don't count as evidence yet |
+| Accept and merge | You | Accept in the TUI, then merge under your branch rules | Built in; merging stays with you |
+
+Routes pin each model's provider, account, and processing region. A route to a region your policy blocks won't run.
+
 ## Principles
 
 - **People own intent.** The factory doesn't choose the roadmap. Implementation and acceptance need recorded human decisions.
