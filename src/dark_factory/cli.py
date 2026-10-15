@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status")
+    sub.add_parser("discover", help="List bounded tracker candidates without intake")
     sub.add_parser(
         "preflight",
         help="Read-only installation/configuration checks; no inference or state access",
@@ -93,6 +94,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_proposal.add_argument("--version", type=int)
     p_review = sub.add_parser("review")
     p_review.add_argument("work_item_id")
+    p_tui = sub.add_parser("tui", help="Open the controller operator console")
+    p_tui.add_argument("--actor", default="operator")
     p_serve = sub.add_parser("serve")
     p_serve.add_argument("--host")
     p_serve.add_argument("--port", type=int)
@@ -183,6 +186,20 @@ def _dispatch(args: argparse.Namespace) -> int:
 
         restore(Path(args.source), Path(args.destination))
         return 0
+    if args.cmd == "tui":
+        from dark_factory.ui.app import run_tui
+        from dark_factory.ui.transport import LocalTransport, RemoteTransport
+
+        if args.api_url:
+            cfg = load_config(args.config)
+            run_tui(RemoteTransport(args.api_url, cfg.operator_token), args.actor)
+            return 0
+        ctrl, store = build_controller(args.config)
+        try:
+            run_tui(LocalTransport(ctrl), args.actor)
+            return 0
+        finally:
+            store.close()
     command = operator_commands.COMMANDS.get(args.cmd)
     if args.api_url:
         from urllib.request import Request, urlopen

@@ -97,6 +97,60 @@ def test_missing_hierarchy_cannot_be_assumed_root(monkeypatch, response):
         tracking.relationships("acme/tool", 3)
 
 
+def test_candidate_discovery_is_read_only_bounded_and_scope_aware(monkeypatch):
+    observed = []
+
+    def fake(path, *args):
+        observed.append(path)
+        payload = args[1]
+        assert payload["variables"]["labels"] == ["factory ready"]
+        assert payload["variables"]["first"] == 5
+        return {
+            "data": {
+                "repository": {
+                    "issues": {
+                        "nodes": [
+                            {
+                                "number": 7,
+                                "title": "Complete root",
+                                "url": "https://github.com/acme/tool/issues/7",
+                                "parent": None,
+                                "subIssues": {"totalCount": 0},
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False},
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(tracking, "api", fake)
+    result = tracking.handle(
+        make_request(
+            "list_candidate_issues",
+            {
+                "repositories": ["acme/tool"],
+                "label": "factory ready",
+                "limit": 5,
+            },
+            "discover",
+        )
+    )
+    assert result["items"] == [
+        {
+            "repo": "acme/tool",
+            "number": 7,
+            "title": "Complete root",
+            "url": "https://github.com/acme/tool/issues/7",
+            "is_root": True,
+            "parent_id": None,
+            "required_child_count": 0,
+        }
+    ]
+    assert observed == ["graphql"]
+    assert result["evidence"]["count"] == 1
+
+
 @pytest.mark.parametrize(
     "metadata,reason",
     [

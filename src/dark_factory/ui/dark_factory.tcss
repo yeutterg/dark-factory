@@ -1,0 +1,165 @@
+$df-background: #090b0d;
+$df-surface: #101418;
+$df-panel: #0c1013;
+$df-foreground: #d7dbd8;
+$df-muted: #79817e;
+$df-line: #26302d;
+$df-mint: #8fe3c0;
+$df-amber: #e8b86d;
+$df-blue: #79aee8;
+
+Screen {
+    background: $df-background;
+    color: $df-foreground;
+}
+
+.screen-title {
+    height: auto;
+    min-height: 2;
+    padding: 0 1;
+    color: $df-foreground;
+    border-bottom: solid $df-line;
+}
+
+.subtle {
+    height: auto;
+    color: $df-muted;
+    padding: 0 1 1 1;
+}
+
+.section-label {
+    height: 1;
+    color: $df-muted;
+    margin: 0 1;
+}
+
+#execution-table {
+    height: 2fr;
+    min-height: 8;
+    margin: 0 1;
+    background: $df-panel;
+    border: solid $df-line;
+}
+
+#workers-table {
+    height: 1fr;
+    min-height: 5;
+    margin: 0 1;
+    background: $df-panel;
+    border: solid $df-line;
+}
+
+#execution-table:focus, #workers-table:focus, DataTable:focus {
+    border: solid $df-blue;
+}
+
+DataTable {
+    background: $df-panel;
+    color: $df-foreground;
+}
+
+DataTable > .datatable--header {
+    color: $df-muted;
+    background: $df-surface;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: #192822;
+    color: $df-foreground;
+}
+
+.done-line {
+    height: 3;
+    color: $df-muted;
+    padding: 0 2;
+}
+
+Footer {
+    background: $df-surface;
+    color: $df-muted;
+}
+
+Footer > .footer--key {
+    color: $df-mint;
+}
+
+#issue-summary {
+    height: auto;
+    padding: 1;
+    color: $df-amber;
+}
+
+#issue-tabs {
+    height: 1fr;
+}
+
+TabPane VerticalScroll, SettingsScreen VerticalScroll, WorkerScreen VerticalScroll {
+    padding: 1 2;
+    background: $df-panel;
+}
+
+ContentSwitcher {
+    background: $df-panel;
+}
+
+#routes-table {
+    height: 1fr;
+    min-height: 9;
+    margin: 1;
+    border: solid $df-line;
+}
+
+#settings-detail {
+    height: 1fr;
+    margin: 0 1;
+    border: solid $df-line;
+}
+
+NewWorkScreen > Static, NewWorkScreen > Input {
+    margin: 1 2;
+}
+
+#candidate-table {
+    height: 1fr;
+    min-height: 7;
+    margin: 0 2;
+    border: solid $df-line;
+}
+
+#new-work-summary {
+    height: 8;
+    padding: 1;
+    border: solid $df-line;
+    background: $df-panel;
+}
+
+#done-table, #all-workers {
+    height: 1fr;
+    margin: 1;
+    border: solid $df-line;
+}
+
+#worker-detail {
+    height: 1fr;
+    margin: 1;
+    border: solid $df-line;
+}
+
+Input {
+    background: $df-surface;
+    border: tall $df-line;
+}
+
+Input:focus {
+    border: tall $df-mint;
+}
+
+Tabs {
+    background: $df-surface;
+    color: $df-muted;
+}
+
+Tab.-active {
+    color: $df-mint;
+}

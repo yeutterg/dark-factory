@@ -49,10 +49,122 @@ def relationships(repo, number):
         ) from exc
 
 
+def candidate_issues(repo, label, limit):
+    """Read one bounded issue page with hierarchy in a single GraphQL call."""
+    owner, name = repo.split("/")
+    result = api(
+        "graphql",
+        "POST",
+        {
+            "query": """query($owner:String!,$name:String!,$labels:[String!]!,$first:Int!) {
+              repository(owner:$owner,name:$name) {
+                issues(first:$first,states:OPEN,labels:$labels,orderBy:{field:UPDATED_AT,direction:DESC}) {
+                  nodes {
+                    number title url
+                    parent { number repository { nameWithOwner } }
+                    subIssues { totalCount }
+                  }
+                  pageInfo { hasNextPage }
+                }
+              }
+            }""",
+            "variables": {
+                "owner": owner,
+                "name": name,
+                "labels": [label],
+                "first": limit,
+            },
+        },
+    )
+    try:
+        if result.get("errors"):
+            raise ValueError("partial GraphQL response")
+        connection = result["data"]["repository"]["issues"]
+        items = []
+        for issue in connection["nodes"]:
+            number = issue["number"]
+            parent = issue["parent"]
+            child_count = issue["subIssues"]["totalCount"]
+            if type(number) is not int or number <= 0:
+                raise ValueError("invalid issue number")
+            if type(child_count) is not int or child_count < 0:
+                raise ValueError("invalid child count")
+            parent_id = None
+            if parent is not None:
+                parent_repo = repository(parent["repository"]["nameWithOwner"])
+                parent_number = parent["number"]
+                if type(parent_number) is not int or parent_number <= 0:
+                    raise ValueError("invalid parent number")
+                parent_id = f"github:{parent_repo}:issue:{parent_number}"
+            items.append(
+                {
+                    "repo": repo,
+                    "number": number,
+                    "title": issue.get("title", ""),
+                    "url": issue.get("url", ""),
+                    "is_root": parent_id is None,
+                    "parent_id": parent_id,
+                    "required_child_count": child_count,
+                }
+            )
+        has_next = connection["pageInfo"]["hasNextPage"]
+        if type(has_next) is not bool:
+            raise ValueError("invalid page information")
+        return items, has_next
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ContractError(
+            "GitHub candidate hierarchy is incomplete; cannot list selectable roots"
+        ) from exc
+
+
 def handle(request):
     validate_request(request)
     op = request["operation"]
     payload = request["input"]
+    if op == "list_candidate_issues":
+        repositories = payload.get("repositories")
+        label = payload.get("label")
+        limit = payload.get("limit", 50)
+        if (
+            not isinstance(repositories, list)
+            or not repositories
+            or not isinstance(label, str)
+            or not label
+            or type(limit) is not int
+            or limit < 1
+            or limit > 50
+        ):
+            raise ContractError("repositories, label and a limit from 1 to 50 required")
+        items = []
+        observations = []
+        for value in repositories:
+            remaining = limit - len(items)
+            if remaining <= 0:
+                break
+            repo = repository(value)
+            visible, has_next = candidate_issues(repo, label, remaining)
+            items.extend(visible)
+            observations.append(
+                {
+                    "repo": repo,
+                    "returned": len(visible),
+                    "truncated": has_next,
+                }
+            )
+        return {
+            "contract_version": 1,
+            "request_id": request["request_id"],
+            "ok": True,
+            "operation": op,
+            "evidence": {
+                "label": label,
+                "count": len(items),
+                "truncated": len(items) == limit
+                or any(item["truncated"] for item in observations),
+                "observations": observations,
+            },
+            "items": items,
+        }
     if op != "list_selected_issues":
         raise ContractError(f"unsupported tracking operation {op!r}")
     issues = payload.get("issues")
