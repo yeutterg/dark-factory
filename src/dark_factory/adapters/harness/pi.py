@@ -127,6 +127,8 @@ class PiHarness(StreamingCliHarness):
             "--no-context-files",
             "--no-approve",
             "--offline",
+            # --tools keeps MCP tools, so MCP is disabled outright.
+            "--no-mcp",
             "--tools",
             tools,
             "--session-dir",

@@ -22,7 +22,7 @@ max_seconds = 900
 
 [routes.claude-planner]
 harness = "claude-code"
-harness_version = "2.1.268 (Claude Code)"
+harness_version = "2.1.300 (Claude Code)"
 model = "REPLACE_WITH_PINNED_CLAUDE_MODEL_ID"
 effort = "xhigh"
 provider = "claude-subscription"
