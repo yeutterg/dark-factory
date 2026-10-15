@@ -133,7 +133,7 @@ def test_durable_rejects_unsupported_node_before_loading_engine(
     for name in ("pi-durable", "pi-ai", "chord"):
         path = engine / "node_modules" / "@earendil-works" / name
         path.mkdir(parents=True)
-        (path / "package.json").write_text('{"version":"1.0.3"}')
+        (path / "package.json").write_text('{"version":"1.2.0"}')
     monkeypatch.setattr(pi_durable, "ENGINE_DIR", engine)
     calls = []
 
@@ -154,7 +154,7 @@ def test_durable_load_probe_strips_secrets_and_node_hooks(tmp_path, monkeypatch)
     for name in ("pi-durable", "pi-ai", "chord"):
         path = engine / "node_modules" / "@earendil-works" / name
         path.mkdir(parents=True)
-        (path / "package.json").write_text('{"version":"1.0.3"}')
+        (path / "package.json").write_text('{"version":"1.2.0"}')
     monkeypatch.setattr(pi_durable, "ENGINE_DIR", engine)
     monkeypatch.setenv("NODE_OPTIONS", "--require=untrusted-code")
     monkeypatch.setenv("OPENAI_API_KEY", "never-inherit")

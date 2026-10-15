@@ -26,7 +26,7 @@ Follow-up review coverage preserves explicitly repeated checks by matching the e
 
 ## Durable candidate — 2026-10-13
 
-The optional Pi Durable 1.0.3 engine is pinned and type-checked. Tests run its actual SQLite task engine with fixture CLI work, including crash-before-dispatch recovery, completion reconciliation without duplicate execution, and refusal to replay interrupted active CLI work. Native and durable workflows exercise failed checks and blocking reviews through one preapproved repair, fresh verification and the human gate. Assumptions and repair history appear in the executive summary. No external inference spending or running-controller upgrade is part of these checks.
+The optional Pi Durable 1.2.0 engine is pinned and type-checked. Tests run its actual SQLite task engine with fixture CLI work, including crash-before-dispatch recovery, completion reconciliation without duplicate execution, and refusal to replay interrupted active CLI work. Native and durable workflows exercise failed checks and blocking reviews through one preapproved repair, fresh verification and the human gate. Assumptions and repair history appear in the executive summary. No external inference spending or running-controller upgrade is part of these checks.
 
 Full local suite: **148 passed** under Python 3.11 in 512.74 seconds, including installed Pi/Claude loopback fixtures on macOS. A final strict workflow-engine type guard has additional targeted configuration regressions; hosted CI checks the final PR revision.
 

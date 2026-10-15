@@ -84,7 +84,7 @@ def test_broken_engine_only_subpath_cannot_lease_or_charge(tmp_path, monkeypatch
             json.dumps(
                 {
                     "name": "@earendil-works/" + name,
-                    "version": "1.0.3",
+                    "version": "1.2.0",
                     "type": "module",
                     "exports": exports,
                 }

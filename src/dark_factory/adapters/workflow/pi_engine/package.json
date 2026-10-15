@@ -3,15 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.19.0" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "check": "tsc --noEmit --strict --target es2022 --module nodenext --allowImportingTsExtensions --skipLibCheck main.ts",
     "start": "node --experimental-strip-types main.ts"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.0.3",
-    "@earendil-works/pi-ai": "1.0.3",
-    "@earendil-works/pi-durable": "1.0.3"
+    "@earendil-works/chord": "1.2.0",
+    "@earendil-works/pi-ai": "1.2.0",
+    "@earendil-works/pi-durable": "1.2.0"
   },
   "devDependencies": {
     "@types/node": "22.19.0",

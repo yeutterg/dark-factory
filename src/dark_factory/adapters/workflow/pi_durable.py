@@ -15,6 +15,8 @@ from pathlib import Path
 from dark_factory.runner import CommandRunner
 
 ENGINE_DIR = Path(__file__).parent / "pi_engine"
+# Must match the exact versions pinned in pi_engine/package.json.
+PACKAGE_VERSION = "1.2.0"
 
 
 class PiDurableRuntime:
@@ -40,7 +42,7 @@ class PiDurableRuntime:
                 version = json.loads(manifest.read_text())["version"]
             except (OSError, ValueError, KeyError, TypeError):
                 version = None
-            if version != "1.0.3":
+            if version != PACKAGE_VERSION:
                 raise RuntimeError(
                     "install the pinned workflow dependencies with npm ci"
                 )
@@ -76,7 +78,7 @@ class PiDurableRuntime:
         self._validation = {
             "engine": self.name,
             "node_version": ".".join(map(str, version)),
-            "package_version": "1.0.3",
+            "package_version": PACKAGE_VERSION,
         }
         return dict(self._validation)
 
