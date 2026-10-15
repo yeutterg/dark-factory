@@ -17,6 +17,8 @@ from dark_factory.runner import CommandRunner
 ENGINE_DIR = Path(__file__).parent / "pi_engine"
 # Must match the exact versions pinned in pi_engine/package.json.
 PACKAGE_VERSION = "1.2.0"
+# Reasons the engine may report for a failed dispatch (see main.ts).
+DISPATCH_FAILURE_REASONS = frozenset({"storage", "bridge", "inputs_changed", "engine"})
 
 
 class PiDurableRuntime:
@@ -192,7 +194,15 @@ class PiDurableRuntime:
                             if msg.get("version") != 1:
                                 raise RuntimeError("invalid workflow protocol version")
                             if msg.get("type") == "error":
-                                raise RuntimeError("durable dispatch failed")
+                                reason = msg.get("reason")
+                                raise RuntimeError(
+                                    "durable dispatch failed: "
+                                    + (
+                                        reason
+                                        if reason in DISPATCH_FAILURE_REASONS
+                                        else "engine"
+                                    )
+                                )
                             if (
                                 msg.get("attemptId") != attempt_id
                                 or msg.get("digest") != digest
