@@ -928,6 +928,8 @@ class IssueScreen(FactoryScreen):
                 if outside
                 else "you check the result and accept it (y)"
             )
+        elif kind == "human_resume":
+            text = "you resume from saved work (y) or stop (n)"
         elif kind == "complete":
             text = "accepted · merging stays with you"
         elif kind == "blocked":
@@ -1024,6 +1026,26 @@ class IssueScreen(FactoryScreen):
             parts.append(Text(""))
         if step.get("error"):
             parts.append(Text(step["error"], style=r.HAZARD))
+            parts.append(Text(""))
+        interruption = item.get("interruption") or {}
+        if interruption.get("job_id") == step["id"]:
+            outcome = {
+                "pending": "deciding what to do",
+                "auto_resumed": "resumed automatically from its saved work",
+                "asked": "waiting for you: y resumes, n stops",
+                "resumed": f"resumed by {interruption.get('actor') or 'you'}",
+                "stopped": f"stopped by {interruption.get('actor') or 'you'}",
+            }.get(interruption["outcome"], interruption["outcome"])
+            parts.append(
+                Text.assemble(
+                    ("interrupted  ", f"bold {r.AMBER}"),
+                    (f"{interruption['cause']} · {outcome}", r.FG),
+                )
+            )
+            for line in interruption.get("blockers") or []:
+                parts.append(Text(f"  can't resume: {line}", style=r.HAZARD))
+            for line in interruption.get("reasons") or []:
+                parts.append(Text(f"  {line}", style=r.DIM))
             parts.append(Text(""))
         parts.append(r.section("log", width=60))
         log = Text()

@@ -114,7 +114,38 @@ dark-factory --config factory.toml --api-url http://127.0.0.1:8745 tui --actor g
 
 Operator commands accept the same arguments and return the same JSON with or without `--api-url`. The TUI is a local application in both modes: with `--api-url` it reads an authenticated, credential-free projection and never opens the controller's SQLite state. `preflight`, `backup`, `restore`, `run-worker`, `serve`, `demo`, `adapter` and `execution-worker` run only locally. The API binds to loopback unless the project-scoped TLS deployment requirements are met. Worker credentials cannot read the operator projection or invoke operator decisions. A process lock prevents a second controller from opening the same state directory. Pauses and drains stop new dispatch; cancellation is separate. `resume` clears pause; `undrain` clears drain. Active attempts retain their input snapshots. A valid reload changes future defaults; incompatible approved work stops for a new proposal. Invalid reload retains the last valid in-memory configuration and records an audit event.
 
-`cancel <job-id>` requests process termination and capture. `recover` fences expired leases, preserves unique work and records conservative estimated cost. It never replays an interrupted CLI. Unknown interrupted usage consumes the reserved allowance. Repairs default to zero. With `[continuation] max_repairs = 1`, the original proposal includes one conditional correctness repair followed by fresh checks and review, under the original limits. Other stopped outcomes require inspection and a revised plan/approval. There is no automatic provider fallback.
+`cancel <job-id>` requests process termination and capture. `recover` fences expired leases, preserves unique work and records conservative estimated cost. It never replays an interrupted CLI; the step can resume from its saved work instead (see below). Unknown interrupted usage consumes the reserved allowance. Repairs default to zero. With `[continuation] max_repairs = 1`, the original proposal includes one conditional correctness repair followed by fresh checks and review, under the original limits. Other stopped outcomes require inspection and a revised plan/approval. There is no automatic provider fallback.
+
+### Interrupted steps
+
+A step that stops without a result is *interrupted*, not failed: the worker was lost, the durable engine or the provider failed, the agent's answer was malformed, or the step ran out of time. Failed checks, blocking review findings, scope or integrity violations, budget overruns and changed approvals still repair or fail as before.
+
+Transient causes (lost worker, engine, provider, malformed answer) resume automatically, up to `[continuation] max_resumes` times per step (default 1, at most 3). Anything else, or a step that used its automatic resumes, waits for a person under **needs you**:
+
+```bash
+dark-factory --config factory.toml continue-work <work-item-id> --actor greg
+dark-factory --config factory.toml stop-work <work-item-id> --reason "keeps timing out" --actor greg
+```
+
+A resumed attempt starts from the interrupted attempt's archived checkout, uncommitted work included, and its brief says it is continuing. Pi also continues the earlier conversation as a fork of the archived session; the archive is never modified. Each resume is a new attempt with the step's approved per-attempt budget and time limit. Nobody can resume past the root's approved ceiling or deadline, or after its approval changed. Stopping fails the work, which then needs a new plan. In the TUI, `y` resumes and `n` stops and asks why. The resume count is part of the approved plan.
+
+The durable engine reports why a dispatch failed (`storage`, `bridge`, `inputs_changed` or `engine`). Changed inputs are a policy failure and are never resumed.
+
+#### Decision agents
+
+An optional decision agent can confirm or overturn the rules. It answers typed questions with a choice and a confidence, behind the same JSON command contract as the tracker and code host (operation `decide`; see `dark_factory/adapters/decision`). TypeSafe's Jev is included:
+
+```toml
+[decider]
+region = "US"            # Required: a decider is inference, checked against geography policy
+min_confidence = 0.8     # Advice below this is ignored
+
+[commands.decider]
+argv = ["python3", "-m", "dark_factory.adapters.decision.jev"]
+timeout_seconds = 30
+```
+
+Jev reads `TYPESAFE_API_KEY` from the controller environment (`--api-key-env` names another variable). It receives the step kind, the cause, the error, timings, costs and the last 2,000 characters of the step's output, never credentials. Confident `resume` resumes a non-trivial interruption; confident `ask` or `stop` holds a trivial one for a person. Neither can lift the limits above, and a missing, failing or unconfident decider falls back to the rules. The decider settings are part of the approved plan. Any command that answers `decide` can replace Jev.
 
 ## Preserve and restore work
 

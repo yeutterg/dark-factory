@@ -85,6 +85,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--number", type=int, help="PR number; default is the PR made by create-pr"
     )
     p_evidence.add_argument("--actor", default="operator")
+    p_continue = sub.add_parser(
+        "continue-work", help="Resume an interrupted step from its saved work"
+    )
+    p_continue.add_argument("work_item_id")
+    p_continue.add_argument("--actor", default="operator")
+    p_stop = sub.add_parser("stop-work", help="Stop work after an interruption")
+    p_stop.add_argument("work_item_id")
+    p_stop.add_argument("--reason", default="stopped after an interruption")
+    p_stop.add_argument("--actor", default="operator")
     p_cancel = sub.add_parser("cancel")
     p_cancel.add_argument("job_id")
     p_run = sub.add_parser("run-worker")

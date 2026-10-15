@@ -551,3 +551,51 @@ def test_new_work_groups_project_issues_by_theme():
             assert "Todo" in str(table.get_option_at_index(1).prompt)
 
     asyncio.run(exercise())
+
+
+def test_interrupted_work_resumes_or_stops_from_the_overview():
+    async def exercise() -> None:
+        transport = FixtureTransport()
+        transport.data["items"][0].update(
+            status="interrupted",
+            lane="needs_you",
+            next_action={"kind": "human_resume"},
+            summary=["build was interrupted: the step ran out of time."],
+            interruption={
+                "job_id": "j",
+                "cause": "the step ran out of time",
+                "outcome": "asked",
+                "recommendation": "resume",
+                "reasons": ["rules: the step ran out of time"],
+                "blockers": [],
+            },
+        )
+        app = DarkFactoryApp(transport, "greg")
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            from rich.console import Console
+
+            table = app.screen.query_one("#execution-table", OptionList)
+            console = Console(width=140, record=True)
+            console.print(table.get_option("work_1").prompt)
+            assert "interrupted · resume?" in console.export_text()
+            await pilot.press("y")
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause()
+            assert (
+                "continue-work",
+                {"work_item_id": "work_1"},
+                "greg",
+            ) in transport.commands
+            await pilot.press("n")
+            await pilot.pause()
+            await pilot.press(*"keeps timing out", "enter")
+            await pilot.pause()
+            assert (
+                "stop-work",
+                {"work_item_id": "work_1", "reason": "keeps timing out"},
+                "greg",
+            ) in transport.commands
+
+    asyncio.run(exercise())

@@ -48,6 +48,11 @@ def describe(root, jobs, coverage, dispatch_reason=""):
             "kind": "human_plan",
             "next_step": "Select planning for the complete root.",
         }
+    elif status == "interrupted":
+        action = {
+            "kind": "human_resume",
+            "next_step": "Resume the interrupted step from its saved work, or stop.",
+        }
     elif status == "awaiting_approval":
         action = {
             "kind": "human_approval",

@@ -227,6 +227,12 @@ class Store:
             root_id TEXT NOT NULL, candidate TEXT NOT NULL, name TEXT NOT NULL,
             actor TEXT NOT NULL, at TEXT NOT NULL, passed INTEGER NOT NULL,
             evidence TEXT NOT NULL, PRIMARY KEY(root_id, candidate, name));
+        CREATE TABLE IF NOT EXISTS interruptions (
+            id TEXT PRIMARY KEY, root_id TEXT NOT NULL, job_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL UNIQUE, at TEXT NOT NULL, category TEXT NOT NULL,
+            detail TEXT NOT NULL, outcome TEXT NOT NULL, verdict_json TEXT,
+            actor TEXT, decided_at TEXT, resumed_by_attempt TEXT);
+        CREATE INDEX IF NOT EXISTS interruptions_job ON interruptions(job_id, outcome);
         CREATE TABLE IF NOT EXISTS external_reviews (
             root_id TEXT NOT NULL, candidate TEXT NOT NULL, pr_number INTEGER NOT NULL,
             url TEXT NOT NULL, actor TEXT NOT NULL, at TEXT NOT NULL,

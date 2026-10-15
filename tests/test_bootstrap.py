@@ -559,7 +559,12 @@ def test_overall_review_pass_cannot_hide_incomplete_requirement(
     worker.run_loop(2)
     ctrl.approve(wid, "human")
     worker.run_loop()
-    assert store.one("SELECT status FROM work_items")[0] == "failed"
+    # Invalid review output resumes once automatically, then waits for a person.
+    assert store.one("SELECT status FROM work_items")[0] == "interrupted"
+    assert [
+        r["outcome"]
+        for r in store.query("SELECT outcome FROM interruptions ORDER BY at")
+    ] == ["auto_resumed", "asked"]
     assert store.one("SELECT status FROM jobs WHERE kind='check'")[0] == "succeeded"
     assert all(c["status"] == "incomplete" for c in ctrl.coverage(wid))
     with pytest.raises(ControllerError):

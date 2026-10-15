@@ -151,10 +151,45 @@ class DarkFactoryApp(App[None]):
             await self.confirm_command(
                 "plan", f"Start planning {number}?", {"work_item_id": item["id"]}
             )
+        elif status == "interrupted":
+            blockers = (item.get("interruption") or {}).get("blockers") or []
+            if blockers:
+                self.notify(
+                    "Can't resume: " + "; ".join(blockers) + ". Stop it with n.",
+                    severity="warning",
+                )
+                return
+            await self.confirm_command(
+                "continue-work",
+                f"Resume {number} from its saved work? It stays within the "
+                "approved budget and time limit.",
+                {"work_item_id": item["id"]},
+            )
         else:
             self.notify("Nothing needs your decision here", severity="warning")
 
     async def reject(self, item: dict[str, Any]) -> None:
+        if item["status"] == "interrupted":
+
+            async def stop(reason: str | None) -> None:
+                if not reason:
+                    return
+                try:
+                    await self._run(
+                        "stop-work", {"work_item_id": item["id"], "reason": reason}
+                    )
+                    self.notify(f"#{item['number']} stopped; replan to continue")
+                except (ControllerError, OSError, ValueError) as exc:
+                    self.notify(str(exc), severity="error", timeout=8)
+
+            self.push_screen(
+                TextPrompt(
+                    f"Why are you stopping #{item['number']}?",
+                    "This goes to the next plan",
+                ),
+                stop,
+            )
+            return
         if item["status"] not in {"awaiting_approval", "awaiting_review"}:
             self.notify(
                 "Only a plan or result waiting for you can be rejected",

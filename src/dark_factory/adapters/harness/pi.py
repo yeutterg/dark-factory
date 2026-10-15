@@ -134,6 +134,14 @@ class PiHarness(StreamingCliHarness):
             "--session-dir",
             str(agent / "sessions"),
         ]
+        if extra.get("resume_session"):
+            # Continue the interrupted conversation in a new session; the archived
+            # original is never modified.
+            # Outside the agent directory: Pi moves stray session files found there.
+            resumed = runtime / "resume" / "session.jsonl"
+            resumed.parent.mkdir()
+            resumed.write_text(extra["resume_session"])
+            argv += ["--fork", str(resumed)]
         messages = []
         usage = {"input": 0, "output": 0, "cost": 0.0, "reported_cost": False}
         cost_known = False

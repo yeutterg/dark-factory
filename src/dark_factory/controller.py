@@ -16,6 +16,7 @@ from dark_factory.control.base import ControllerError, _digest, atomic, decided
 from dark_factory.control.dispatch import DispatchMixin
 from dark_factory.control.external import ExternalMixin
 from dark_factory.control.graph import default_bootstrap_graph, validate_graph
+from dark_factory.control.interruptions import InterruptionMixin
 from dark_factory.control.planning import PlanningMixin
 from dark_factory.control.policy import PolicyMixin
 from dark_factory.control.results import ResultsMixin
@@ -43,6 +44,7 @@ class Controller(
     ResultsMixin,
     ReviewMixin,
     ExternalMixin,
+    InterruptionMixin,
     AttemptRecords,
 ):
     """One-process bootstrap controller; only this object mutates execution state."""

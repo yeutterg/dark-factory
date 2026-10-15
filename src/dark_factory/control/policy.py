@@ -105,9 +105,11 @@ class PolicyMixin(ControllerCore):
                 "execution": self.cfg.execution,
                 "workflow": runtime_policy(self.cfg),
                 "operators": self.cfg.raw.get("operators", {}),
-                "continuation": self.cfg.raw.get(
-                    "continuation", {"max_repairs": self.cfg.max_repairs}
-                ),
+                "continuation": {
+                    "max_repairs": self.cfg.max_repairs,
+                    "max_resumes": self.cfg.max_resumes,
+                },
+                "decider": self.cfg.decider,
                 "budgets": self.cfg.raw.get("budgets", {}),
                 "geography": self.cfg.geography_policy,
                 "deployment": {

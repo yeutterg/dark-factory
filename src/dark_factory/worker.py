@@ -79,6 +79,21 @@ class Worker:
                     (job["id"],),
                 )
             ]
+        resume = claimed["inputs"].get("resume")
+        if resume:
+            common["resumed_after_interruption"] = {
+                "previous_attempt": resume["attempt"],
+                "what_happened": resume["detail"][:500],
+                "instructions": "Your previous attempt at this step was interrupted. "
+                "Its work is already in the workspace"
+                + (
+                    " and your earlier conversation is loaded"
+                    if resume.get("session_id")
+                    and (claimed["inputs"].get("route") or {}).get("harness") == "pi"
+                    else ""
+                )
+                + ". Check what is done, continue from there and do not redo finished work.",
+            }
         if kind in {"check", "review"}:
             common["candidate"] = json.loads(root["candidate_commits"])
         if kind == "review":
@@ -122,6 +137,7 @@ class Worker:
         )
 
     def run_once(self):
+        self.controller.settle_interruptions(self.worker_id)
         self.controller.reconcile_continuations()
         runtime = runtime_for(self.cfg, self.store)
         pending = runtime.pending_attempts()
@@ -243,6 +259,14 @@ class Worker:
                 "commit": snapshot["base"],
             }
             candidate = claimed["inputs"]["candidate"].get(claimed["work_item"]["repo"])
+            resume = claimed["inputs"].get("resume")
+            resume_archive = (
+                self.store.resolve_path(resume["archive"])
+                if resume and resume.get("archive")
+                else None
+            )
+            if resume_archive:
+                artifacts.verify(resume_archive)
             if job["kind"] in {"check", "review"} or spec.get("repair"):
                 if not candidate:
                     raise RuntimeError("candidate input missing")
@@ -253,6 +277,13 @@ class Worker:
                     ),
                     "commit": candidate["commit"],
                 }
+            if (
+                job["kind"] == "implement"
+                and resume_archive
+                and (resume_archive / "workspace").is_dir()
+            ):
+                # Continue from the interrupted attempt's checkout, uncommitted work included.
+                source = {"path": str(resume_archive / "workspace"), "restore": True}
             prepared = self.env.prepare(attempt_id, source)
             self.controller.record_workspace(attempt_id, prepared.workspace)
             if job["kind"] in {"plan", "critique", "review"}:
@@ -326,6 +357,7 @@ class Worker:
                     "timeout_seconds": spec["timeout_seconds"],
                     "max_output_bytes": self.cfg.max_output_bytes,
                     "budget_cents": spec["budget_cents"],
+                    "resume_session": _resume_session(resume_archive, resume),
                     "on_start": on_start,
                     "checks": snapshot["source"]["checks"],
                     "criteria": json.loads(claimed["work_item"]["plan_json"])
@@ -358,6 +390,8 @@ class Worker:
                 ok = answer.ok
                 cost = answer.cost_cents
                 error = answer.error
+                if not ok:
+                    result["failure_kind"] = "harness"
                 result["usage"] = answer.usage
                 result["session_id"] = answer.session_id
                 result["cost_status"] = answer.usage.get(
@@ -550,6 +584,27 @@ class Worker:
                 break
             count += 1
         return count
+
+
+def _resume_session(archive, resume):
+    """The interrupted attempt's harness session, complete lines only, or None."""
+    if not archive or not resume:
+        return None
+    sessions = sorted(archive.glob("session-*.jsonl"))
+    wanted = resume.get("session_id")
+    for path in reversed(sessions):
+        lines = []
+        for line in path.read_text().splitlines():
+            try:
+                parsed = json.loads(line)
+            except ValueError:
+                break  # A crash can cut the last line; keep what is whole.
+            if not lines:
+                header = parsed
+            lines.append(line)  # Byte for byte: the harness owns this format.
+        if lines and (not wanted or header.get("id") == wanted):
+            return "\n".join(lines) + "\n"
+    return None
 
 
 def _route_secret(route: dict, cfg=None) -> str:

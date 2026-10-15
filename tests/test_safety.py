@@ -99,7 +99,7 @@ def test_duplicate_result_does_not_charge_twice(simulation):
     assert store.one("SELECT attempt_id FROM costs")[0] == attempt["id"]
 
 
-def test_expired_result_fails_without_progress(simulation):
+def test_expired_result_stops_without_progress(simulation):
     cfg, store, ctrl, wid = simulation
     claim = ctrl.claim_job("w", ["native", "fake"])
     store.execute(
@@ -108,7 +108,14 @@ def test_expired_result_fails_without_progress(simulation):
     )
     ctrl.finish_attempt(claim["attempt_id"], True, "late", 1, None)
     assert store.one("SELECT status FROM attempts")[0] == "timed_out"
-    assert store.one("SELECT status FROM work_items")[0] == "failed"
+    assert (
+        store.one("SELECT status FROM jobs WHERE id=?", (claim["job"]["id"],))[0]
+        == "interrupted"
+    )
+    assert ctrl.claim_job("w", ["native", "fake"]) is None
+    # Running out of time is not trivial: a person decides.
+    ctrl.settle_interruptions()
+    assert store.one("SELECT status FROM work_items")[0] == "interrupted"
     assert ctrl.claim_job("w", ["native", "fake"]) is None
 
 

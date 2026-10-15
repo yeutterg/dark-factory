@@ -22,9 +22,14 @@ from dark_factory.worker import Worker
     sys.platform != "darwin" or not shutil.which("pi"),
     reason="installed Pi and macOS required",
 )
-@pytest.mark.parametrize("tamper_runtime", [False, True])
-def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch, tamper_runtime):
+@pytest.mark.parametrize(
+    "tamper_runtime,interrupt_coder", [(False, False), (True, False), (False, True)]
+)
+def test_installed_pi_tool_use_and_fresh_review(
+    tmp_path, monkeypatch, tamper_runtime, interrupt_coder
+):
     requests = []
+    interrupted = []
     denied_runtime_results = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -93,6 +98,20 @@ def test_installed_pi_tool_use_and_fresh_review(tmp_path, monkeypatch, tamper_ru
                         "findings": [],
                     }
                 )
+            elif (
+                interrupt_coder
+                and not interrupted
+                and any(m["role"] == "tool" for m in messages)
+            ):
+                # The provider fails mid-step, after the coder already wrote its change.
+                interrupted.append(True)
+                data = b'{"error": {"message": "overloaded", "code": 503}}'
+                self.send_response(503)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             elif any(m["role"] == "tool" for m in messages):
                 if tamper_runtime:
                     denied_runtime_results.extend(
@@ -276,7 +295,7 @@ pricing_evidence = "Fixture estimate; not provider billing"
         row = store.one("SELECT * FROM work_items")
         assert row["status"] == "awaiting_approval", row["packet_json"]
         ctrl.approve(wid, "qualification-test")
-        worker.run_loop(3)
+        worker.run_loop(4 if interrupt_coder else 3)
         row = store.one("SELECT * FROM work_items")
         assert row["status"] == "awaiting_review", row["packet_json"]
         assert json.loads(row["packet_json"])["simulation"] is True
@@ -287,7 +306,17 @@ pricing_evidence = "Fixture estimate; not provider billing"
             assert usage["cost_source"] == "approved-per-token-pricing"
             assert usage["cost"] > 0
         ctrl.accept(wid, "qualification-test")
-        assert len(requests) == 5
+        if interrupt_coder:
+            interruption = store.one("SELECT * FROM interruptions")
+            assert interruption["outcome"] == "auto_resumed", interruption["detail"]
+            # The resumed coder continued the forked conversation, tool result included.
+            resumed = [
+                r
+                for r in requests
+                if "resumed_after_interruption" in json.dumps(r["messages"])
+            ]
+            assert resumed and any(m["role"] == "tool" for m in resumed[0]["messages"])
+        assert len(requests) == (6 if interrupt_coder else 5)
         if tamper_runtime:
             assert denied_runtime_results
             assert any(
@@ -295,17 +324,14 @@ pricing_evidence = "Fixture estimate; not provider billing"
                 or "permission denied" in text.lower()
                 for text in denied_runtime_results
             )
-        assert (
-            len(
-                {
-                    json.loads(a["result_json"])["session_id"]
-                    for a in store.query(
-                        "SELECT * FROM attempts WHERE route_id IS NOT NULL"
-                    )
-                }
-            )
-            == 4
-        )
+        assert len(
+            {
+                json.loads(a["result_json"])["session_id"]
+                for a in store.query(
+                    "SELECT * FROM attempts WHERE route_id IS NOT NULL"
+                )
+            }
+        ) == (5 if interrupt_coder else 4)
     finally:
         store.close()
         server.shutdown()

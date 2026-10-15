@@ -85,6 +85,7 @@ class ExecutionService:
             runtime = runtime_for(self.cfg, self.store)
             runtime.validate()
             self.ctrl.recover("execution-supervisor")
+            self.ctrl.settle_interruptions("execution-supervisor")
             caps = [
                 "native",
                 *{r.harness for r in self.cfg.routes.values()},

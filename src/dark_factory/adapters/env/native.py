@@ -25,7 +25,10 @@ class NativeEnvironment:
         workspace = self.root / attempt_id
         if workspace.exists():
             raise FileExistsError(workspace)
-        if isinstance(repo, dict):
+        if isinstance(repo, dict) and repo.get("restore"):
+            # Resume: the archived checkout, including uncommitted and untracked work.
+            shutil.copytree(Path(repo["path"]), workspace, symlinks=True)
+        elif isinstance(repo, dict):
             clone(Path(repo["path"]), workspace, repo["commit"])
         else:
             workspace.mkdir()

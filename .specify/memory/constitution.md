@@ -12,7 +12,7 @@ Checks, reviews, previews, and costs are tied to the commit map, recipe revision
 Scheduling, arithmetic, leases, budgets, windows, and permission checks are code. Models draft, critique, implement, and interpret evidence. They cannot waive required checks, expand authorization, or declare themselves accepted.
 
 ### Bound execution and archive before delete
-Attempts are leased, budgeted, and time-bounded. Default policy is one initial attempt, one targeted correctness repair, and at most one provider/environment fallback. Unique work is archived and verified before owned resources are removed.
+Attempts are leased, budgeted, and time-bounded. Default policy is one initial attempt, one targeted correctness repair, and at most one provider/environment fallback. Unique work is archived and verified before owned resources are removed. An interrupted attempt (lost worker, engine or provider fault, unusable output, time limit) is not a result. It may continue from its archived work in a new bounded attempt: automatically for transient causes within the approved resume count, otherwise by a recorded human decision. Resumes never exceed the approved ceiling or deadline, and an interrupted process is never replayed. A decision agent may advise; code applies the limits.
 
 ### Project behavior stays outside the core
 The controller depends on normalized records, harness and environment protocols, and named JSON commands. Vendor APIs, Restful product details, and preview recipes live in adapters or project scripts.
@@ -31,4 +31,4 @@ The controller depends on normalized records, harness and environment protocols,
 
 Derive implementation from `specs/spec.md`, `specs/plan.md`, and `specs/tasks.md`. This constitution overrides convenience. Prompt and skill changes are reviewed like code and cannot grant permissions.
 
-**Version**: 1.0.0 | **Ratified**: 2026-09-11 | **Last Amended**: 2026-09-11
+**Version**: 1.1.0 | **Ratified**: 2026-09-11 | **Last Amended**: 2026-10-15

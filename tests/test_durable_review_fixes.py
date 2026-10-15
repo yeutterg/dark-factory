@@ -202,9 +202,18 @@ def test_non_correctness_failure_cannot_activate_repair(tmp_path, monkeypatch, f
         worker.run_once()
         assert calls["coder"] == 1
         assert not store.query("SELECT * FROM audit WHERE action='repair.activate'")
-        assert (
-            store.one("SELECT status FROM work_items WHERE id=?", (wid,))[0] == "failed"
-        )
+        status = store.one("SELECT status FROM work_items WHERE id=?", (wid,))[0]
+        if failure == "execution":
+            # The check machinery broke rather than judged: an interruption, not a repair.
+            assert status == "running"
+            assert store.one("SELECT category FROM interruptions")[0] == "unknown"
+            ctrl.settle_interruptions()
+            assert (
+                store.one("SELECT status FROM work_items WHERE id=?", (wid,))[0]
+                == "interrupted"
+            )
+        else:
+            assert status == "failed"
         assert all(
             j["status"] == "standby"
             for j in ctrl.jobs(wid)

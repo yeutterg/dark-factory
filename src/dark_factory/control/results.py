@@ -9,6 +9,7 @@ from pathlib import Path
 from dark_factory import artifacts
 from dark_factory.control.base import ControllerCore, ControllerError, atomic
 from dark_factory.control.roles import parse_role
+from dark_factory.interruptions import is_interruption
 from dark_factory.store import new_id, now_iso
 
 
@@ -51,6 +52,8 @@ class ResultsMixin(ControllerCore):
         snapshot = json.loads(root["snapshot_json"])
         result = {}
         archive_digest = None
+        # Failures decided by approval, budget, scope or integrity are never resumed.
+        settled_by_policy = False
         if archive_path:
             expected = self.cfg.state_dir / "archives" / attempt_id
             try:
@@ -71,6 +74,7 @@ class ResultsMixin(ControllerCore):
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 ok = False
                 error = f"invalid durable archive: {exc}"
+                settled_by_policy = True
         elif ok:
             ok = False
             error = "missing durable archive"
@@ -91,6 +95,7 @@ class ResultsMixin(ControllerCore):
         if job["kind"] not in {"plan", "critique"} and not self._approval_current(root):
             ok = False
             error = "approved inputs changed during attempt"
+            settled_by_policy = True
         parsed = None
         if ok and job["kind"] in {"plan", "critique", "review"}:
             try:
@@ -111,11 +116,13 @@ class ResultsMixin(ControllerCore):
         if cost_cents > json.loads(job["spec_json"])["budget_cents"]:
             ok = False
             error = "attempt spending exceeded reserved limit"
+            settled_by_policy = True
         if ok and job["kind"] == "implement":
             candidate = result.get("candidate", {})
             if not candidate.get("commit") or candidate.get("scope_violations"):
                 ok = False
                 error = "candidate missing or changed protected/out-of-scope paths"
+                settled_by_policy = True
             else:
                 self.store.execute(
                     "UPDATE work_items SET candidate_commits=? WHERE id=?",
@@ -236,10 +243,19 @@ class ResultsMixin(ControllerCore):
                     and parsed["findings"]
                 )
             )
-            if not correctness_failure or not self._activate_repair(
-                root["id"], job, attempt_id
+            reason = error or output or status
+            if correctness_failure:
+                if not self._activate_repair(root["id"], job, attempt_id):
+                    self._fail_root(root["id"], reason)
+            elif (
+                not cancelled
+                and not settled_by_policy
+                and is_interruption(reason, timed_out, result.get("failure_kind"))
             ):
-                self._fail_root(root["id"], error or output or status)
+                # Not judged, just stopped: continue or ask instead of failing the work.
+                self._record_interruption(root, job, attempt_id, reason, timed_out)
+            else:
+                self._fail_root(root["id"], reason)
             if cancelled:
                 self.store.execute(
                     "UPDATE work_items SET status='cancelled' WHERE id=?", (root["id"],)

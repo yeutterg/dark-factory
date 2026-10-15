@@ -106,6 +106,20 @@ COMMANDS: dict[str, OperatorCommand] = {
             lambda c, p, a: c.accept(p.get("work_item_id"), a),
             ("work_item_id",),
         ),
+        OperatorCommand(
+            "continue-work",
+            lambda c, p, a: c.continue_work(p.get("work_item_id"), a),
+            ("work_item_id",),
+        ),
+        OperatorCommand(
+            "stop-work",
+            lambda c, p, a: c.stop_work(
+                p.get("work_item_id"),
+                a,
+                p.get("reason") or "stopped after an interruption",
+            ),
+            ("work_item_id", "reason"),
+        ),
         OperatorCommand("pause", lambda c, p, a: c.pause(a)),
         OperatorCommand("resume", lambda c, p, a: c.resume(a)),
         OperatorCommand("drain", lambda c, p, a: c.drain(a)),

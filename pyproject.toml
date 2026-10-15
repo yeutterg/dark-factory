@@ -33,6 +33,7 @@ dark_factory = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = ["decider(answer): configure a scripted decision agent before planning"]
 
 [tool.ruff]
 target-version = "py311"

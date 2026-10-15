@@ -186,6 +186,10 @@ class DispatchMixin(ControllerCore):
                     if self.cfg.project_id
                     else None,
                 }
+                # A resumed step continues the interrupted attempt's saved work.
+                resume = self._resume_input(job["id"], attempt)
+                if resume:
+                    inputs["resume"] = resume
                 self.store.execute(
                     "UPDATE jobs SET status='leased',worker_id=?,lease_until=? WHERE id=?",
                     (
@@ -392,7 +396,13 @@ class DispatchMixin(ControllerCore):
     @atomic
     def cancel_job(self, job_id, actor):
         job = self.store.one("SELECT * FROM jobs WHERE id=?", (job_id,))
-        if not job or job["status"] not in {"ready", "blocked", "leased", "running"}:
+        if not job or job["status"] not in {
+            "ready",
+            "blocked",
+            "leased",
+            "running",
+            "interrupted",
+        }:
             raise ControllerError("job is not cancellable")
         active = job["status"] in {"leased", "running"}
         self.store.execute(

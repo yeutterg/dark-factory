@@ -17,6 +17,9 @@ SCHEMA_VERSION = 1
 # Every optional setting has exactly one default, shared by validation and use.
 BUDGET_DEFAULTS = {"root_cents": 1000, "planning_cents": 100, "account_cents": 10000}
 DEFAULT_MAX_REPAIRS = 0
+DEFAULT_MAX_RESUMES = 1
+MAX_RESUMES_LIMIT = 3
+DEFAULT_DECIDER_CONFIDENCE = 0.8
 DEFAULT_MAX_SECONDS = 7200
 DEFAULT_LEASE_SECONDS = 30
 DEFAULT_WORKFLOW_ENGINE = "native"
@@ -138,6 +141,22 @@ class FactoryConfig:
         return self._table("continuation").get("max_repairs", DEFAULT_MAX_REPAIRS)
 
     @property
+    def max_resumes(self) -> int:
+        return self._table("continuation").get("max_resumes", DEFAULT_MAX_RESUMES)
+
+    @property
+    def decider(self) -> dict[str, Any]:
+        """The optional decision agent: command name, region and confidence floor."""
+        table = self._table("decider")
+        if not table:
+            return {}
+        return {
+            "command": table.get("command", "decider"),
+            "region": table["region"],
+            "min_confidence": table.get("min_confidence", DEFAULT_DECIDER_CONFIDENCE),
+        }
+
+    @property
     def max_seconds(self) -> int:
         return self.execution.get("max_seconds", DEFAULT_MAX_SECONDS)
 
@@ -244,6 +263,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             "role_routes",
             "environments",
             "workers",
+            "decider",
         },
         "profile",
     )
@@ -270,9 +290,13 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     continuation = raw.get("continuation", {})
     if not isinstance(continuation, dict):
         raise ConfigError("continuation must be a table")
-    _fields(continuation, {"max_repairs"}, "continuation")
+    _fields(continuation, {"max_repairs", "max_resumes"}, "continuation")
     if _integer(continuation, "max_repairs", DEFAULT_MAX_REPAIRS) > 1:
         raise ConfigError("at most one targeted correctness repair is supported")
+    if _integer(continuation, "max_resumes", DEFAULT_MAX_RESUMES) > MAX_RESUMES_LIMIT:
+        raise ConfigError(
+            f"at most {MAX_RESUMES_LIMIT} automatic resumes per step are supported"
+        )
     workflow = raw.get("workflow", {})
     if not isinstance(workflow, dict):
         raise ConfigError("workflow must be a table")
@@ -327,6 +351,20 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         raise ConfigError("blocked_regions must be a list of strings")
     blocked = {x.upper() for x in regions}
     blocked |= BLOCKED_REGIONS
+    decider = raw.get("decider", {})
+    if not isinstance(decider, dict):
+        raise ConfigError("decider must be a table")
+    _fields(decider, {"command", "region", "min_confidence"}, "decider")
+    if decider:
+        # A decision agent is inference: its processing region is declared and checked.
+        region = decider.get("region")
+        if not isinstance(region, str) or not region.strip():
+            raise ConfigError("decider.region is required; unknown geography blocks it")
+        if region.upper() in blocked:
+            raise ConfigError("decider region is blocked by geography policy")
+        confidence = decider.get("min_confidence", DEFAULT_DECIDER_CONFIDENCE)
+        if type(confidence) not in {int, float} or not 0.5 <= confidence <= 1:
+            raise ConfigError("decider.min_confidence must be between 0.5 and 1")
 
     for rid, item in routes_raw.items():
         if not isinstance(item, dict):
@@ -498,6 +536,9 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     for required in ("tracking", "code_host"):
         if required not in commands:
             raise ConfigError(f"commands.{required} is required")
+    decider_table = raw.get("decider", {})
+    if decider_table and decider_table.get("command", "decider") not in commands:
+        raise ConfigError("decider.command must name a configured command")
 
     prompts_raw = raw.get("prompts", {})
     if not isinstance(prompts_raw, dict):

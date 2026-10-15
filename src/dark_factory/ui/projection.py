@@ -8,10 +8,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from dark_factory.controller import Controller
+from dark_factory.interruptions import CATEGORY_TEXT
 
 TERMINAL = frozenset({"accepted", "cancelled", "failed", "rejected"})
 NEEDS_HUMAN = frozenset(
-    {"selected", "awaiting_approval", "awaiting_review", "rejected"}
+    {"selected", "awaiting_approval", "awaiting_review", "rejected", "interrupted"}
 )
 
 
@@ -146,7 +147,36 @@ def _steps(controller: Controller, jobs: list[dict[str, Any]]) -> list[dict[str,
     return steps
 
 
-def _summary(row: Any, steps: list[dict[str, Any]], next_action: dict) -> list[str]:
+def _interruption(controller: Controller, root_id: str) -> dict[str, Any] | None:
+    """The latest interruption of this work and what was decided about it."""
+
+    row = controller.store.one(
+        "SELECT * FROM interruptions WHERE root_id=? ORDER BY at DESC,id DESC LIMIT 1",
+        (root_id,),
+    )
+    if not row:
+        return None
+    verdict = _json(row["verdict_json"], {})
+    return {
+        "job_id": row["job_id"],
+        "attempt_id": row["attempt_id"],
+        "at": row["at"],
+        "cause": CATEGORY_TEXT.get(row["category"], row["category"]),
+        "detail": row["detail"],
+        "outcome": row["outcome"],
+        "recommendation": verdict.get("recommendation", "resume"),
+        "reasons": verdict.get("reasons", []),
+        "blockers": verdict.get("blockers", []),
+        "actor": row["actor"],
+    }
+
+
+def _summary(
+    row: Any,
+    steps: list[dict[str, Any]],
+    next_action: dict,
+    interruption: dict[str, Any] | None = None,
+) -> list[str]:
     """Up to three plain-language lines for an item that needs a person."""
 
     status = row["status"]
@@ -173,6 +203,20 @@ def _summary(row: Any, steps: list[dict[str, Any]], next_action: dict) -> list[s
             lines.append(str(next_action["reason"]).capitalize() + ".")
     elif status == "selected":
         lines.append("Not planned yet. Planning reads the issue and proposes steps.")
+    elif status == "interrupted" and interruption:
+        step = next((s for s in steps if s["id"] == interruption["job_id"]), None)
+        name = step["name"] if step else "A step"
+        lines.append(f"{name} was interrupted: {interruption['cause']}.")
+        if interruption["blockers"]:
+            lines.append("Can't resume: " + "; ".join(interruption["blockers"]) + ".")
+        else:
+            lines.append(
+                "Resuming continues from its saved work."
+                if interruption["recommendation"] == "resume"
+                else "Stopping is recommended; resuming may repeat the problem."
+            )
+        if interruption["reasons"]:
+            lines.append("Why it waits: " + interruption["reasons"][-1] + ".")
     elif next_action.get("kind") == "blocked":
         failed = next(
             (s for s in steps if s["status"] in {"failed", "timed_out"}), None
@@ -248,6 +292,7 @@ def _work_item(
     )
     status = row["status"]
     next_action = continuation["next_action"]
+    interruption = _interruption(controller, row["id"])
     return {
         "id": row["id"],
         "number": _external_number(row["external_id"]),
@@ -271,7 +316,8 @@ def _work_item(
         "plan_version": row["plan_version"],
         "approved_at": row["approved_at"],
         "steps": steps,
-        "summary": _summary(row, steps, next_action),
+        "summary": _summary(row, steps, next_action, interruption),
+        "interruption": interruption,
         "acceptance": controller.coverage(row["id"])
         if include_detail and row["snapshot_json"] and row["plan_json"]
         else [],
@@ -279,7 +325,8 @@ def _work_item(
         if status == "accepted"
         else "needs_you"
         if status in NEEDS_HUMAN
-        or next_action["kind"] in {"human_approval", "human_review", "blocked"}
+        or next_action["kind"]
+        in {"human_approval", "human_review", "human_resume", "blocked"}
         else "running",
         "next_action": next_action,
         "work": work,

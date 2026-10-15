@@ -14,7 +14,8 @@ The controller enforces scheduling, budgets, leases, and approvals. Everything s
 - **Trackers and code hosts:** Work comes in and goes out through small JSON command adapters. GitHub adapters are included; another tracker or code host needs a script that speaks the same commands.
 - **Checks and CI/CD:** Acceptance is tied to the canonical commands you already run, such as tests, linters, and builds. Manual gates cover anything else. Results bind to the exact commit, so a passing exit code alone never counts as acceptance.
 - **Execution environments:** Workers can run locally or on [remote machines over verified TLS](docs/distributed-execution.md), under native macOS isolation. OCI and VM sandbox drivers plug into the same interface and are qualified separately.
-- **Durable runs:** Attempts are leased, budgeted, and checkpointed. An optional [durable workflow runtime](docs/durable-execution.md) checkpoints dispatch. Every workspace is archived and verified before it's removed.
+- **Durable runs:** Attempts are leased, budgeted, and checkpointed. An optional [durable workflow runtime](docs/durable-execution.md) checkpoints dispatch. Every workspace is archived and verified before it's removed. A step interrupted by a lost worker, a provider hiccup, or a malformed answer [resumes from its saved work](docs/usage.md#interrupted-steps); anything less trivial waits for you.
+- **Decision agents:** An optional decider, such as TypeSafe's Jev, can weigh in on whether an interrupted step should resume. It only advises; code keeps the approved limits.
 - **Prompts and skills:** Packaged defaults can be overridden per project in `factory.toml`.
 
 You drive it from a terminal console (`dark-factory tui`) or a scriptable CLI. Both work locally or against a remote controller.
@@ -33,6 +34,7 @@ This is just one example, and it's totally customizable. Each stage is a route o
 | Approval | You, in the TUI | Recorded human decision with a spending limit |
 | Implementation | DeepSeek Flash via Pi, on the Pi Durable runtime | Coder route through a provider Pi supports, such as Together |
 | Checks | Your test, lint, and build commands; GitHub Actions | Canonical commands run in the sandbox; CI results on the PR can be required too |
+| Interruptions | Jev as the decision agent | Rules resume trivial interruptions; Jev can confirm or hold them for you, within approved limits |
 | Review | Devin and Bugbot on the PR, plus the factory's reviewer | Reviewer route, plus required outside reviews read from the PR; they count only on the exact candidate commit |
 | Accept and merge | You | Accept in the TUI, then merge under your branch rules |
 

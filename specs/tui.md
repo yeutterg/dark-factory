@@ -39,7 +39,8 @@ CLI. It never opens a remote controller's SQLite state.
   shows keys.
 - On a needs-you item, `y` approves a plan, accepts a result, or starts planning;
   `n` rejects and asks why; `m` records a manual check; `o` reads the PR's checks
-  and reviews as outside evidence for the exact candidate. On an issue, `1`–`7`
+  and reviews as outside evidence for the exact candidate. On interrupted work,
+  `y` resumes from saved work and `n` stops and asks why. On an issue, `1`–`7`
   switch tabs, `c` stops the running step, `gi`/`gb`/`gp` open GitHub links, and
   `]f`/`[f` move between changed files.
 - In new work, `space` or `Enter` toggles the highlighted complete root, `/`

@@ -273,6 +273,7 @@ class PlanningMixin(ControllerCore):
             "external_acceptance": snapshot["external_acceptance"],
             "repair_policy": {
                 "max_repairs": self.cfg.max_repairs,
+                "max_automatic_resumes": self.cfg.max_resumes,
                 "shared_scope_budget_deadline": True,
             },
             "decision": "Review the plan and critique, then approve this exact proposal.",

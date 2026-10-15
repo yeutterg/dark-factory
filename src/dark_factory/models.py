@@ -17,6 +17,7 @@ class WorkStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     REJECTED = "rejected"
+    INTERRUPTED = "interrupted"  # A step stopped; a person decides to resume or stop.
 
 
 class JobStatus(StrEnum):
@@ -30,6 +31,7 @@ class JobStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     TIMED_OUT = "timed_out"
+    INTERRUPTED = "interrupted"  # Its attempt stopped; it may continue from saved work.
     SUPERSEDED = "superseded"
     SUPERSEDED_BY_REPAIR = "superseded_by_repair"
     NOT_NEEDED = "not_needed"

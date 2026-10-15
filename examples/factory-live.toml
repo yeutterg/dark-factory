@@ -63,6 +63,18 @@ manual_acceptance = ["Inspect candidate diff", "Confirm authorized human merge"]
 argv = ["/opt/homebrew/bin/python3.12", "-m", "unittest", "discover", "-s", "tests"]
 timeout_seconds = 300
 
+# Optional: resume a step automatically after a transient interruption (default 1).
+# [continuation]
+# max_resumes = 1
+
+# Optional decision agent for interruptions; see docs/usage.md#decision-agents.
+# [decider]
+# region = "US"
+# min_confidence = 0.8
+# [commands.decider]
+# argv = ["python3", "-m", "dark_factory.adapters.decision.jev"]
+# timeout_seconds = 30
+
 [commands.tracking]
 # Add "--project", "owner/number" to also list open issues from a GitHub Project.
 argv = ["python3", "-m", "dark_factory.adapters.projects.github"]

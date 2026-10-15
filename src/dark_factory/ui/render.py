@@ -55,6 +55,7 @@ REACHED = {
 }
 ACTIVE = frozenset({"leased", "running", "cancelling"})
 FAILED = frozenset({"failed", "timed_out", "cancelled"})
+INTERRUPTED = "interrupted"
 RESERVE = frozenset({"standby", "not_needed", "superseded_by_repair"})
 
 
@@ -170,6 +171,8 @@ def stage_states(item: dict[str, Any]) -> list[str]:
             states[index] = "done"
         elif statuses & ACTIVE:
             states[index] = "current"
+        elif INTERRUPTED in statuses:
+            states[index] = "you" if status == "interrupted" else "current"
         elif statuses & FAILED and status in {"failed", "running"}:
             states[index] = "failed"
     if status == "awaiting_approval":
@@ -244,6 +247,8 @@ def where(item: dict[str, Any]) -> Text:
         return Text("sent back · replan", style=AMBER)
     if status == "failed":
         return Text("stuck · your call", style=HAZARD)
+    if kind == "human_resume":
+        return Text("interrupted · resume?", style=AMBER)
     if kind == "blocked":
         if "allowance" in reason:
             return Text("out of budget · paused", style=AMBER)
@@ -286,6 +291,8 @@ def step_glyph(step: dict[str, Any]) -> Text:
         return Text("●", style=MINT)
     if status in FAILED:
         return Text("×", style=HAZARD)
+    if status == INTERRUPTED:
+        return Text("‖", style=AMBER)
     if status in RESERVE:
         return Text("–", style=FAINT)
     return Text("○", style=FG)
@@ -411,6 +418,8 @@ def decision_keys(item: dict[str, Any]) -> list[tuple[str, str]]:
         return [("y", "accept"), ("n", "reject (asks why)"), ("↵", "open result")]
     if status == "selected":
         return [("y", "start planning"), ("↵", "open")]
+    if status == "interrupted":
+        return [("y", "resume"), ("n", "stop (asks why)"), ("↵", "open")]
     return [("↵", "open")]
 
 

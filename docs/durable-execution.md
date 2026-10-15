@@ -76,7 +76,7 @@ max_cents = 200
 
 ## Recovery and remaining capabilities
 
-Reopening a recorded dispatch observes the same attempt. Completed native work is not run twice. An unstarted leased dispatch may continue only after controller revalidation, within its original lease and authority. An interrupted active CLI is not replayed: lease recovery fences its process, preserves work and records conservative cost. Session IDs and transcripts support inspection, not automatic takeover. Bootstrap can still stop on failures outside its preapproved repair branch.
+Reopening a recorded dispatch observes the same attempt. Completed native work is not run twice. An unstarted leased dispatch may continue only after controller revalidation, within its original lease and authority. An interrupted active CLI is not replayed: lease recovery fences its process, preserves work and records conservative cost. The step may then continue in a new bounded attempt from the archived work, and Pi forks the archived session; see [interrupted steps](usage.md#interrupted-steps). The engine reports a typed reason for a failed dispatch. Bootstrap can still stop on failures outside its preapproved repair branch.
 
 Dispatch discovery includes controller leases created before the engine checkpoint exists. The same worker identity, original unexpired lease, exact policy and absence of workspace/PID remain mandatory for resumption. A completed candidate's human review is not blocked solely by execution budget/deadline limits or a dispatch pause; missing evidence and changed approval still block readiness. Rejecting a result refreshes its stored packet immediately, before replanning.
 
