@@ -515,6 +515,10 @@ def test_tui_keeps_last_snapshot_and_marks_lost_connection():
     asyncio.run(exercise())
 
 
+def test_connection_state_update_is_safe_during_screen_mount():
+    NewWorkScreen().show_connection_state(True)
+
+
 def test_issue_screen_reads_outside_reviews_before_accepting():
     async def exercise() -> None:
         transport = FixtureTransport()

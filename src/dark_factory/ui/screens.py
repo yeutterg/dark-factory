@@ -221,7 +221,11 @@ class FactoryScreen(Screen):
     def show_connection_state(self, disconnected: bool) -> None:
         """Keep stale-data state visible on every screen, not only in a toast."""
 
-        keybar = self.query_one("#keybar", Line)
+        # A timer refresh may race with screen composition/replacement. The
+        # state remains on the app and the mounted screen will render it next.
+        keybar = next(self.query("#keybar").results(Line), None)
+        if keybar is None:
+            return
         keybar.set(
             keybar.left,
             Text("disconnected · showing last update", style=r.HAZARD)
