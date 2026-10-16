@@ -1,0 +1,82 @@
+name: ${COMPOSE_PROJECT_NAME:-dark-factory}
+
+x-runtime: &runtime
+  image: ${DARK_FACTORY_IMAGE:-dark-factory:local}
+  init: true
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+
+services:
+  server:
+    <<: *runtime
+    build:
+      context: .
+    command: ["--config", "/config/factory.toml", "serve"]
+    environment:
+      COMPOSE_OPERATOR_TOKEN: ${COMPOSE_OPERATOR_TOKEN:?Run ./scripts/compose-init}
+      COMPOSE_LEGACY_WORKER_TOKEN: ${COMPOSE_LEGACY_WORKER_TOKEN:?Run ./scripts/compose-init}
+      COMPOSE_WORKER_TOKEN: ${COMPOSE_WORKER_TOKEN:?Run ./scripts/compose-init}
+    volumes:
+      - ./examples/compose/factory.toml:/config/factory.toml:ro
+      - supervisor-state:/state
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8745/health', timeout=2).read()",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 3s
+    restart: unless-stopped
+
+  worker:
+    <<: *runtime
+    depends_on:
+      server:
+        condition: service_healthy
+    network_mode: service:server
+    command:
+      ["execution-worker", "--profile", "/config/execution-worker.toml"]
+    environment:
+      COMPOSE_WORKER_TOKEN: ${COMPOSE_WORKER_TOKEN:?Run ./scripts/compose-init}
+    volumes:
+      - ./examples/compose/execution-worker.toml:/config/execution-worker.toml:ro
+      - worker-state:/state
+    restart: unless-stopped
+
+  client:
+    <<: *runtime
+    profiles: ["client"]
+    depends_on:
+      server:
+        condition: service_healthy
+    network_mode: service:server
+    entrypoint:
+      [
+        "dark-factory",
+        "--config",
+        "/config/operator.toml",
+        "--api-url",
+        "http://127.0.0.1:8745",
+      ]
+    command: ["status"]
+    environment:
+      COMPOSE_OPERATOR_TOKEN: ${COMPOSE_OPERATOR_TOKEN:?Run ./scripts/compose-init}
+      TERM: ${TERM:-xterm-256color}
+    volumes:
+      - ./examples/compose/operator.toml:/config/operator.toml:ro
+    stdin_open: true
+    tty: true
+
+volumes:
+  supervisor-state:
+  worker-state:

@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+target="$repo_root/.env"
+
+if [ -e "$target" ]; then
+    echo ".env already exists; leaving it unchanged"
+    exit 0
+fi
+
+umask 077
+random_hex() {
+    od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'
+}
+
+slug=$(basename "$repo_root" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-')
+slug=$(printf '%s' "$slug" | sed 's/^[-_]*//; s/[-_]*$//')
+project="${slug:-dark-factory}-$(random_hex 3)"
+
+set -C
+{
+    printf 'COMPOSE_PROJECT_NAME=%s\n' "$project"
+    printf 'DARK_FACTORY_IMAGE=%s:local\n' "$project"
+    printf 'COMPOSE_OPERATOR_TOKEN=%s\n' "$(random_hex 32)"
+    printf 'COMPOSE_LEGACY_WORKER_TOKEN=%s\n' "$(random_hex 32)"
+    printf 'COMPOSE_WORKER_TOKEN=%s\n' "$(random_hex 32)"
+} > "$target"
+
+echo "Created private .env credentials. Start with: docker compose up --build -d server worker"

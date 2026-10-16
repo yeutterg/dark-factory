@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repo_root"
+
+docker compose run --rm --no-TTY client status >/dev/null
+docker compose exec -T server python - <<'PY'
+import json
+import os
+from urllib.request import Request, urlopen
+
+request = Request(
+    "http://127.0.0.1:8745/operator/view",
+    headers={"Authorization": "Bearer " + os.environ["COMPOSE_OPERATOR_TOKEN"]},
+)
+with urlopen(request, timeout=5) as response:
+    workers = json.load(response)["result"]["workers"]
+ready = [worker["id"] for worker in workers if worker["status"] == "ready"]
+if "compose-worker" not in ready:
+    raise SystemExit("compose worker did not register as ready")
+print("Compose server, client, and worker are ready")
+PY

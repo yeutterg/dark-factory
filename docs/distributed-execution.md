@@ -13,6 +13,8 @@ This implements the network boundary inspired by [disler/durable-pi](https://git
 
 `serve --worker` is the single-machine convenience mode: supervisor and worker responsibilities are co-located on one host, but attempts still use fresh isolated workspaces. It does not imply Docker. In a separated deployment, the supervisor may use the repository Dockerfile while workers remain native Macs, VMs, or container-capable hosts. Installing an agent CLI on both tiers is unnecessary unless that machine also acts as an execution worker.
 
+For a local containerized installation, the [Docker Compose stack](docker-compose.md) supplies a server, a disposable operator client and a separate simulation worker without publishing the controller port. It is an installation and handoff fixture, not live Linux-agent qualification.
+
 ## Independent selections
 
 Pin `project.id`, all four `role_routes`, each route's `project_id`, `account_kind`, `billing_account`, `auth_env`, model, provider, endpoint and CLI version. Routes separately name an `environment`. Registered workers have explicit environment membership and distinct external token references. A worker's CLI profile contains its own account bindings, not a copy of `factory.toml`.

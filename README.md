@@ -70,12 +70,22 @@ dark-factory --config factory.toml tui --actor you
 
 The demo uses simulated agents with real Git workspaces and checks. It makes no model calls and stops for your review.
 
+Or run the separated supervisor, worker fixture, and operator client with Docker Compose:
+
+```bash
+./scripts/compose-init
+docker compose up --build -d server worker
+docker compose run --rm client tui --actor operator
+```
+
+This Compose profile is simulation-only and publishes no controller port. See the [Docker Compose installation](docs/docker-compose.md) before substituting a live worker.
+
 Run tests with `python -m pytest -n auto`; lint and type-check with `ruff check src tests` and `mypy`.
 
 ## Status
 
 This is early. The control plane, adapters, and isolation are tested end to end with simulated and loopback providers. Live-model qualification is still pending. Multi-repository work, a web UI, and previews come later.
 
-[Usage guide](docs/usage.md) · [Live configuration](examples/factory-live.toml) · [Qualification status](specs/qualification.md) · [Roadmap](specs/tasks.md)
+[Usage guide](docs/usage.md) · [Docker Compose](docs/docker-compose.md) · [Live configuration](examples/factory-live.toml) · [Qualification status](specs/qualification.md) · [Roadmap](specs/tasks.md)
 
 MIT licensed.

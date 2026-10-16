@@ -1,4 +1,9 @@
 **
 !Dockerfile
-!dist/
-!dist/*.whl
+!pyproject.toml
+!README.md
+!src/
+!src/**
+src/**/__pycache__/
+src/**/*.pyc
+src/dark_factory/adapters/workflow/pi_engine/node_modules/

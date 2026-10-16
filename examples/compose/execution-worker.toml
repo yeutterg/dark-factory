@@ -1,0 +1,6 @@
+# Outbound worker fixture. It shares only the server container's loopback network.
+url = "http://127.0.0.1:8745"
+project_id = "compose-example"
+worker_id = "compose-worker"
+token_env = "COMPOSE_WORKER_TOKEN"
+state_dir = "/state/worker"

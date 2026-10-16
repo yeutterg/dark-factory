@@ -1,0 +1,3 @@
+# The remote operator client needs only its credential reference.
+[runtime]
+operator_token_env = "COMPOSE_OPERATOR_TOKEN"

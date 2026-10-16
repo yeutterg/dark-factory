@@ -1,0 +1,56 @@
+# Docker Compose fixture only. It uses deterministic fake inference.
+schema_version = 1
+repositories = ["example/project"]
+skills = ["@archive-before-delete", "@redesign"]
+
+[project]
+id = "compose-example"
+name = "compose-example"
+state_dir = "/state/supervisor"
+
+[runtime]
+worker_token_env = "COMPOSE_LEGACY_WORKER_TOKEN"
+operator_token_env = "COMPOSE_OPERATOR_TOKEN"
+api_host = "127.0.0.1"
+api_port = 8745
+
+[budgets]
+root_cents = 2000
+planning_cents = 100
+account_cents = 2000
+
+[role_routes]
+planner = "fixture"
+critic = "fixture"
+coder = "fixture"
+reviewer = "fixture"
+
+[environments.compose]
+kind = "native" # Fake-only fixture; not a live Linux isolation claim.
+
+[workers.compose-worker]
+token_env = "COMPOSE_WORKER_TOKEN"
+environments = ["compose"]
+lease_seconds = 120
+
+[routes.fixture]
+project_id = "compose-example"
+account_kind = "simulation"
+environment = "compose"
+model = "fake-local"
+harness = "fake"
+harness_version = "0.1"
+provider = "none"
+endpoint = "local"
+billing_account = "compose-example-fixture"
+region = "LOCAL"
+role = "coder"
+max_cents = 500
+
+[commands.tracking]
+argv = ["dark-factory", "adapter", "github-tracking"]
+timeout_seconds = 30
+
+[commands.code_host]
+argv = ["dark-factory", "adapter", "github-codehost"]
+timeout_seconds = 30
