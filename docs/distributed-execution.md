@@ -4,6 +4,15 @@ The supervisor owns one project's approvals, limits, SQLite state and canonical 
 
 This implements the network boundary inspired by [disler/durable-pi](https://github.com/disler/durable-pi), not its device-wide shell authority. Pi Durable remains an optional supervisor-side dispatch runtime. Pi, Claude Code and Codex remain independent task harnesses; existing role/admission restrictions still apply. This is not a claim that any particular hosted account, VM service or live container route has been qualified.
 
+## What runs where
+
+- **Operator machine:** the TUI or CLI is only a client. It can exit without stopping the supervisor or workers.
+- **Supervisor host or container:** runs `serve`, owns the project configuration, approval state, SQLite database and canonical evidence, and runs the optional Pi Durable dispatch engine. Its image needs Python and, for Pi Durable, the pinned Node packages. With external workers it needs no agent CLI, inference credential or Docker socket.
+- **Execution worker machine:** runs `execution-worker` at the same Dark Factory revision. It installs only the exact Pi, Claude Code or Codex versions selected by its project routes and holds only that worker's project-scoped inference credentials.
+- **Attempt sandbox:** the worker launches each assignment in a disposable native, OCI or VM environment. The workspace and build products are archived and verified before teardown; the supervisor database and operator credential never enter it.
+
+`serve --worker` is the single-machine convenience mode: supervisor and worker responsibilities are co-located on one host, but attempts still use fresh isolated workspaces. It does not imply Docker. In a separated deployment, the supervisor may use the repository Dockerfile while workers remain native Macs, VMs, or container-capable hosts. Installing an agent CLI on both tiers is unnecessary unless that machine also acts as an execution worker.
+
 ## Independent selections
 
 Pin `project.id`, all four `role_routes`, each route's `project_id`, `account_kind`, `billing_account`, `auth_env`, model, provider, endpoint and CLI version. Routes separately name an `environment`. Registered workers have explicit environment membership and distinct external token references. A worker's CLI profile contains its own account bindings, not a copy of `factory.toml`.

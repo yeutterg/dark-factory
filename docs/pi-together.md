@@ -2,7 +2,7 @@
 
 The factory Pi adapter does not read `~/.pi` from the sandbox. It starts a fresh `PI_CODING_AGENT_DIR` per attempt and injects only the approved route.
 
-For a deployment where Pi 1.2.0 is logged into Together (`pi auth check --provider together` reports `ready`), the worker can use that login without copying the key into git:
+For a deployment where Pi 1.3.0 is logged into Together (`pi auth check --provider together` reports `ready`), the worker can use that login without copying the key into git:
 
 1. `TOGETHER_API_KEY` if set, otherwise
 2. `pi auth print-api-key --provider together`
@@ -21,7 +21,7 @@ The [Together model page](https://www.together.ai/models/deepseek-v4-1-flash) cu
 
 A deployment-local `factory.local.toml` is gitignored. The provided template is intended to pin:
 
-- harness `pi` 1.2.0
+- harness `pi` 1.3.0
 - provider `together`
 - model `deepseek-ai/DeepSeek-V4.1-Flash` (registered explicitly; Together's Pi catalog still listed V4-Flash-0731 after `pi update --models`)
 - region `US` with Together's published North America hosting evidence for DeepSeek

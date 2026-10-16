@@ -7,6 +7,7 @@ from typing import Any
 
 from textual.app import App
 from textual.binding import Binding
+from textual.css.query import NoMatches
 from textual.screen import Screen
 
 from dark_factory.control.base import ControllerError
@@ -52,39 +53,44 @@ class DarkFactoryApp(App[None]):
         self.push_screen(OverviewScreen())
         self.set_interval(2.0, self.refresh_snapshot)
 
+    def _render_mounted_screen(self, disconnected: bool) -> None:
+        screen = self.screen
+        if not screen.is_mounted:
+            return
+        render = getattr(screen, "render_snapshot", None)
+        if render:
+            try:
+                render()
+            except NoMatches:
+                # A timer may finish while Textual is removing the old screen's
+                # children. Its on_mount or the next refresh renders the replacement.
+                return
+        connection = getattr(screen, "show_connection_state", None)
+        if connection:
+            connection(disconnected)
+
     async def refresh_snapshot(
         self, show_error: bool = True, detail_id: str | None = None
     ) -> bool:
         try:
             if detail_id is None and isinstance(self.screen, IssueScreen):
                 detail_id = self.screen.work_item_id
-            self.snapshot_data = await asyncio.to_thread(
-                self.transport.snapshot, detail_id
-            )
-            was_disconnected = self.connection_error is not None
-            self.connection_error = None
-            render = getattr(self.screen, "render_snapshot", None)
-            if render:
-                render()
-            connection = getattr(self.screen, "show_connection_state", None)
-            if connection:
-                connection(False)
-            if was_disconnected:
-                self.notify("Controller connection restored")
-            return True
+            snapshot = await asyncio.to_thread(self.transport.snapshot, detail_id)
         except Exception as exc:
             message = str(exc)
             changed = message != self.connection_error
             self.connection_error = message
-            render = getattr(self.screen, "render_snapshot", None)
-            if render:
-                render()
-            connection = getattr(self.screen, "show_connection_state", None)
-            if connection:
-                connection(True)
+            self._render_mounted_screen(True)
             if show_error and changed:
                 self.notify(str(exc), severity="error", timeout=8)
             return False
+        self.snapshot_data = snapshot
+        was_disconnected = self.connection_error is not None
+        self.connection_error = None
+        self._render_mounted_screen(False)
+        if was_disconnected:
+            self.notify("Controller connection restored")
+        return True
 
     def _replace(self, screen: Screen[Any]) -> None:
         if isinstance(self.screen, OverviewScreen) and isinstance(

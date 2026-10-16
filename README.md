@@ -20,6 +20,8 @@ The controller enforces scheduling, budgets, leases, and approvals. Everything s
 
 You drive it from a terminal console (`dark-factory tui`) or a scriptable CLI. The supervisor and worker run as a separate service, so closing the TUI with `q`, `Ctrl+Q`, or `Ctrl+C` does not stop work.
 
+Docker is optional. `serve --worker` runs a co-located supervisor and worker on one host. A distributed deployment can put the stateful supervisor in a container and run execution workers on separate Macs, VMs, or container hosts; only worker machines need the selected agent CLIs and inference credentials. See [project-scoped supervisor and workers](docs/distributed-execution.md#what-runs-where).
+
 ![The Dark Factory terminal console: issues waiting on you, running work with stage progress, and workers](docs/images/tui-overview.png)
 
 ## Example stack

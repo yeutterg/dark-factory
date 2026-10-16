@@ -13,7 +13,7 @@ license = "MIT"
 dependencies = ["textual>=8.2,<9"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-xdist==3.8.0", "ruff==0.17.0", "mypy==2.4.0"]
+dev = ["pytest>=8.0", "pytest-xdist==3.8.0", "ruff==0.17.1", "mypy==2.4.0"]
 
 [project.scripts]
 dark-factory = "dark_factory.cli:main"

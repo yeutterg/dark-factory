@@ -1,5 +1,9 @@
 # Bootstrap qualification — 2026-09-11
 
+## Dependency refresh — 2026-10-16
+
+The workflow stack is pinned to Pi Durable, Pi AI and Chord 1.3.0 with TypeScript 7.0.2 and Node 22 typings 22.20.5. The strict engine check and actual in-memory preflight pass under Node 22.23.2 and Node 24.22.0; CI exercises both supported Node majors. Installed Pi 1.3.0, Codex 0.163.0 and Claude Code 2.1.301 completed 35 local dummy-provider and isolation tests without paid inference. The full Python suite passed **339 tests in 138.53 seconds**, plus Ruff 0.17.1, formatting and mypy. A refresh race found during parallel TUI teardown was made mount-safe and its failing interaction passed ten consecutive targeted runs. These checks update local compatibility evidence only: they do not qualify live accounts, model quality, subscription billing, processing geography or Codex's still-blocked nested isolation boundary. Earlier version-specific evidence below remains historical rather than being rewritten.
+
 ## Operational preflight candidate — 2026-10-13
 
 Review-fix source `f0e6a685c7bd60190a6eeee465e7ef28df2209ec`: **234 local tests passed in 451.25 seconds**; hosted CI at that exact head passed **223 tests with 11 platform-specific skips** and strict engine type-checking. Clean wheel SHA-256 `cf4d13b4f5618ba0587a56bb1cc64ab7eb65749b2a06009d2801ce00206bd98c` was installed separately, matched the current Python source, and invoked from an unrelated directory. Its exact engine preflight and five durable simulation jobs reached human review at candidate `fb41eaf9536a6cffb0738f763ba871dac32b3b9d`; all five archives/checkpoints verified, no execution workspaces or outstanding reservations remained, declared assumptions and the manual diff gate persisted. This is not a live model run, acceptance, merge or controller upgrade. Original private deployment settings/state remain untouched.
