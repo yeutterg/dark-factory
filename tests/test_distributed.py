@@ -19,6 +19,7 @@ from dark_factory.execution.executor import execute_assignment
 from dark_factory.execution.packages import identity, pack, unpack
 from dark_factory.execution.service import ExecutionService
 from dark_factory.store import Store
+from dark_factory.ui.projection import controller_projection
 
 
 def deployment(tmp_path, monkeypatch, project="project-one"):
@@ -107,6 +108,25 @@ def test_project_credentials_never_discover_host_login(monkeypatch):
         )
         == ""
     )
+
+
+def test_idle_worker_poll_is_visible_as_ready(tmp_path, monkeypatch):
+    cfg = deployment(tmp_path, monkeypatch)
+    store = Store(cfg.state_dir)
+    try:
+        ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))
+        service = ExecutionService(ctrl)
+        assert service.claim("worker1", "idle-poll") is None
+        worker = next(
+            item
+            for item in controller_projection(ctrl)["workers"]
+            if item["id"] == "worker1"
+        )
+        assert worker["status"] == "ready"
+        assert worker["active"] is None
+        assert set(worker["capabilities"]) >= {"native", "fake", "environment:local"}
+    finally:
+        store.close()
 
 
 def test_full_portable_loop_and_idempotent_settlement(tmp_path, monkeypatch):

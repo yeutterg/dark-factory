@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 
-from dark_factory.config import ConfigError, load_config, parse_toml_bytes
+from dark_factory.config import (
+    ConfigError,
+    load_config,
+    load_operator_endpoint,
+    parse_toml_bytes,
+)
 
 
 def test_load_example(tmp_path: Path) -> None:
@@ -13,6 +19,9 @@ def test_load_example(tmp_path: Path) -> None:
     cfg = parse_toml_bytes(src.encode(), Path("examples/factory.toml").resolve())
     assert cfg.project_name == "dark-factory"
     assert "fake-coder" in cfg.routes
+    assert cfg.commands["tracking"].command[0] == str(
+        Path(sys.executable).with_name("dark-factory").resolve()
+    )
 
 
 def test_unknown_region_blocked(tmp_path: Path) -> None:
@@ -32,6 +41,14 @@ def test_china_blocked() -> None:
 def test_missing_file() -> None:
     with pytest.raises(ConfigError):
         load_config("/tmp/does-not-exist-factory.toml")
+
+
+def test_operator_endpoint_reads_only_runtime_and_normalizes_bind_all(tmp_path):
+    profile = tmp_path / "operator.toml"
+    profile.write_text('[runtime]\napi_host = "0.0.0.0"\napi_port = 9123\n')
+    assert load_operator_endpoint(profile) == "http://127.0.0.1:9123"
+    profile.write_text('[runtime]\napi_host = "::1"\napi_port = 9123\n')
+    assert load_operator_endpoint(profile) == "http://[::1]:9123"
 
 
 @pytest.mark.parametrize(

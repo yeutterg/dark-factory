@@ -34,32 +34,57 @@ class DarkFactoryApp(App[None]):
         Binding("ctrl+c", "quit", "Quit", priority=True, show=False),
     ]
 
-    def __init__(self, transport: OperatorTransport, actor: str = "operator") -> None:
+    def __init__(
+        self,
+        transport: OperatorTransport,
+        actor: str = "operator",
+        initial_snapshot: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__()
         self.transport = transport
         self.actor = actor
-        self.snapshot_data: dict[str, Any] = {}
+        self.snapshot_data: dict[str, Any] = initial_snapshot or {}
+        self.connection_error: str | None = None
 
     async def on_mount(self) -> None:
-        await self.refresh_snapshot(show_error=False)
+        if not self.snapshot_data:
+            await self.refresh_snapshot(show_error=False)
         self.push_screen(OverviewScreen())
         self.set_interval(2.0, self.refresh_snapshot)
 
     async def refresh_snapshot(
         self, show_error: bool = True, detail_id: str | None = None
-    ) -> None:
+    ) -> bool:
         try:
             if detail_id is None and isinstance(self.screen, IssueScreen):
                 detail_id = self.screen.work_item_id
             self.snapshot_data = await asyncio.to_thread(
                 self.transport.snapshot, detail_id
             )
+            was_disconnected = self.connection_error is not None
+            self.connection_error = None
             render = getattr(self.screen, "render_snapshot", None)
             if render:
                 render()
+            connection = getattr(self.screen, "show_connection_state", None)
+            if connection:
+                connection(False)
+            if was_disconnected:
+                self.notify("Controller connection restored")
+            return True
         except Exception as exc:
-            if show_error:
+            message = str(exc)
+            changed = message != self.connection_error
+            self.connection_error = message
+            render = getattr(self.screen, "render_snapshot", None)
+            if render:
+                render()
+            connection = getattr(self.screen, "show_connection_state", None)
+            if connection:
+                connection(True)
+            if show_error and changed:
                 self.notify(str(exc), severity="error", timeout=8)
+            return False
 
     def _replace(self, screen: Screen[Any]) -> None:
         if isinstance(self.screen, OverviewScreen) and isinstance(
@@ -356,4 +381,8 @@ class DarkFactoryApp(App[None]):
 
 
 def run_tui(transport: OperatorTransport, actor: str = "operator") -> None:
-    DarkFactoryApp(transport, actor).run()
+    # Connect before switching the terminal into application mode. A mistyped
+    # URL or stopped controller should fail as a normal CLI error, not leave a
+    # blank TUI refreshing forever.
+    snapshot = transport.snapshot()
+    DarkFactoryApp(transport, actor, snapshot).run()

@@ -14,14 +14,14 @@ from dark_factory.adapters.harness.registry import adapter_for
 def release_attempt_environment(store, attempt) -> None:
     """Release the exact frozen backend for an already archived attempt.
 
-    Named sandbox drivers need the same policy descriptor they received during
-    execution. It is reconstructed only from the attempt's immutable inputs and
-    root snapshot. No harness or model process is started.
+    Non-native backends need the same owned-resource identity or policy descriptor
+    they received during execution. It is reconstructed only from the attempt's
+    immutable inputs and root snapshot. No harness or model process is started.
     """
     workspace = store.resolve_path(attempt["workspace"])
     inputs = json.loads(attempt["inputs_json"] or "{}")
     recipe = inputs.get("environment") or {"kind": "native"}
-    if recipe.get("kind") != "command":
+    if recipe.get("kind") in {"native", "macos-sandbox"}:
         NativeEnvironment(store.state_dir / "workspaces").release(
             PreparedEnv(workspace, recipe.get("kind", "native"), {})
         )
@@ -35,9 +35,9 @@ def release_attempt_environment(store, attempt) -> None:
     role = spec.get("role")
     runtime = store.state_dir / "runtime" / attempt["id"]
     environment = environment_for(store.state_dir / "workspaces", recipe, route)
-    prepared = PreparedEnv(workspace, "command", {})
+    prepared = PreparedEnv(workspace, recipe["kind"], {})
     immutable = adapter_for(route["harness"]).immutable_runtime_files if role else ()
-    environment.prefix(
+    environment.reconstruct(
         prepared,
         runtime,
         network=bool(role),
@@ -48,7 +48,7 @@ def release_attempt_environment(store, attempt) -> None:
         immutable_runtime_files=immutable,
     )
     if role:
-        environment.prefix(
+        environment.reconstruct(
             prepared,
             runtime / "version-probe",
             network=False,

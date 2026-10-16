@@ -32,7 +32,7 @@ Declare reasonable planning and implementation assumptions in the executive summ
 - Native or Pi Durable dispatch runtime, independent of the selected CLI harness; Codex subscription adapter with live isolation qualification pending.
 - Optional original-approval-bound repair/check/review branch; no reset of root budgets or deadlines.
 
-Out of scope for bootstrap: web UI, TUI, settings editor, multi-repo graphs, automatic model fallback, preview/merge automation, DORA, arena and Claude coding/session takeover.
+Originally out of scope for bootstrap, and still separate from its execution authority: web UI, multi-repo graphs, automatic model fallback, preview/merge automation, DORA, arena and Claude coding/session takeover. The later TUI increment is a thin operator client over the same command boundary; it does not own scheduling or execution.
 
 ## Acceptance
 

@@ -142,10 +142,13 @@ def test_adapter_swap_without_controller_change(tmp_path: Path) -> None:
     )
     text = Path("examples/factory.toml").read_text(encoding="utf-8")
     text = text.replace('state_dir = "./state"', f'state_dir = "{tmp_path / "state"}"')
+    configured = 'argv = ["dark-factory", "adapter", "github-tracking"]'
+    assert configured in text
     text = text.replace(
-        'argv = ["python3", "-m", "dark_factory.adapters.projects.github"]',
+        configured,
         f'argv = ["{sys.executable}", "{script}"]',
     )
+    assert configured not in text
     cfg = parse_toml_bytes(text.encode(), Path("examples/factory.toml").resolve())
     store = Store(cfg.state_dir)
     ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))

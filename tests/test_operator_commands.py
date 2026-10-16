@@ -81,7 +81,7 @@ def test_cli_rejects_local_only_command_over_api(tmp_path, capsys):
     assert "runs locally" in capsys.readouterr().err
 
 
-def test_remote_cli_renders_result_and_exit_code_like_local(tmp_path, capsys):
+def test_remote_cli_needs_only_operator_credential(tmp_path, monkeypatch, capsys):
     from test_loop import cfg_for
 
     cfg = cfg_for(tmp_path)
@@ -91,7 +91,14 @@ def test_remote_cli_renders_result_and_exit_code_like_local(tmp_path, capsys):
     server = serve(ctrl, "127.0.0.1", 0, cfg.worker_token)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_port}"
-    base = ["--config", str(cfg.source_path), "--api-url", url]
+    client = tmp_path / "operator.toml"
+    client.write_text(
+        '[runtime]\noperator_token_env = "REMOTE_OPERATOR_TOKEN"\n'
+        'worker_token_env = "INTENTIONALLY_MISSING"\n'
+        '[sources."missing/repo"]\npath = "/also/intentionally/missing"\n'
+    )
+    monkeypatch.setenv("REMOTE_OPERATOR_TOKEN", cfg.operator_token)
+    base = ["--config", str(client), "--api-url", url]
     try:
         assert main([*base, "reload"]) == 2
         capsys.readouterr()
@@ -101,3 +108,27 @@ def test_remote_cli_renders_result_and_exit_code_like_local(tmp_path, capsys):
         server.shutdown()
         server.server_close()
         store.close()
+
+
+def test_tui_defaults_to_separate_configured_controller(tmp_path, monkeypatch):
+    from dark_factory.ui.transport import RemoteTransport
+
+    client = tmp_path / "operator.toml"
+    client.write_text(
+        '[runtime]\noperator_token_env = "REMOTE_OPERATOR_TOKEN"\n'
+        'api_host = "127.0.0.1"\napi_port = 9876\n'
+        '[sources."missing/repo"]\npath = "/intentionally/missing"\n'
+    )
+    monkeypatch.setenv("REMOTE_OPERATOR_TOKEN", "separate-operator-token")
+    observed = {}
+
+    def run_tui(transport, actor):
+        observed["transport"] = transport
+        observed["actor"] = actor
+
+    monkeypatch.setattr("dark_factory.ui.app.run_tui", run_tui)
+    assert main(["--config", str(client), "tui", "--actor", "greg"]) == 0
+    transport = observed["transport"]
+    assert isinstance(transport, RemoteTransport)
+    assert transport.base_url == "http://127.0.0.1:9876"
+    assert observed["actor"] == "greg"

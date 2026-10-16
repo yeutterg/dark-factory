@@ -138,6 +138,11 @@ class NativeEnvironment:
         # its entire process group before returning or raising.
         pass
 
+    def reconstruct(
+        self, prepared: PreparedEnv, runtime: Path, **policy: object
+    ) -> None:
+        """Native execution has no external resource identity to recover."""
+
     def release(self, prepared: PreparedEnv) -> None:
         if (
             prepared.workspace.parent.resolve() != self.root

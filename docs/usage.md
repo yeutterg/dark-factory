@@ -15,6 +15,9 @@ python -m pip install -e ".[dev]"
 cp examples/factory.toml factory.toml
 # Choose a new state_dir for this experiment.
 dark-factory --config factory.toml demo
+# Keep this process running:
+dark-factory --config factory.toml serve --worker
+# In another terminal:
 dark-factory --config factory.toml tui --actor greg
 ```
 
@@ -36,7 +39,7 @@ If Pi is already logged into Together on this Mac (`pi auth check --provider tog
 
 Only `macos-sandbox` admits live Pi. The qualified native profile denies reads of user/private data, writes outside the owned workspace/runtime, protected-file changes, and model shell/extension execution. Model roles get read tools; only the coder gets edit/write tools. Canonical check processes have no network access or controller/model credentials. This is macOS native isolation, not a VM. Toolchains under system/Homebrew paths are supported; a toolchain in a private home directory needs a separately qualified execution profile.
 
-Select the complete root outcome. The GitHub adapter reads parent relationships and child counts; caller flags cannot turn a live child into a root. Bootstrap rejects child-only selection and roots with required children because child-graph execution is not implemented yet. Preserve the root and use an appropriate orchestration path; do not substitute one child to fit bootstrap. Standalone single-repository outcomes remain supported. Custom tracker commands must supply truthful `parent_id`, `is_root` and `required_child_count` metadata; unresolved relationships must fail rather than imply a root.
+Select the complete root outcome. The GitHub adapter reads parent relationships and child counts; caller flags cannot turn a live child into a root. Bootstrap rejects child-only selection and roots with required children because child-graph execution is not implemented yet. Preserve the root and use an appropriate orchestration path; do not substitute one child to fit bootstrap. Standalone single-repository outcomes remain supported. Custom tracker discovery commands supply an opaque provider-qualified `external_id`, configured `repo`, positive display `number`, string `title`/`url`, and truthful `parent_id`, `is_root` and `required_child_count`; unresolved or inconsistent relationships fail rather than imply a root.
 
 `discover` lists open issues carrying the `selected` label. To also take work from GitHub Projects, add `--project owner/number` (repeatable) to the tracking command's argv, plus `--theme-field <name>` if the board's theme field isn't called `Theme`. Discovery then lists open issues on those boards from configured repositories, with each item's project, status and theme; the TUI groups new work by project and theme. Project boards need a token with the `read:project` scope, and an unreadable board fails discovery instead of being skipped. Projects only change what is listed: intake, root scope and planning are the same.
 
@@ -85,11 +88,19 @@ The [Claude Code subscription adapter](claude-subscription.md) supports planner,
 
 ## Operate one controller
 
-Open the local terminal console when it will own the controller state:
+Start the controller/supervisor independently of the terminal console:
 
 ```bash
+dark-factory --config factory.toml serve --worker
+# In another terminal; connects to runtime.api_host/runtime.api_port:
 dark-factory --config factory.toml tui --actor greg
 ```
+
+The service owns state and execution. The TUI is only an operator client, so
+`q`, `Ctrl+Q`, and `Ctrl+C` close the console without pausing, draining, or
+stopping the factory. For offline maintenance only, `tui --embedded` opens the
+state in the TUI process; it cannot run alongside the service and it does not
+run a worker.
 
 The overview has independently scrollable execution and worker panes. `i`, `w`,
 and `s` open new work, worker, and settings views; `?` shows the full key map.
@@ -102,17 +113,15 @@ The settings view reads the active profile and can request a validated reload,
 but `factory.toml` remains the source of truth. Human decisions are confirmed and
 recorded with the supplied actor.
 
-For interactive cancellation/approval while the worker runs, start the local service:
+To connect from a different host or override the configured loopback endpoint:
 
 ```bash
-dark-factory --config factory.toml serve --worker
-# In another terminal, use the separate operator credential from the profile:
 dark-factory --config factory.toml --api-url http://127.0.0.1:8745 status
 dark-factory --config factory.toml --api-url http://127.0.0.1:8745 pause
 dark-factory --config factory.toml --api-url http://127.0.0.1:8745 tui --actor greg
 ```
 
-Operator commands accept the same arguments and return the same JSON with or without `--api-url`. The TUI is a local application in both modes: with `--api-url` it reads an authenticated, credential-free projection and never opens the controller's SQLite state. `preflight`, `backup`, `restore`, `run-worker`, `serve`, `demo`, `adapter` and `execution-worker` run only locally. The API binds to loopback unless the project-scoped TLS deployment requirements are met. Worker credentials cannot read the operator projection or invoke operator decisions. A process lock prevents a second controller from opening the same state directory. Pauses and drains stop new dispatch; cancellation is separate. `resume` clears pause; `undrain` clears drain. Active attempts retain their input snapshots. A valid reload changes future defaults; incompatible approved work stops for a new proposal. Invalid reload retains the last valid in-memory configuration and records an audit event.
+Operator commands accept the same arguments and return the same JSON with or without `--api-url`. A remote CLI or TUI config only needs `[runtime] operator_token_env`; it does not load source checkouts, routes, worker credentials, or execution dependencies. The TUI always reads an authenticated, credential-free projection unless `--embedded` is explicit, and never opens a remote controller's SQLite state. `preflight`, `backup`, `restore`, `run-worker`, `serve`, `demo`, `adapter` and `execution-worker` run only locally. The API binds to loopback unless the project-scoped TLS deployment requirements are met. Worker credentials cannot read the operator projection or invoke operator decisions. A process lock prevents a second controller from opening the same state directory. Pauses and drains stop new dispatch; cancellation is separate. `resume` clears pause; `undrain` clears drain. Active attempts retain their input snapshots. A valid reload changes future defaults; incompatible approved work stops for a new proposal. Invalid reload retains the last valid in-memory configuration and records an audit event.
 
 `cancel <job-id>` requests process termination and capture. `recover` fences expired leases, preserves unique work and records conservative estimated cost. It never replays an interrupted CLI; the step can resume from its saved work instead (see below). Unknown interrupted usage consumes the reserved allowance. Repairs default to zero. With `[continuation] max_repairs = 1`, the original proposal includes one conditional correctness repair followed by fresh checks and review, under the original limits. Other stopped outcomes require inspection and a revised plan/approval. There is no automatic provider fallback.
 
@@ -141,11 +150,17 @@ region = "US"            # Required: a decider is inference, checked against geo
 min_confidence = 0.8     # Advice below this is ignored
 
 [commands.decider]
-argv = ["python3", "-m", "dark_factory.adapters.decision.jev"]
+argv = ["dark-factory", "adapter", "jev-decision"]
 timeout_seconds = 30
 ```
 
 Jev reads `TYPESAFE_API_KEY` from the controller environment (`--api-key-env` names another variable). It receives the step kind, the cause, the error, timings, costs and the last 2,000 characters of the step's output, never credentials. Confident `resume` resumes a non-trivial interruption; confident `ask` or `stop` holds a trivial one for a person. Neither can lift the limits above, and a missing, failing or unconfident decider falls back to the rules. The decider settings are part of the approved plan. Any command that answers `decide` can replace Jev.
+
+Bundled adapters run through the installed `dark-factory adapter ...`
+entrypoint. Profile loading binds that command to the active Python installation,
+so an older global script or a source-checkout-relative module path cannot be
+selected accidentally. Third-party adapters remain ordinary explicit command
+arrays speaking the same JSON contract.
 
 ## Preserve and restore work
 

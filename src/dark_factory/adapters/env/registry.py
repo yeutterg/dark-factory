@@ -64,6 +64,20 @@ class OciEnvironment(NativeEnvironment):
         self.recipe, self.route = recipe, route or {}
         self.containers = set()
 
+    @staticmethod
+    def _container_name(workspace, runtime):
+        return (
+            "df-"
+            + hashlib.sha256(
+                (str(workspace.resolve()) + str(runtime.resolve())).encode()
+            ).hexdigest()[:32]
+        )
+
+    def reconstruct(self, prepared, runtime, **policy):
+        """Recover the deterministic owned container name without Docker calls."""
+
+        self.containers.add(self._container_name(prepared.workspace, runtime))
+
     def prefix(
         self,
         prepared,
@@ -82,10 +96,7 @@ class OciEnvironment(NativeEnvironment):
             raise ValueError("OCI bind paths cannot contain mount delimiters")
         recipe = self.recipe
         owner = hashlib.sha256(str(self.root).encode()).hexdigest()[:24]
-        name = (
-            "df-"
-            + hashlib.sha256((str(workspace) + str(runtime)).encode()).hexdigest()[:32]
-        )
+        name = self._container_name(workspace, runtime)
         self.containers.add(name)
         argv = [
             *docker_command(recipe),
@@ -224,6 +235,12 @@ class OciEnvironment(NativeEnvironment):
                 "cannot verify owned container removal; resources retained"
             )
 
+    def release(self, prepared):
+        # Release owns the full teardown contract. Calling stop beforehand is
+        # harmless and keeps normal execution and crash-recovery paths symmetric.
+        self.stop(prepared)
+        super().release(prepared)
+
 
 class CommandEnvironment(NativeEnvironment):
     """Trusted VM/remote sandbox driver; argv contract, never a model-provided shell."""
@@ -285,6 +302,9 @@ class CommandEnvironment(NativeEnvironment):
 
     def stop(self, prepared):
         self._operation("stop")
+
+    def reconstruct(self, prepared, runtime, **policy):
+        self.prefix(prepared, runtime, **policy)
 
     def release(self, prepared):
         self._operation("release")

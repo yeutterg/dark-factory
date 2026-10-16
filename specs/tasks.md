@@ -36,6 +36,6 @@ Implementation authority remains the [specification](spec.md) and [constitution]
 
 - [x] Paper-derived controller overview with separate execution and worker scrolling, terminal-state progress suppression, and compact done-today summary.
 - [x] Issue activity/evidence tabs, proposal and candidate decisions, manual-gate evidence, explicit tracker-root intake, settings, and worker host/assignment/preflight views.
-- [x] Local controller transport plus authenticated remote projection and operator-command transport; no second owner opens controller state.
+- [x] Authenticated projection and operator-command transport with a service-owned default TUI; explicit embedded maintenance mode never runs a worker or opens state beside the service.
 - [x] Target-size and compact-terminal smoke coverage, authenticated projection tests, and command-boundary regressions.
 - [x] Bounded read-only tracker discovery with hierarchy metadata, complete-root selection guards, and on-demand native archived diff rendering.

@@ -8,6 +8,7 @@ from http.client import HTTPConnection
 from pathlib import Path
 from typing import Any
 
+import pytest
 from test_loop import cfg_for
 from textual.widgets import OptionList
 
@@ -20,6 +21,7 @@ from dark_factory.ui.app import (
     NewWorkScreen,
     OverviewScreen,
     SettingsScreen,
+    run_tui,
 )
 from dark_factory.ui.projection import controller_projection
 from dark_factory.ui.transport import OperatorTransport, RemoteTransport
@@ -180,6 +182,48 @@ def test_controller_discovery_uses_configured_scope_without_state_write(
         store.close()
 
 
+@pytest.mark.parametrize(
+    "change,message",
+    [
+        ({"external_id": ""}, "external_id"),
+        ({"number": "12"}, "positive number"),
+        ({"is_root": True, "parent_id": "opaque-parent"}, "inconsistent"),
+        ({"required_child_count": -1}, "non-negative"),
+    ],
+)
+def test_controller_rejects_malformed_tracker_discovery(
+    tmp_path, monkeypatch, change, message
+):
+    cfg = cfg_for(tmp_path)
+    store = Store(cfg.state_dir)
+    ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))
+    candidate = {
+        "external_id": "other-provider:opaque-12",
+        "repo": cfg.repositories[0],
+        "number": 12,
+        "title": "Candidate",
+        "url": "https://tracker.example.test/items/12",
+        "is_root": True,
+        "parent_id": None,
+        "required_child_count": 0,
+    }
+    candidate.update(change)
+    monkeypatch.setattr(
+        ctrl.runner,
+        "run_json",
+        lambda *args: {
+            "ok": True,
+            "items": [candidate],
+            "evidence": {"count": 1},
+        },
+    )
+    try:
+        with pytest.raises(ControllerError, match=message):
+            ctrl.discover_issues()
+    finally:
+        store.close()
+
+
 def test_remote_operator_transport_requires_tls_off_loopback():
     try:
         RemoteTransport("http://controller.example.test", "operator-token")
@@ -287,6 +331,7 @@ class FixtureTransport(OperatorTransport):
             return {
                 "items": [
                     {
+                        "external_id": "github:example/project:issue:13",
                         "repo": "example/project",
                         "number": 13,
                         "title": "Discovered complete root",
@@ -437,6 +482,39 @@ def test_tui_quit_bindings_exit_cleanly():
     asyncio.run(exercise("ctrl+c"))
 
 
+def test_tui_fails_before_terminal_mode_when_controller_is_unavailable():
+    class Unavailable(OperatorTransport):
+        def snapshot(self, detail_id=None):
+            raise ControllerError("controller unavailable")
+
+        def command(self, name, params=None, actor="operator"):
+            raise AssertionError("no command should run")
+
+    with pytest.raises(ControllerError, match="controller unavailable"):
+        run_tui(Unavailable())
+
+
+def test_tui_keeps_last_snapshot_and_marks_lost_connection():
+    async def exercise() -> None:
+        transport = FixtureTransport()
+        app = DarkFactoryApp(transport, "greg")
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+
+            def unavailable(detail_id=None):
+                raise ControllerError("controller unavailable")
+
+            transport.snapshot = unavailable  # type: ignore[method-assign]
+            assert await app.refresh_snapshot() is False
+            assert app.snapshot_data["project"]["name"] == "example/project"
+            crumb = app.screen.query_one("#crumb")
+            assert "disconnected · showing last update" in crumb.right.plain
+            keybar = app.screen.query_one("#keybar")
+            assert "disconnected · showing last update" in keybar.right.plain
+
+    asyncio.run(exercise())
+
+
 def test_issue_screen_reads_outside_reviews_before_accepting():
     async def exercise() -> None:
         transport = FixtureTransport()
@@ -549,6 +627,57 @@ def test_new_work_groups_project_issues_by_theme():
             table = screen.query_one("#candidate-table", OptionList)
             assert table.get_option_at_index(0).id == "heading:Reliability"
             assert "Todo" in str(table.get_option_at_index(1).prompt)
+
+    asyncio.run(exercise())
+
+
+def test_new_work_nests_children_using_opaque_tracker_ids():
+    async def exercise() -> None:
+        transport = FixtureTransport()
+        original = transport.command
+
+        def command(name, params=None, actor="operator"):
+            if name != "discover":
+                return original(name, params, actor)
+            return {
+                "items": [
+                    {
+                        "external_id": "linear:parent:opaque",
+                        "repo": "example/project",
+                        "number": 20,
+                        "title": "Parent outcome",
+                        "url": "https://example.test/20",
+                        "is_root": True,
+                        "parent_id": None,
+                        "required_child_count": 1,
+                    },
+                    {
+                        "external_id": "linear:child:not-a-number",
+                        "repo": "example/project",
+                        "number": 21,
+                        "title": "Required child",
+                        "url": "https://example.test/21",
+                        "is_root": False,
+                        "parent_id": "linear:parent:opaque",
+                        "required_child_count": 0,
+                    },
+                ],
+                "evidence": {"count": 2},
+            }
+
+        transport.command = command  # type: ignore[method-assign]
+        app = DarkFactoryApp(transport, "greg")
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("i")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, NewWorkScreen)
+            table = screen.query_one("#candidate-table", OptionList)
+            ids = [table.get_option_at_index(i).id for i in range(table.option_count)]
+            assert ids == ["example/project#20", "example/project#21"]
+            child = table.get_option_at_index(1)
+            assert "part of #20" in child.prompt.plain
 
     asyncio.run(exercise())
 

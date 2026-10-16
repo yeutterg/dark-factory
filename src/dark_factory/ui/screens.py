@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -165,7 +166,7 @@ class Help(ModalScreen[None]):
             ("↵", "open"),
             ("y / n", "approve or accept / reject (asks why)"),
             ("1–7", "issue tabs"),
-            ("gi gb gp", "open the issue, branch or pull request on GitHub"),
+            ("gi gb gp", "open the item, branch or change request"),
             ("c", "stop the running step"),
             ("m", "record a manual check"),
             ("o", "read checks and reviews from the PR"),
@@ -175,7 +176,7 @@ class Help(ModalScreen[None]):
             ("P D R", "pause, drain, recover"),
             ("r", "refresh"),
             ("esc", "back"),
-            ("q", "quit this screen only; the controller keeps running"),
+            ("q / ^Q / ^C", "quit the TUI only; the factory keeps running"),
         ]
         table = Table.grid(padding=(0, 3))
         table.add_column(style=f"bold {r.FG}", no_wrap=True)
@@ -216,6 +217,17 @@ class FactoryScreen(Screen):
 
     def keybar(self) -> Line:
         return Line(r.keys(self.KEYS), r.keys(GLOBAL_KEYS), id="keybar")
+
+    def show_connection_state(self, disconnected: bool) -> None:
+        """Keep stale-data state visible on every screen, not only in a toast."""
+
+        keybar = self.query_one("#keybar", Line)
+        keybar.set(
+            keybar.left,
+            Text("disconnected · showing last update", style=r.HAZARD)
+            if disconnected
+            else r.keys(GLOBAL_KEYS),
+        )
 
     def width_of(self, widget: Widget) -> int:
         width = widget.scrollable_content_region.width
@@ -335,7 +347,9 @@ class OverviewScreen(FactoryScreen):
             return
         dispatch = snapshot["dispatch"]
         state = Text()
-        if dispatch["pause"] == "on":
+        if self.factory.connection_error:
+            state = Text("disconnected · showing last update", style=r.HAZARD)
+        elif dispatch["pause"] == "on":
             state = Text("paused · P resumes", style=r.AMBER)
         elif dispatch["drain"] == "on":
             state = Text("draining · D undrains", style=r.AMBER)
@@ -590,7 +604,7 @@ class IssueScreen(FactoryScreen):
         ("c", "stop step"),
         ("1–7", "tabs"),
         ("j/k", "pick step"),
-        ("gi gb gp", "open on GitHub"),
+        ("gi gb gp", "open item, branch or change request"),
     ]
     BINDINGS = [
         *FactoryScreen.BINDINGS,
@@ -1638,8 +1652,12 @@ class SettingsScreen(FactoryScreen):
             )
             return
         editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+        command = shlex.split(editor)
+        if not command:
+            self.notify("$VISUAL/$EDITOR does not name a command", severity="error")
+            return
         with self.app.suspend():
-            subprocess.call([*editor.split(), path])
+            subprocess.call([*command, path])
         self.call_after_refresh(self.action_reload)
 
     async def action_reload(self) -> None:
@@ -1654,8 +1672,8 @@ class NewWorkScreen(FactoryScreen):
     KEYS = [
         ("j/k", "move"),
         ("↹", "sources ⇄ issues"),
-        ("/", "filter or add owner/repo#n"),
-        ("r", "refresh from GitHub"),
+        ("/", "filter or add repo#n"),
+        ("r", "refresh from tracker"),
         ("esc", "back"),
     ]
     BINDINGS = [
@@ -1686,9 +1704,7 @@ class NewWorkScreen(FactoryScreen):
                 yield OptionList(id="repos")
             with Vertical(id="issues-panel", classes="panel"):
                 yield Line(id="issues-head", fill="─")
-                yield Input(
-                    placeholder="filter, or owner/repo#123 to add", id="issue-input"
-                )
+                yield Input(placeholder="filter, or repo#123 to add", id="issue-input")
                 yield OptionList(id="candidate-table")
                 yield Static(id="new-work-summary")
         yield self.keybar()
@@ -1733,8 +1749,16 @@ class NewWorkScreen(FactoryScreen):
                 ("already in the factory · ", r.BLUE), r.where(known)
             ), False
         if not issue.get("is_root", True):
-            parent = str(issue.get("parent_id") or "").rsplit(":", 1)[-1]
-            return Text(f"part of #{parent}", style=r.DIM), False
+            parent = next(
+                (
+                    candidate
+                    for candidate in self.candidates.values()
+                    if candidate.get("external_id") == issue.get("parent_id")
+                ),
+                None,
+            )
+            label = f"#{parent['number']}" if parent else "another item"
+            return Text(f"part of {label}", style=r.DIM), False
         children = issue.get("required_child_count") or 0
         if children:
             return (
@@ -1873,14 +1897,16 @@ class NewWorkScreen(FactoryScreen):
                     ),
                 )
             )
+        keys_by_external_id = {
+            issue["external_id"]: key
+            for key, issue in visible.items()
+            if isinstance(issue.get("external_id"), str) and issue["external_id"]
+        }
         children: dict[str, list[str]] = {}
         for key, issue in visible.items():
             parent = issue.get("parent_id")
             if parent:
-                repo, _, number = (
-                    str(parent).removeprefix("github:").rpartition(":issue:")
-                )
-                parent_key = f"{repo}#{number}"
+                parent_key = keys_by_external_id.get(parent)
                 if parent_key in visible:
                     children.setdefault(parent_key, []).append(key)
         nested = {k for kids in children.values() for k in kids}
@@ -1932,9 +1958,9 @@ class NewWorkScreen(FactoryScreen):
                     )
         if not options:
             message = (
-                "Loading issues from GitHub…"
+                "Loading items from the tracker…"
                 if not self.loaded
-                else "No open issues are labeled or on a project board. Press / to add one by number."
+                else "No open items are selected by the tracker. Press / to add one by number."
             )
             options.append(
                 Option(Text(message, style=r.DIM), id="empty", disabled=True)
@@ -2005,7 +2031,7 @@ class NewWorkScreen(FactoryScreen):
                         ("y", f"start planning {count}" if count else "start planning"),
                         ("space ↵", "select"),
                         ("h/l", "fold / unfold"),
-                        ("gi", "open on GitHub"),
+                        ("gi", "open item"),
                     ]
                 ),
             )

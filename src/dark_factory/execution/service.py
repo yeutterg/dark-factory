@@ -12,6 +12,7 @@ from pathlib import Path
 from dark_factory import artifacts
 from dark_factory.controller import ControllerError
 from dark_factory.execution.packages import identity, pack, unpack
+from dark_factory.store import now_iso
 from dark_factory.workflow import runtime_for
 
 
@@ -46,6 +47,16 @@ class ExecutionService:
             raise ControllerError("attempt belongs to another worker")
         return row
 
+    def _capabilities(self, worker):
+        return [
+            "native",
+            *sorted({r.harness for r in self.cfg.routes.values()}),
+            *sorted(
+                "environment:" + name
+                for name in self.cfg.workers[worker]["environments"]
+            ),
+        ]
+
     def preflight(self, worker):
         choices = self.cfg.workers[worker]["environments"]
         return {
@@ -64,17 +75,20 @@ class ExecutionService:
             raise ValueError("bounded request_id required")
         key = "dispatch:" + worker + ":" + request_id
         with self.store.transaction():
+            caps = self._capabilities(worker)
+            # An authenticated worker polling for work is online even when no
+            # assignment is eligible. Preserve busy while an active lease owns
+            # it; _claim changes the flag atomically when it assigns work.
+            self.store.execute(
+                """INSERT INTO workers(id,capabilities,last_heartbeat,busy)
+                VALUES (?,?,?,0) ON CONFLICT(id) DO UPDATE SET
+                capabilities=excluded.capabilities,
+                last_heartbeat=excluded.last_heartbeat""",
+                (worker, json.dumps(caps), now_iso()),
+            )
             previous = self.store.get_op(key, "")
             if previous:
                 row = self._owned(worker, previous)
-                caps = [
-                    "native",
-                    *{r.harness for r in self.cfg.routes.values()},
-                    *(
-                        "environment:" + n
-                        for n in self.cfg.workers[worker]["environments"]
-                    ),
-                ]
                 if row["status"] != "leased" or not self.ctrl.resume_claim(
                     previous, worker, caps
                 ):
@@ -86,11 +100,6 @@ class ExecutionService:
             runtime.validate()
             self.ctrl.recover("execution-supervisor")
             self.ctrl.settle_interruptions("execution-supervisor")
-            caps = [
-                "native",
-                *{r.harness for r in self.cfg.routes.values()},
-                *("environment:" + n for n in self.cfg.workers[worker]["environments"]),
-            ]
             claimed = self.ctrl.claim_job(worker, caps)
             if claimed is None:
                 return None

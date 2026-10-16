@@ -73,6 +73,7 @@ def _candidate(repo, issue, project=None):
             raise ValueError("invalid parent number")
         parent_id = f"github:{parent_repo}:issue:{parent_number}"
     return {
+        "external_id": f"github:{repo}:issue:{number}",
         "repo": repo,
         "number": number,
         "title": issue.get("title", ""),

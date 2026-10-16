@@ -72,14 +72,14 @@ timeout_seconds = 300
 # region = "US"
 # min_confidence = 0.8
 # [commands.decider]
-# argv = ["python3", "-m", "dark_factory.adapters.decision.jev"]
+# argv = ["dark-factory", "adapter", "jev-decision"]
 # timeout_seconds = 30
 
 [commands.tracking]
 # Add "--project", "owner/number" to also list open issues from a GitHub Project.
-argv = ["python3", "-m", "dark_factory.adapters.projects.github"]
+argv = ["dark-factory", "adapter", "github-tracking"]
 timeout_seconds = 60
 
 [commands.code_host]
-argv = ["python3", "-m", "dark_factory.adapters.git.github"]
+argv = ["dark-factory", "adapter", "github-codehost"]
 timeout_seconds = 60

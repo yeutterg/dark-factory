@@ -49,11 +49,11 @@ role = "coder"
 max_cents = 500
 
 [commands.tracking]
-argv = ["python3", "-m", "dark_factory.adapters.projects.github"]
+argv = ["dark-factory", "adapter", "github-tracking"]
 timeout_seconds = 30
 
 [commands.code_host]
-argv = ["python3", "-m", "dark_factory.adapters.git.github"]
+argv = ["dark-factory", "adapter", "github-codehost"]
 timeout_seconds = 30
 
 [prompts]

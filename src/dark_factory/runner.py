@@ -159,6 +159,13 @@ class CommandRunner:
                     os.killpg(proc.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+                except PermissionError:
+                    # A very short command can be reaped and its numeric process
+                    # group reused before this cleanup runs. Never signal a group
+                    # we can no longer prove belongs to the completed child. A
+                    # live owned child must still be killable or cleanup fails.
+                    if proc.poll() is None:
+                        raise
                 proc.wait()
                 proc.stdout.close()
                 proc.stderr.close()

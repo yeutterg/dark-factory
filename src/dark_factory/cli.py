@@ -8,7 +8,12 @@ import sys
 from pathlib import Path
 
 from dark_factory import operator_commands
-from dark_factory.config import ConfigError, load_config
+from dark_factory.config import (
+    ConfigError,
+    load_config,
+    load_operator_endpoint,
+    load_operator_token,
+)
 from dark_factory.controller import Controller, ControllerError
 from dark_factory.store import Store
 from dark_factory.worker import Worker
@@ -114,6 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_review.add_argument("work_item_id")
     p_tui = sub.add_parser("tui", help="Open the controller operator console")
     p_tui.add_argument("--actor", default="operator")
+    p_tui.add_argument(
+        "--embedded",
+        action="store_true",
+        help="Open controller state in this TUI process instead of using the service",
+    )
     p_serve = sub.add_parser("serve")
     p_serve.add_argument("--host")
     p_serve.add_argument("--port", type=int)
@@ -125,7 +135,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the single local worker in this controller process",
     )
     p_adapter = sub.add_parser("adapter")
-    p_adapter.add_argument("name", choices=["github-tracking", "github-codehost"])
+    p_adapter.add_argument(
+        "name", choices=["github-tracking", "github-codehost", "jev-decision"]
+    )
     p_adapter.add_argument(
         "adapter_args",
         nargs=argparse.REMAINDER,
@@ -185,6 +197,23 @@ def _dispatch(args: argparse.Namespace) -> int:
                 time.sleep(1)
         print(json.dumps({"jobs_run": count}))
         return 0
+    if args.cmd == "adapter":
+        if args.name == "github-tracking":
+            from dark_factory.adapters.projects.github import main as tracking_main
+
+            tracking_main(args.adapter_args)
+            return 0
+        if args.name == "github-codehost":
+            from dark_factory.adapters.git.github import main as git_main
+
+            if args.adapter_args:
+                raise ConfigError("github-codehost does not accept adapter options")
+            git_main()
+            return 0
+        from dark_factory.adapters.decision.jev import main as decision_main
+
+        decision_main(args.adapter_args)
+        return 0
     if not args.config:
         raise ConfigError("--config is required for controller commands")
     if args.cmd == "preflight":
@@ -193,17 +222,6 @@ def _dispatch(args: argparse.Namespace) -> int:
         result = inspect_configuration(load_config(args.config))
         print(json.dumps(result, indent=2))
         return 0 if result["preflight_passed"] else 2
-    if args.cmd == "adapter":
-        if args.name == "github-tracking":
-            from dark_factory.adapters.projects.github import main as tracking_main
-
-            tracking_main(args.adapter_args)
-            return 0
-        from dark_factory.adapters.git.github import main as git_main
-
-        git_main()
-        return 0
-
     if args.cmd == "restore":
         from dark_factory.artifacts import restore
 
@@ -213,38 +231,34 @@ def _dispatch(args: argparse.Namespace) -> int:
         from dark_factory.ui.app import run_tui
         from dark_factory.ui.transport import LocalTransport, RemoteTransport
 
-        if args.api_url:
-            cfg = load_config(args.config)
-            run_tui(RemoteTransport(args.api_url, cfg.operator_token), args.actor)
-            return 0
-        ctrl, store = build_controller(args.config)
+        if args.embedded:
+            if args.api_url:
+                raise ConfigError("tui --embedded cannot be combined with --api-url")
+            ctrl, store = build_controller(args.config)
+            try:
+                run_tui(LocalTransport(ctrl), args.actor)
+                return 0
+            finally:
+                store.close()
+        token = load_operator_token(args.config)
+        endpoint = args.api_url or load_operator_endpoint(args.config)
         try:
-            run_tui(LocalTransport(ctrl), args.actor)
+            run_tui(RemoteTransport(endpoint, token), args.actor)
             return 0
-        finally:
-            store.close()
+        except OSError as exc:
+            raise ControllerError(
+                f"controller unavailable at {endpoint}; start it with "
+                f"'dark-factory --config {args.config} serve --worker'"
+            ) from exc
     command = operator_commands.COMMANDS.get(args.cmd)
     if args.api_url:
-        from urllib.request import Request, urlopen
+        from dark_factory.ui.transport import RemoteTransport
 
         if command is None or not command.api:
             raise ControllerError(f"{args.cmd} runs locally; omit --api-url")
-        cfg = load_config(args.config)
-        data = {
-            "cmd": args.cmd,
-            "actor": _actor(args),
-            **_params(args, command),
-        }
-        req = Request(
-            args.api_url.rstrip("/") + "/operator",
-            data=json.dumps(data).encode(),
-            headers={
-                "Authorization": f"Bearer {cfg.operator_token}",
-                "Content-Type": "application/json",
-            },
-        )
-        with urlopen(req, timeout=30) as response:
-            text, code = command.render(json.loads(response.read())["result"])
+        transport = RemoteTransport(args.api_url, load_operator_token(args.config))
+        result = transport.command(args.cmd, _params(args, command), _actor(args))
+        text, code = command.render(result)
         # Same output and exit status as the local command.
         if text is not None:
             print(text)

@@ -17,6 +17,7 @@ from dark_factory.adapters.env.registry import (
     project_network,
 )
 from dark_factory.adapters.git.local import fixture
+from dark_factory.execution import cleanup
 from dark_factory.runner import CommandRunner
 
 
@@ -104,6 +105,88 @@ def test_container_cleanup_reads_back_successful_removal(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", run)
     env.stop(None)
     assert commands[-1][3:5] == ["ps", "--all"]
+
+
+def test_container_release_reconstructs_and_removes_owned_resource(
+    tmp_path, monkeypatch
+):
+    import hashlib
+
+    env = OciEnvironment(tmp_path / "workspaces", recipe())
+    prepared = env.prepare("task")
+    runtime = tmp_path / "runtime" / "task"
+    env.reconstruct(prepared, runtime)
+    owner = hashlib.sha256(str(env.root).encode()).hexdigest()[:24]
+    responses = iter(
+        [
+            subprocess.CompletedProcess([], 0, owner, ""),
+            subprocess.CompletedProcess([], 0, "", ""),
+            subprocess.CompletedProcess([], 0, "", ""),
+        ]
+    )
+    commands = []
+
+    def run(argv, **kwargs):
+        commands.append(argv)
+        return next(responses)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    env.release(prepared)
+    assert any("rm" in command for command in commands)
+    assert not prepared.workspace.exists()
+
+
+def test_cleanup_retry_reconstructs_non_native_backend(tmp_path, monkeypatch):
+    calls = []
+
+    class Environment:
+        def reconstruct(self, prepared, runtime, **policy):
+            calls.append(("reconstruct", runtime, policy))
+
+        def release(self, prepared):
+            calls.append(("release", prepared.workspace))
+
+    class Store:
+        state_dir = tmp_path
+
+        def resolve_path(self, value):
+            return Path(value)
+
+        def one(self, sql, params):
+            if "FROM jobs" in sql:
+                return {"work_item_id": "root", "spec_json": '{"role":"coder"}'}
+            return {
+                "snapshot_json": json.dumps(
+                    {
+                        "source": {
+                            "allowed_paths": ["src"],
+                            "protected_paths": ["policy"],
+                        }
+                    }
+                )
+            }
+
+    monkeypatch.setattr(cleanup, "environment_for", lambda *args: Environment())
+    cleanup.release_attempt_environment(
+        Store(),
+        {
+            "id": "attempt",
+            "job_id": "job",
+            "workspace": str(tmp_path / "workspace"),
+            "inputs_json": json.dumps(
+                {
+                    "environment": {"kind": "oci"},
+                    "route": {"harness": "fake"},
+                }
+            ),
+        },
+    )
+    assert [call[0] for call in calls] == [
+        "reconstruct",
+        "reconstruct",
+        "release",
+    ]
+    assert calls[0][2]["writable"] == ["src"]
 
 
 def test_project_network_rejects_shared_external_or_host_gateway(monkeypatch):

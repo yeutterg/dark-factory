@@ -138,6 +138,7 @@ def test_candidate_discovery_is_read_only_bounded_and_scope_aware(monkeypatch):
     )
     assert result["items"] == [
         {
+            "external_id": "github:acme/tool:issue:7",
             "repo": "acme/tool",
             "number": 7,
             "title": "Complete root",

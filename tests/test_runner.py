@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -7,6 +8,29 @@ import pytest
 
 from dark_factory.contracts import ContractError
 from dark_factory.runner import CommandRunner, RunnerError
+
+
+def test_completed_command_does_not_fail_if_process_group_was_reused(
+    tmp_path, monkeypatch
+):
+    real_killpg = os.killpg
+
+    def reused_group(pid, signal):
+        raise PermissionError("group no longer belongs to completed child")
+
+    monkeypatch.setattr(os, "killpg", reused_group)
+    try:
+        code, output, _ = CommandRunner(tmp_path).supervise(
+            [sys.executable, "-c", "print('done')"],
+            b"",
+            5,
+            tmp_path,
+            os.environ.copy(),
+        )
+    finally:
+        monkeypatch.setattr(os, "killpg", real_killpg)
+    assert code == 0
+    assert output.strip() == b"done"
 
 
 def test_invalid_json(tmp_path: Path) -> None:

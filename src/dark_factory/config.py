@@ -6,6 +6,7 @@ import hashlib
 import math
 import os
 import re
+import sys
 import tomllib
 import zoneinfo
 from dataclasses import dataclass, field
@@ -223,6 +224,64 @@ def load_config(path: str | os.PathLike[str]) -> FactoryConfig:
     if not source.is_file():
         raise ConfigError(f"configuration file not found: {source}")
     return parse_toml_bytes(source.read_bytes(), source)
+
+
+def load_operator_token(path: str | os.PathLike[str]) -> str:
+    """Read only the operator credential needed by a remote CLI or TUI.
+
+    A remote operator is a client of the running controller. It must not need
+    the controller's worker credential, source checkout, route credentials or
+    installed execution dependencies merely to connect.
+    """
+
+    source = Path(path).resolve()
+    if not source.is_file():
+        raise ConfigError(f"configuration file not found: {source}")
+    try:
+        raw = tomllib.loads(source.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ConfigError(f"invalid TOML: {exc}") from exc
+    runtime = raw.get("runtime")
+    if not isinstance(runtime, dict):
+        raise ConfigError("runtime must be a table")
+    reference = runtime.get("operator_token_env")
+    if reference is not None:
+        if not isinstance(reference, str) or not reference:
+            raise ConfigError("runtime.operator_token_env must be a non-empty string")
+        token = os.environ.get(reference, "")
+    else:
+        token = runtime.get("operator_token", "")
+        if not isinstance(token, str):
+            raise ConfigError("runtime.operator_token must be a string")
+    if not token:
+        raise ConfigError("runtime.operator_token is required for remote operators")
+    return token
+
+
+def load_operator_endpoint(path: str | os.PathLike[str]) -> str:
+    """Build the loopback operator URL without loading controller settings."""
+
+    source = Path(path).resolve()
+    if not source.is_file():
+        raise ConfigError(f"configuration file not found: {source}")
+    try:
+        raw = tomllib.loads(source.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ConfigError(f"invalid TOML: {exc}") from exc
+    runtime = raw.get("runtime")
+    if not isinstance(runtime, dict):
+        raise ConfigError("runtime must be a table")
+    host = runtime.get("api_host", "127.0.0.1")
+    port = runtime.get("api_port", 8745)
+    if not isinstance(host, str) or not host:
+        raise ConfigError("runtime.api_host must be a non-empty string")
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ConfigError("runtime.api_port must be an integer from 1 to 65535")
+    # Bind-all addresses are server settings, not client destinations.
+    if host in {"0.0.0.0", "::"}:
+        host = "127.0.0.1"
+    client_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    return f"http://{client_host}:{port}"
 
 
 def _fields(table: dict[str, Any], allowed: set[str], name: str) -> None:
@@ -526,7 +585,14 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         if not argv or not all(isinstance(x, str) for x in argv):
             raise ConfigError(f"command {cid!r} argv must be a list of strings")
         argv = list(argv)
-        if "/" in argv[0]:
+        if argv[0] == "dark-factory":
+            installed = Path(sys.executable).with_name("dark-factory")
+            if not installed.is_file():
+                raise ConfigError(
+                    "dark-factory command is not installed beside the active Python"
+                )
+            argv[0] = str(installed.resolve())
+        elif "/" in argv[0]:
             argv[0] = _resolve(source_path.parent, argv[0])
         commands[cid] = IntegrationCommand(
             id=cid,

@@ -20,6 +20,64 @@ from dark_factory.store import new_id, now_iso
 class PlanningMixin(ControllerCore):
     """Select complete roots, plan them and record human decisions."""
 
+    def _discovery_items(self, items: Any) -> list[dict[str, Any]]:
+        """Validate the tracker-to-operator presentation contract.
+
+        Provider identifiers stay opaque. Repository and display-number fields
+        are separate normalized values so clients never need to parse them.
+        """
+
+        if not isinstance(items, list) or len(items) > 50:
+            raise ControllerError("tracking returned an invalid candidate list")
+        seen_external: set[str] = set()
+        seen_display: set[tuple[str, int]] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                raise ControllerError("tracking candidate must be an object")
+            external_id = item.get("external_id")
+            repo = item.get("repo")
+            number = item.get("number")
+            parent_id = item.get("parent_id")
+            child_count = item.get("required_child_count")
+            if not isinstance(external_id, str) or not external_id:
+                raise ControllerError(
+                    "tracking candidate needs a provider-qualified external_id"
+                )
+            if repo not in self.cfg.repositories:
+                raise ControllerError("tracking candidate repository is not configured")
+            if type(number) is not int or number <= 0:
+                raise ControllerError("tracking candidate needs a positive number")
+            if not isinstance(item.get("title"), str) or not isinstance(
+                item.get("url"), str
+            ):
+                raise ControllerError("tracking candidate needs string title and url")
+            if type(item.get("is_root")) is not bool:
+                raise ControllerError("tracking candidate needs an explicit root flag")
+            if parent_id is not None and (
+                not isinstance(parent_id, str) or not parent_id
+            ):
+                raise ControllerError(
+                    "tracking candidate parent_id must be opaque text"
+                )
+            if item["is_root"] != (parent_id is None):
+                raise ControllerError(
+                    "tracking candidate root relationship is inconsistent"
+                )
+            if type(child_count) is not int or child_count < 0:
+                raise ControllerError(
+                    "tracking candidate needs a non-negative required_child_count"
+                )
+            if item.get("project") is not None and not isinstance(
+                item["project"], dict
+            ):
+                raise ControllerError("tracking candidate project must be an object")
+            display = (repo, number)
+            if external_id in seen_external or display in seen_display:
+                raise ControllerError("tracking returned duplicate candidates")
+            seen_external.add(external_id)
+            seen_display.add(display)
+        return items
+
     def discover_issues(self) -> dict[str, Any]:
         """Read bounded tracker candidates without selecting or mutating them."""
         label = self.cfg.labels.get("selected")
@@ -33,9 +91,10 @@ class PlanningMixin(ControllerCore):
             new_id("req"),
             cmd.timeout_seconds,
         )
-        if not result["ok"] or not isinstance(result.get("items"), list):
+        if not result["ok"]:
             raise ControllerError(result.get("error", "tracking returned no items"))
-        return {"items": result["items"], "evidence": result["evidence"]}
+        items = self._discovery_items(result.get("items"))
+        return {"items": items, "evidence": result["evidence"]}
 
     def intake_issues(
         self, issues: list[dict[str, Any]], actor="operator"

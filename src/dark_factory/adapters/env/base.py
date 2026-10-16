@@ -40,6 +40,15 @@ class Environment(Protocol):
 
     def stop(self, prepared: PreparedEnv) -> None: ...
 
+    def reconstruct(
+        self,
+        prepared: PreparedEnv,
+        runtime: Path,
+        **policy: Any,
+    ) -> None:
+        """Recover owned-resource identity without starting execution."""
+        ...
+
     def release(self, prepared: PreparedEnv) -> None:
         """Remove owned resources; callers archive unique work first."""
         ...

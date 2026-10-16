@@ -2,9 +2,10 @@
 
 This increment implements the Paper **Dark Factory TUI** as an operator adapter.
 It does not move scheduling, budget, approval, execution, or acceptance authority
-out of the controller. A local TUI owns the controller normally; a remote TUI
-reads the authenticated projection and invokes the same operator commands as the
-CLI. It never opens a remote controller's SQLite state.
+out of the controller. The supervisor service owns controller state and workers;
+the TUI normally reads its authenticated projection and invokes the same operator
+commands as the CLI. Closing the TUI does not stop work. Explicit embedded mode
+exists for offline maintenance and never runs a worker.
 
 ## Screens
 
@@ -41,7 +42,7 @@ CLI. It never opens a remote controller's SQLite state.
   `n` rejects and asks why; `m` records a manual check; `o` reads the PR's checks
   and reviews as outside evidence for the exact candidate. On interrupted work,
   `y` resumes from saved work and `n` stops and asks why. On an issue, `1`–`7`
-  switch tabs, `c` stops the running step, `gi`/`gb`/`gp` open GitHub links, and
+  switch tabs, `c` stops the running step, `gi`/`gb`/`gp` open tracker or code-host links, and
   `]f`/`[f` move between changed files.
 - In new work, `space` or `Enter` toggles the highlighted complete root, `/`
   filters or adds an explicit `owner/repo#number`, and `y` starts planning.

@@ -18,7 +18,7 @@ The controller enforces scheduling, budgets, leases, and approvals. Everything s
 - **Decision agents:** An optional decider, such as TypeSafe's Jev, can weigh in on whether an interrupted step should resume. It only advises; code keeps the approved limits.
 - **Prompts and skills:** Packaged defaults can be overridden per project in `factory.toml`.
 
-You drive it from a terminal console (`dark-factory tui`) or a scriptable CLI. Both work locally or against a remote controller.
+You drive it from a terminal console (`dark-factory tui`) or a scriptable CLI. The supervisor and worker run as a separate service, so closing the TUI with `q`, `Ctrl+Q`, or `Ctrl+C` does not stop work.
 
 ![The Dark Factory terminal console: issues waiting on you, running work with stage progress, and workers](docs/images/tui-overview.png)
 
@@ -60,6 +60,9 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 cp examples/factory.toml factory.toml
 dark-factory --config factory.toml demo
+# Keep this supervisor running (or install it as a service):
+dark-factory --config factory.toml serve --worker
+# In another terminal:
 dark-factory --config factory.toml tui --actor you
 ```
 
