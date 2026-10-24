@@ -21,6 +21,7 @@ from dark_factory.control.planning import PlanningMixin
 from dark_factory.control.policy import PolicyMixin
 from dark_factory.control.results import ResultsMixin
 from dark_factory.control.review import ReviewMixin
+from dark_factory.control.tasks import TaskMixin
 from dark_factory.control.windows import window_open
 from dark_factory.runner import CommandRunner
 from dark_factory.store import Store
@@ -45,6 +46,7 @@ class Controller(
     ReviewMixin,
     ExternalMixin,
     InterruptionMixin,
+    TaskMixin,
     AttemptRecords,
 ):
     """One-process bootstrap controller; only this object mutates execution state."""

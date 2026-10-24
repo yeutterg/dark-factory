@@ -208,6 +208,7 @@ class ResultsMixin(ControllerCore):
                 "UPDATE work_items SET plan_json=?,packet_json=? WHERE id=?",
                 (json.dumps(packet), json.dumps(packet), root["id"]),
             )
+            self.seed_plan_tasks(root["id"], parsed)
         elif ok and job["kind"] == "critique":
             packet = json.loads(root["plan_json"])
             packet["critique"] = parsed
@@ -266,6 +267,10 @@ class ResultsMixin(ControllerCore):
             {"attempt_id": attempt_id, "status": status, "archive": archive_path},
         )
         self.reconcile_continuations()
+        if self.store.one(
+            "SELECT id FROM tasks WHERE root_id=? LIMIT 1", (root["id"],)
+        ):
+            self._refresh_task_document(root["id"], "controller")
 
     def _checks_authorize_repair(self, root, snapshot, result):
         if result.get("failure_kind") != "canonical-check-failure":

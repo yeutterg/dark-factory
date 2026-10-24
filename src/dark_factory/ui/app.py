@@ -288,6 +288,91 @@ class DarkFactoryApp(App[None]):
             run,
         )
 
+    async def add_task(self, item: dict[str, Any], owner_kind: str) -> None:
+        async def run(title: str | None) -> None:
+            if not title:
+                return
+            try:
+                await self._run(
+                    "task-add",
+                    {
+                        "work_item_id": item["id"],
+                        "title": title,
+                        "owner_kind": owner_kind,
+                        "expected_revision": item["task_revision"],
+                    },
+                )
+                self.notify("Task added to the inbox")
+            except (ControllerError, OSError, ValueError) as exc:
+                self.notify(str(exc), severity="error", timeout=8)
+
+        self.push_screen(
+            TextPrompt(
+                "What should the agent do?"
+                if owner_kind == "agent"
+                else "What do you need to do?",
+                "Describe one concrete task",
+            ),
+            run,
+        )
+
+    async def complete_task(self, item: dict[str, Any]) -> None:
+        available = [
+            task
+            for task in item.get("tasks", [])
+            if task["owner_kind"] == "human"
+            and task["state"] not in {"done", "cancelled"}
+        ]
+        if not available:
+            self.notify("No human task is ready to complete")
+            return
+
+        async def choose(value: str | None) -> None:
+            if not value:
+                return
+            try:
+                task = available[int(value) - 1]
+            except (ValueError, IndexError):
+                self.notify(
+                    "Enter a task number shown in the Tasks tab", severity="warning"
+                )
+                return
+
+            async def finish(evidence: str | None = "") -> None:
+                if task.get("manual_gate") and not evidence:
+                    return
+                try:
+                    await self._run(
+                        "task-complete",
+                        {
+                            "work_item_id": item["id"],
+                            "task_id": task["id"],
+                            "expected_revision": item["task_revision"],
+                            "evidence": evidence or "",
+                        },
+                    )
+                    self.notify(f"Completed: {task['title']}")
+                except (ControllerError, OSError, ValueError) as exc:
+                    self.notify(str(exc), severity="error", timeout=8)
+
+            if task.get("manual_gate"):
+                self.push_screen(
+                    TextPrompt(
+                        "What did you verify on the exact candidate?",
+                        "Required evidence",
+                    ),
+                    finish,
+                )
+            else:
+                await finish()
+
+        self.push_screen(
+            TextPrompt(
+                "Which human task did you complete?", "Task number from the Tasks tab"
+            ),
+            choose,
+        )
+
     async def read_outside_reviews(self, item: dict[str, Any]) -> None:
         if item["status"] != "awaiting_review":
             self.notify(

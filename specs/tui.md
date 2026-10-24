@@ -14,8 +14,9 @@ exists for offline maintenance and never runs a worker.
   footer. Every open item shows a seven-stage rail (plan → accept) coloured by who
   must act; accepted and cancelled items have none. The done-today section is a
   count and `d show`, with no checkboxes or trailing rows.
-- **DF2 issue** exposes activity, plan, critique, changes, checks, review, and full
-  log tabs. Human approval, rejection, and acceptance use controller commands.
+- **DF2 issue** exposes activity, plan, critique, changes, checks, review, full
+  log, and tasks tabs. Human approval, rejection, task completion, verification,
+  and acceptance use controller commands.
   Budget exhaustion is a paused state with explicit continuation guidance; the UI
   does not enlarge an approved budget.
 - **DF3 settings** shows machines, agents/routes, repositories, budgets, schedule,
@@ -41,8 +42,9 @@ exists for offline maintenance and never runs a worker.
 - On a needs-you item, `y` approves a plan, accepts a result, or starts planning;
   `n` rejects and asks why; `m` records a manual check; `o` reads the PR's checks
   and reviews as outside evidence for the exact candidate. On interrupted work,
-  `y` resumes from saved work and `n` stops and asks why. On an issue, `1`–`7`
-  switch tabs, `c` stops the running step, `gi`/`gb`/`gp` open tracker or code-host links, and
+  `y` resumes from saved work and `n` stops and asks why. On an issue, `1`–`8`
+  switch tabs, `a` adds an agent task, `h` adds a human task, `x` completes a
+  human task, `c` stops the running step, `gi`/`gb`/`gp` open tracker or code-host links, and
   `]f`/`[f` move between changed files.
 - In new work, `space` or `Enter` toggles the highlighted complete root, `/`
   filters or adds an explicit `owner/repo#number`, and `y` starts planning.

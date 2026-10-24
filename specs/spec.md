@@ -4,7 +4,7 @@
 
 Spend less time coordinating coding agents. A human selects work, approves a plan, and later reviews a result packet. The factory executes bounded jobs and records evidence.
 
-This specification covers **bootstrap**: one project, one machine, one worker and interchangeable per-task CLI harnesses for single-repo outcomes. The [durable extension](durable-runtime.md) adds optional dispatch checkpoints and one preapproved correctness repair. Multi-repo, web UI, preview delivery, and automatic provider fallback are later increments.
+This specification covers **bootstrap**: one project, one machine, one worker and interchangeable per-task CLI harnesses for single-repo outcomes. The [durable extension](durable-runtime.md) adds optional dispatch checkpoints and one preapproved correctness repair. The [task supervisor increment](supervisor-task-management.md) adds a task-level view and focused browser dashboard over the same authority. Multi-repo execution, preview delivery, and automatic provider fallback remain later increments.
 
 ## User loop
 
@@ -31,8 +31,11 @@ Declare reasonable planning and implementation assumptions in the executive summ
 - Cancellation, timeouts, restart from durable state, archive-before-cleanup.
 - Native or Pi Durable dispatch runtime, independent of the selected CLI harness; Codex subscription adapter with live isolation qualification pending.
 - Optional original-approval-bound repair/check/review branch; no reset of root budgets or deadlines.
+- Durable task records distinct from execution jobs, with revisioned user actions, attributed progress, instruction delivery states, and a conflict-safe `tasks.md` projection.
+- A bounded optional structured-output task supervisor. It may interpret task text and suggest updates; code retains scope, dependency, budget, evidence and acceptance authority.
+- Task interaction in the TUI and authenticated focused browser dashboard over the shared operator projection and commands.
 
-Originally out of scope for bootstrap, and still separate from its execution authority: web UI, multi-repo graphs, automatic model fallback, preview/merge automation, DORA, arena and Claude coding/session takeover. The later TUI increment is a thin operator client over the same command boundary; it does not own scheduling or execution.
+Still separate from bootstrap execution authority: multi-repo graphs, automatic model fallback, preview/merge automation, DORA, arena and Claude coding/session takeover. The TUI and focused task dashboard are thin operator clients over the same command boundary; neither owns scheduling or execution.
 
 ## Acceptance
 
@@ -46,6 +49,8 @@ Originally out of scope for bootstrap, and still separate from its execution aut
 
 8. Every approved acceptance criterion binds checks or manual gates and receives an explicit independent assessment. Missing or stale evidence blocks acceptance even when all jobs report success. The critic compares the criteria with the original request; scope changes require new approval.
 9. Simulation evidence cannot satisfy an operator-declared live-evidence requirement.
+10. Task text, structured model output, Markdown edits and checkboxes cannot expand approved scope or manufacture evidence. Task progress binds to the active attempt; human verification binds to identity, candidate and evidence.
+11. Task edits use expected revisions and idempotency keys. Markdown export preserves conflicting edits, and instruction transport distinguishes queued, delivered, acknowledged and resolved.
 
 ## Presentation stages
 

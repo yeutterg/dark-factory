@@ -41,6 +41,28 @@ def _plan(ctrl: Controller, p: dict[str, Any], actor: str) -> dict[str, Any]:
     return {"jobs": [job.job_id for job in graph.jobs]}
 
 
+def _task_add(ctrl: Controller, p: dict[str, Any], actor: str) -> dict[str, Any]:
+    result = ctrl.add_task(
+        p["work_item_id"],
+        p["title"],
+        p["owner_kind"],
+        actor,
+        p.get("expected_revision"),
+        p.get("description", ""),
+        p.get("idempotency_key"),
+    )
+    if p["owner_kind"] == "agent":
+        result["reconciliation"] = ctrl.reconcile_task_events(p["work_item_id"], actor)
+    return result
+
+
+def _task_import(ctrl: Controller, p: dict[str, Any], actor: str) -> dict[str, Any]:
+    result = ctrl.import_tasks(p["work_item_id"], actor, p.get("expected_revision"))
+    if result["added"]:
+        result["reconciliation"] = ctrl.reconcile_task_events(p["work_item_id"], actor)
+    return result
+
+
 COMMANDS: dict[str, OperatorCommand] = {
     command.name: command
     for command in (
@@ -80,9 +102,94 @@ COMMANDS: dict[str, OperatorCommand] = {
         OperatorCommand(
             "manual-gate",
             lambda c, p, a: c.record_manual_gate(
-                p.get("work_item_id"), p["name"], p["candidate"], a, p["evidence"]
+                p.get("work_item_id"),
+                p["name"],
+                p["candidate"],
+                a,
+                p["evidence"],
+                p.get("passed", True),
             ),
-            ("work_item_id", "name", "candidate", "evidence"),
+            ("work_item_id", "name", "candidate", "evidence", "passed"),
+        ),
+        OperatorCommand(
+            "task-add",
+            _task_add,
+            (
+                "work_item_id",
+                "title",
+                "owner_kind",
+                "expected_revision",
+                "description",
+                "idempotency_key",
+            ),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "task-update",
+            lambda c, p, a: c.update_task(
+                p["work_item_id"],
+                p["task_id"],
+                a,
+                p["expected_revision"],
+                title=p.get("title"),
+                priority=p.get("priority"),
+                depends_on=p.get("depends_on"),
+            ),
+            (
+                "work_item_id",
+                "task_id",
+                "expected_revision",
+                "title",
+                "priority",
+                "depends_on",
+            ),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "task-complete",
+            lambda c, p, a: c.complete_task(
+                p["work_item_id"],
+                p["task_id"],
+                a,
+                p["expected_revision"],
+                p.get("evidence", ""),
+            ),
+            ("work_item_id", "task_id", "expected_revision", "evidence"),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "task-reopen",
+            lambda c, p, a: c.reopen_task(
+                p["work_item_id"], p["task_id"], a, p["expected_revision"], p["reason"]
+            ),
+            ("work_item_id", "task_id", "expected_revision", "reason"),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "task-export",
+            lambda c, p, a: c.export_tasks(p["work_item_id"]),
+            ("work_item_id",),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "task-import",
+            _task_import,
+            ("work_item_id", "expected_revision"),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "task-supervisor-apply",
+            lambda c, p, a: c.apply_supervisor_response(
+                p["work_item_id"], p["payload"], a
+            ),
+            ("work_item_id", "payload"),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "task-reconcile",
+            lambda c, p, a: c.reconcile_task_events(p["work_item_id"], a),
+            ("work_item_id",),
+            render=_pretty,
         ),
         OperatorCommand(
             "create-pr",

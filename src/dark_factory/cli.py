@@ -77,6 +77,52 @@ def build_parser() -> argparse.ArgumentParser:
     p_gate.add_argument("--candidate", required=True)
     p_gate.add_argument("--actor", required=True)
     p_gate.add_argument("--evidence", required=True)
+    p_gate.add_argument("--failed", dest="passed", action="store_false", default=True)
+    p_task_add = sub.add_parser("task-add")
+    p_task_add.add_argument("work_item_id")
+    p_task_add.add_argument("title")
+    p_task_add.add_argument(
+        "--owner-kind",
+        choices=["agent", "controller", "human", "external"],
+        default="agent",
+    )
+    p_task_add.add_argument("--description", default="")
+    p_task_add.add_argument("--expected-revision", type=int)
+    p_task_add.add_argument("--idempotency-key")
+    p_task_add.add_argument("--actor", default="operator")
+    p_task_update = sub.add_parser("task-update")
+    p_task_update.add_argument("work_item_id")
+    p_task_update.add_argument("task_id")
+    p_task_update.add_argument("--expected-revision", type=int, required=True)
+    p_task_update.add_argument("--title")
+    p_task_update.add_argument("--priority", type=int)
+    p_task_update.add_argument("--depends-on", type=json.loads)
+    p_task_update.add_argument("--actor", default="operator")
+    p_task_complete = sub.add_parser("task-complete")
+    p_task_complete.add_argument("work_item_id")
+    p_task_complete.add_argument("task_id")
+    p_task_complete.add_argument("--expected-revision", type=int, required=True)
+    p_task_complete.add_argument("--evidence", default="")
+    p_task_complete.add_argument("--actor", default="operator")
+    p_task_reopen = sub.add_parser("task-reopen")
+    p_task_reopen.add_argument("work_item_id")
+    p_task_reopen.add_argument("task_id")
+    p_task_reopen.add_argument("--expected-revision", type=int, required=True)
+    p_task_reopen.add_argument("--reason", required=True)
+    p_task_reopen.add_argument("--actor", default="operator")
+    p_task_export = sub.add_parser("task-export")
+    p_task_export.add_argument("work_item_id")
+    p_task_import = sub.add_parser("task-import")
+    p_task_import.add_argument("work_item_id")
+    p_task_import.add_argument("--expected-revision", type=int)
+    p_task_import.add_argument("--actor", default="operator")
+    p_task_supervisor = sub.add_parser("task-supervisor-apply")
+    p_task_supervisor.add_argument("work_item_id")
+    p_task_supervisor.add_argument("--payload-json", required=True)
+    p_task_supervisor.add_argument("--actor", default="task-supervisor")
+    p_task_reconcile = sub.add_parser("task-reconcile")
+    p_task_reconcile.add_argument("work_item_id")
+    p_task_reconcile.add_argument("--actor", default="operator")
     p_pr = sub.add_parser("create-pr")
     p_pr.add_argument("work_item_id")
     p_pr.add_argument("--payload-json", required=True)
@@ -136,7 +182,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_adapter = sub.add_parser("adapter")
     p_adapter.add_argument(
-        "name", choices=["github-tracking", "github-codehost", "jev-decision"]
+        "name",
+        choices=[
+            "github-tracking",
+            "github-codehost",
+            "jev-decision",
+            "task-supervisor",
+        ],
     )
     p_adapter.add_argument(
         "adapter_args",
@@ -202,6 +254,13 @@ def _dispatch(args: argparse.Namespace) -> int:
             from dark_factory.adapters.projects.github import main as tracking_main
 
             tracking_main(args.adapter_args)
+            return 0
+        if args.name == "task-supervisor":
+            from dark_factory.adapters.decision.task_supervisor import (
+                main as supervisor_main,
+            )
+
+            supervisor_main(args.adapter_args)
             return 0
         if args.name == "github-codehost":
             from dark_factory.adapters.git.github import main as git_main

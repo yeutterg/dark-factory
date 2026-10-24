@@ -293,6 +293,12 @@ def _work_item(
     status = row["status"]
     next_action = continuation["next_action"]
     interruption = _interruption(controller, row["id"])
+    task_view = controller.tasks_view(row["id"])
+    supervisor_usage = controller.store.one(
+        """SELECT COUNT(*) calls,COALESCE(SUM(cost_cents),0) cost_cents
+        FROM supervisor_calls WHERE root_id=?""",
+        (row["id"],),
+    )
     return {
         "id": row["id"],
         "number": _external_number(row["external_id"]),
@@ -339,6 +345,20 @@ def _work_item(
         "critique": critique,
         "candidates": candidates,
         "diff_patch": diff_patch,
+        "task_revision": task_view["revision"],
+        "tasks": task_view["tasks"] if include_detail else [],
+        "task_counts": {
+            "complete": task_view["complete"],
+            "total": task_view["total"],
+            "inbox": task_view["inbox_count"],
+        },
+        "current_actions": task_view["current_actions"],
+        "next_actions": task_view["next_actions"],
+        "needs_human": task_view["needs_human"],
+        "last_progress_at": task_view["last_progress_at"],
+        "supervisor_usage": dict(supervisor_usage)
+        if supervisor_usage
+        else {"calls": 0, "cost_cents": 0},
     }
 
 
@@ -443,5 +463,6 @@ def controller_projection(
                 "windows": [window.__dict__ for window in controller.cfg.windows],
                 "people": controller.cfg.humans,
                 "workflow": controller.cfg.workflow_engine,
+                "task_supervisor": controller.cfg.task_supervisor,
             },
         }

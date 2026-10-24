@@ -16,9 +16,10 @@ The controller enforces scheduling, budgets, leases, and approvals. Everything s
 - **Execution environments:** Workers can run locally or on [remote machines over verified TLS](docs/distributed-execution.md), under native macOS isolation. OCI and VM sandbox drivers plug into the same interface and are qualified separately.
 - **Durable runs:** Attempts are leased, budgeted, and checkpointed. An optional [durable workflow runtime](docs/durable-execution.md) checkpoints dispatch. Every workspace is archived and verified before it's removed. A step interrupted by a lost worker, a provider hiccup, or a malformed answer [resumes from its saved work](docs/usage.md#interrupted-steps); anything less trivial waits for you.
 - **Decision agents:** An optional decider, such as TypeSafe's Jev, can weigh in on whether an interrupted step should resume. It only advises; code keeps the approved limits.
+- **Task supervisor:** Each root has a durable task list, current state and next actions. A low-cost structured-output model can reconcile free text into approved tasks, while code keeps scope, budgets, evidence and execution authority.
 - **Prompts and skills:** Packaged defaults can be overridden per project in `factory.toml`.
 
-You drive it from a terminal console (`dark-factory tui`) or a scriptable CLI. The supervisor and worker run as a separate service, so closing the TUI with `q`, `Ctrl+Q`, or `Ctrl+C` does not stop work.
+You drive it from a terminal console (`dark-factory tui`), the focused browser dashboard at `/operator/login`, or a scriptable CLI. The supervisor and worker run as a separate service, so closing a client does not stop work.
 
 Docker is optional. `serve --worker` runs a co-located supervisor and worker on one host. A distributed deployment can put the stateful supervisor in a container and run execution workers on separate Macs, VMs, or container hosts; only worker machines need the selected agent CLIs and inference credentials. See [project-scoped supervisor and workers](docs/distributed-execution.md#what-runs-where).
 
@@ -84,7 +85,7 @@ Run tests with `python -m pytest -n auto`; lint and type-check with `ruff check 
 
 ## Status
 
-This is early. The control plane, adapters, and isolation are tested end to end with simulated and loopback providers. Live-model qualification is still pending. Multi-repository work, a web UI, and previews come later.
+This is early. The control plane, adapters, task dashboard, and isolation are tested with simulated and loopback providers. Live-model and live task-steering qualification are still pending. Multi-repository work and previews come later.
 
 [Usage guide](docs/usage.md) · [Docker Compose](docs/docker-compose.md) · [Live configuration](examples/factory-live.toml) · [Qualification status](specs/qualification.md) · [Roadmap](specs/tasks.md)
 

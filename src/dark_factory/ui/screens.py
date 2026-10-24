@@ -42,6 +42,7 @@ TABS = (
     ("checks", "checks"),
     ("review", "review"),
     ("log", "full log"),
+    ("tasks", "tasks"),
 )
 ISSUE_REF = re.compile(r"^([\w.-]+/[\w.-]+)#(\d+)$")
 
@@ -606,7 +607,9 @@ class IssueScreen(FactoryScreen):
     KEYS = [
         ("esc", "back"),
         ("c", "stop step"),
-        ("1–7", "tabs"),
+        ("1–8", "tabs"),
+        ("a/h", "add agent/my task"),
+        ("x", "complete my task"),
         ("j/k", "pick step"),
         ("gi gb gp", "open item, branch or change request"),
     ]
@@ -621,6 +624,9 @@ class IssueScreen(FactoryScreen):
         Binding("m", "manual_gate", "Record manual check", show=False),
         Binding("o", "outside_reviews", "Read PR reviews", show=False),
         Binding("c", "stop", "Stop step", show=False),
+        Binding("a", "add_agent_task", "Add agent task", show=False),
+        Binding("h", "add_human_task", "Add my task", show=False),
+        Binding("x", "complete_task", "Complete my task", show=False),
         Binding("g", "prefix('g')", show=False),
         Binding("right_square_bracket", "prefix(']')", show=False),
         Binding("left_square_bracket", "prefix('[')", show=False),
@@ -921,6 +927,7 @@ class IssueScreen(FactoryScreen):
         self.query_one("#tab-bar", Line).set(bar)
         renderers = {
             "activity": self._activity,
+            "tasks": self._tasks,
             "plan": self._plan,
             "critique": self._critique,
             "changes": self._changes,
@@ -962,6 +969,79 @@ class IssueScreen(FactoryScreen):
         self.query_one("#next-line", Line).set(
             Text.assemble(("next  ", f"bold {r.BLUE}"), (text, r.FG))
         )
+
+    def _tasks(self, item: dict[str, Any]) -> RenderableType:
+        tasks = item.get("tasks", [])
+        if not tasks:
+            return Text(
+                "Tasks appear after the planner returns a proposal.", style=r.DIM
+            )
+        out: list[RenderableType] = []
+        counts = item.get("task_counts", {})
+        out.append(
+            Text.assemble(
+                (
+                    f"{counts.get('complete', 0)} of {counts.get('total', 0)} complete",
+                    f"bold {r.FG}",
+                ),
+                (f"  · revision {item.get('task_revision', 0)}", r.DIM),
+            )
+        )
+        out.append(Text(""))
+        human_number = 0
+        for task in tasks:
+            if task["owner_kind"] == "human" and task["state"] not in {
+                "done",
+                "cancelled",
+            }:
+                human_number += 1
+                prefix = f"you #{human_number}"
+            else:
+                prefix = task["owner_kind"]
+            mark = (
+                "✓"
+                if task["state"] == "done"
+                else "▶"
+                if task["state"] == "active"
+                else "◇"
+                if task["owner_kind"] == "human"
+                else "○"
+            )
+            style = (
+                r.MINT
+                if task["state"] == "done"
+                else r.BLUE
+                if task["state"] == "active"
+                else r.AMBER
+                if task["owner_kind"] == "human"
+                else r.FG
+            )
+            out.append(
+                Text.assemble(
+                    (f"{mark} ", style), (task["title"], r.FG), (f"  {prefix}", r.DIM)
+                )
+            )
+            meta = " · ".join(
+                str(value)
+                for value in (
+                    task["state"],
+                    task.get("verification"),
+                    task.get("delivery_state"),
+                    task.get("waiting_reason"),
+                )
+                if value
+            )
+            out.append(Text("    " + meta, style=r.DIM))
+        out.extend(
+            (
+                Text(""),
+                Text(
+                    "a add agent task  ·  h add my task  ·  x complete my task",
+                    style=r.FAINT,
+                ),
+            )
+        )
+        return Group(*out)
 
     def _activity(self, item: dict[str, Any]) -> RenderableType:
         step = self._selected_step(item)
@@ -1325,6 +1405,21 @@ class IssueScreen(FactoryScreen):
             f"Stop {step['name']}? Its workspace is saved; restarting needs a new plan.",
             {"job_id": step["id"]},
         )
+
+    async def action_add_agent_task(self) -> None:
+        item = self._item()
+        if item:
+            await self.factory.add_task(item, "agent")
+
+    async def action_add_human_task(self) -> None:
+        item = self._item()
+        if item:
+            await self.factory.add_task(item, "human")
+
+    async def action_complete_task(self) -> None:
+        item = self._item()
+        if item:
+            await self.factory.complete_task(item)
 
 
 class SettingsScreen(FactoryScreen):

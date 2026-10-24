@@ -237,6 +237,50 @@ class Store:
             root_id TEXT NOT NULL, candidate TEXT NOT NULL, pr_number INTEGER NOT NULL,
             url TEXT NOT NULL, actor TEXT NOT NULL, at TEXT NOT NULL,
             payload_json TEXT NOT NULL, PRIMARY KEY(root_id, candidate));
+        CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY, root_id TEXT NOT NULL, plan_version INTEGER NOT NULL,
+            title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+            completion_condition TEXT NOT NULL DEFAULT '',
+            owner_kind TEXT NOT NULL, owner_actor TEXT,
+            required INTEGER NOT NULL DEFAULT 0, job_id TEXT, manual_gate TEXT,
+            criterion_ids TEXT NOT NULL DEFAULT '[]', depends_on TEXT NOT NULL DEFAULT '[]',
+            priority INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL,
+            verification TEXT NOT NULL DEFAULT 'not_required',
+            waiting_reason TEXT NOT NULL DEFAULT '', result TEXT NOT NULL DEFAULT '',
+            attempt_id TEXT, origin TEXT NOT NULL, created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            completed_by TEXT, completed_at TEXT, evidence TEXT NOT NULL DEFAULT '',
+            candidate TEXT, superseded_by TEXT,
+            FOREIGN KEY(root_id) REFERENCES work_items(id),
+            FOREIGN KEY(job_id) REFERENCES jobs(id),
+            FOREIGN KEY(attempt_id) REFERENCES attempts(id));
+        CREATE TABLE IF NOT EXISTS task_events (
+            id TEXT PRIMARY KEY, root_id TEXT NOT NULL, task_id TEXT,
+            attempt_id TEXT, source TEXT NOT NULL, actor TEXT NOT NULL,
+            kind TEXT NOT NULL, payload_json TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
+            processed_at TEXT,
+            FOREIGN KEY(root_id) REFERENCES work_items(id),
+            FOREIGN KEY(task_id) REFERENCES tasks(id));
+        CREATE TABLE IF NOT EXISTS task_instructions (
+            id TEXT PRIMARY KEY, root_id TEXT NOT NULL, task_id TEXT NOT NULL,
+            job_id TEXT, attempt_id TEXT, task_revision INTEGER NOT NULL,
+            payload_json TEXT NOT NULL, payload_digest TEXT NOT NULL,
+            state TEXT NOT NULL, created_at TEXT NOT NULL, delivered_at TEXT,
+            acknowledged_at TEXT, resolved_at TEXT,
+            FOREIGN KEY(root_id) REFERENCES work_items(id),
+            FOREIGN KEY(task_id) REFERENCES tasks(id));
+        CREATE TABLE IF NOT EXISTS task_documents (
+            root_id TEXT PRIMARY KEY, revision INTEGER NOT NULL,
+            generated_digest TEXT NOT NULL, imported_digest TEXT,
+            generated_at TEXT NOT NULL, pending_path TEXT,
+            FOREIGN KEY(root_id) REFERENCES work_items(id));
+        CREATE TABLE IF NOT EXISTS supervisor_calls (
+            id TEXT PRIMARY KEY, root_id TEXT NOT NULL, input_digest TEXT NOT NULL,
+            request_json TEXT NOT NULL, response_json TEXT, status TEXT NOT NULL,
+            cost_cents INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+            UNIQUE(root_id,input_digest),
+            FOREIGN KEY(root_id) REFERENCES work_items(id));
         """)
         # Jobs created before these columns existed carry the same facts in spec_json
         # and a numeric position prefix in their identifier.
@@ -255,6 +299,10 @@ class Store:
         CREATE INDEX IF NOT EXISTS evidence_attempt ON evidence(attempt_id);
         CREATE INDEX IF NOT EXISTS audit_action ON audit(action, at);
         CREATE INDEX IF NOT EXISTS costs_root ON costs(root_id);
+        CREATE INDEX IF NOT EXISTS tasks_root ON tasks(root_id, plan_version, priority, created_at);
+        CREATE INDEX IF NOT EXISTS tasks_state ON tasks(state);
+        CREATE INDEX IF NOT EXISTS task_events_root ON task_events(root_id, created_at);
+        CREATE INDEX IF NOT EXISTS task_instructions_attempt ON task_instructions(attempt_id, state);
         """)
         self.conn.execute(
             "INSERT OR REPLACE INTO meta(key,value) VALUES ('schema_version','2')"
