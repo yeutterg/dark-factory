@@ -2,6 +2,7 @@
 ARG PYTHON_IMAGE=python:3.11-slim-bookworm@sha256:0a310eeecf4e1f5a0743f9a6520c90c88d089c903ca5fd283f501e3a805f5f89
 ARG NODE_IMAGE=node:24.22.0-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5
 ARG CLAUDE_CODE_VERSION=2.1.310
+ARG CODEX_VERSION=0.164.0
 ARG PI_CODING_AGENT_VERSION=1.4.0
 ARG GH_VERSION=2.103.0
 
@@ -13,11 +14,14 @@ RUN npm ci --omit=dev --ignore-scripts
 
 FROM ${NODE_IMAGE} AS harnesses
 ARG CLAUDE_CODE_VERSION
+ARG CODEX_VERSION
 ARG PI_CODING_AGENT_VERSION
 RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    && npm install --global --ignore-scripts "@openai/codex@${CODEX_VERSION}" \
     && npm install --global --ignore-scripts \
       "@earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION}" \
     && test "$(claude --version)" = "${CLAUDE_CODE_VERSION} (Claude Code)" \
+    && test "$(codex --version)" = "codex-cli ${CODEX_VERSION}" \
     && test "$(pi --version)" = "${PI_CODING_AGENT_VERSION}"
 
 FROM ${PYTHON_IMAGE} AS gh-cli
@@ -58,13 +62,17 @@ COPY --from=harnesses /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=harnesses /usr/local/bin/claude /usr/local/bin/claude
 RUN ln -s \
       /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js \
-      /usr/local/bin/pi
+      /usr/local/bin/pi \
+    && ln -s /usr/local/lib/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex
 COPY --from=pi-engine /engine/node_modules /tmp/pi-node_modules
+COPY examples/compose/codex-requirements.toml /etc/codex/requirements.toml
 RUN engine_dir="$(python -c 'from dark_factory.adapters.workflow.pi_durable import ENGINE_DIR; print(ENGINE_DIR)')" \
+    && chmod 0444 /etc/codex/requirements.toml \
     && cp -a /tmp/pi-node_modules "$engine_dir/node_modules" \
     && rm -rf /tmp/pi-node_modules \
     && node --version \
     && claude --version \
+    && codex --version \
     && pi --version \
     && bwrap --version \
     && test "$(gh --version | head -n 1 | cut -d ' ' -f 1-3)" = "gh version ${GH_VERSION}" \
@@ -80,6 +88,6 @@ ENTRYPOINT ["dark-factory"]
 CMD ["--config", "/config/factory.toml", "serve"]
 
 # This image contains the supervisor/operator client, Pi Durable dispatch engine,
-# and exactly pinned Pi and Claude Code harnesses. It never bakes in inference
+# and exactly pinned Pi, Claude Code and Codex harnesses. It never bakes in inference
 # credentials. Live workers receive project-scoped credentials at runtime and run
 # harnesses only through a separately qualified isolated environment recipe.

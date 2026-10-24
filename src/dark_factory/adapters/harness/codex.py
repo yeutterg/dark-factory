@@ -34,12 +34,24 @@ def inline_table(values):
     )
 
 
+def redacted_cli_error(code: int, stderr: bytes, auth: dict) -> str:
+    """Return bounded CLI diagnostics without allowing credential disclosure."""
+    detail = stderr.decode("utf-8", errors="replace")[-2000:].strip()
+    secrets = [
+        value
+        for value in auth.get("tokens", {}).values()
+        if isinstance(value, str) and value
+    ]
+    api_key = auth.get("OPENAI_API_KEY")
+    if isinstance(api_key, str) and api_key:
+        secrets.append(api_key)
+    for secret in secrets:
+        detail = detail.replace(secret, "[REDACTED]")
+    return f"Codex CLI exited {code}" + (f": {detail}" if detail else "")
+
+
 def validate_codex_route(route: dict) -> None:
     """Shared by profile validation and dispatch; route is the dict form."""
-    if route.get("evidence_kind") != "simulation":
-        raise ValueError(
-            "live Codex routes are unqualified; credential/tool isolation must be proven first"
-        )
     if (
         route.get("provider") != "chatgpt-subscription"
         or route.get("endpoint") != "https://chatgpt.com/backend-api"
@@ -51,7 +63,7 @@ def validate_codex_route(route: dict) -> None:
         raise ValueError("Codex requires an explicit subscription credential reference")
     if not re.fullmatch(r"gpt-[0-9][a-z0-9.-]+", route.get("model") or ""):
         raise ValueError("Codex requires an explicit GPT model ID")
-    if route.get("effort", "high") not in {"low", "medium", "high", "xhigh"}:
+    if route.get("effort", "high") not in {"low", "medium", "high", "xhigh", "max"}:
         raise ValueError("unsupported Codex effort")
 
 
@@ -94,19 +106,42 @@ class CodexHarness(StreamingCliHarness):
             json.dumps(auth),
             extra["timeout_seconds"] + 5,
         ):
-            yield from self._authenticated_start(prompt, workspace, extra, agent)
+            yield from self._authenticated_start(prompt, workspace, extra, agent, auth)
 
-    def _authenticated_start(self, prompt, workspace, extra, agent):
+    def _authenticated_start(self, prompt, workspace, extra, agent, auth):
         runtime = Path(extra["runtime"])
         route = extra["route"]
         env = subscription_environment(extra["env"], agent)
         filesystem = {
             ":root": "deny",
             ":minimal": "read",
-            ":workspace_roots": "write" if extra["role"] == "coder" else "read",
+            ":workspace_roots": "read",
             str(runtime / "tmp"): "write",
-            str(agent): "deny",
+            # Linux Codex creates a short-lived argv[0] helper under CODEX_HOME/tmp
+            # for its own Bubblewrap sandbox. Grant only that directory; the exact
+            # authentication file remains denied to every model tool process.
+            str(agent / "tmp"): "read",
+            str(agent / "auth.json"): "deny",
         }
+        for value in extra.get("writable", []) if extra["role"] == "coder" else []:
+            path = (workspace / value).resolve()
+            if not path.is_relative_to(workspace.resolve()):
+                raise ValueError("Codex writable path escapes workspace")
+            filesystem[str(path)] = "write"
+        for value in [
+            *extra.get("protected", []),
+            ".git",
+            ".pi",
+            ".claude",
+            ".mcp.json",
+            ".agents",
+            ".github",
+        ]:
+            path = (workspace / value).resolve()
+            if not path.is_relative_to(workspace.resolve()):
+                raise ValueError("Codex protected path escapes workspace")
+            if path.exists():
+                filesystem[str(path)] = "read"
         # Native tool permissions protect the credential directory; the outer OS profile
         # independently scopes writes and excludes host/controller data.
         settings = {
@@ -134,6 +169,7 @@ class CodexHarness(StreamingCliHarness):
             *extra.get("prefix", []),
             self.binary,
             "exec",
+            "--strict-config",
             "--ignore-user-config",
             "--ignore-rules",
             "--json",
@@ -209,7 +245,7 @@ class CodexHarness(StreamingCliHarness):
 
             lines = JsonLines(handle)
             try:
-                code, _, _ = CommandRunner(
+                code, _, stderr = CommandRunner(
                     workspace, extra["max_output_bytes"]
                 ).supervise(
                     argv,
@@ -221,7 +257,9 @@ class CodexHarness(StreamingCliHarness):
                     on_output=lines,
                     on_start=extra.get("on_start"),
                 )
-                if code or lines.incomplete or not terminal or not answer:
+                if code:
+                    error = error or redacted_cli_error(code, stderr, auth)
+                elif lines.incomplete or not terminal or not answer:
                     error = error or "Codex ended without a complete answer"
             except Exception as exc:
                 error = error or str(exc)

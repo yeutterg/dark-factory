@@ -80,7 +80,7 @@ docker compose run --rm client tui --actor operator
 
 This Compose profile is simulation-only and publishes no controller port. See the [Docker Compose installation](docs/docker-compose.md) before substituting a live worker.
 
-For a live-only local container worker, initialize the private profile and authenticate its pinned Together route before starting it:
+For a live-only local container worker, initialize the private profile and import the current host Codex ChatGPT login before starting it:
 
 ```bash
 ./scripts/compose-init
@@ -89,13 +89,13 @@ For a live-only local container worker, initialize the private profile and authe
 docker compose up --build -d server worker
 ```
 
-The live overlay contains no fake routes. Its root broker creates a restricted Bubblewrap namespace for every model assignment; the model process receives no Linux capabilities, Docker socket, operator token, or worker token. Authentication stays in the gitignored mode-`0600` `.env`. See the [Docker Compose installation](docs/docker-compose.md#live-only-container-worker) for the exact boundary and preflight steps.
+The live overlay contains no fake routes. All four roles use pinned Codex CLI 0.164.0 with GPT-6.1 Sol. Codex creates the model-tool Bubblewrap boundary: approved source writes work, protected and private paths are denied, `/proc` and the Docker socket are absent, and the exact authentication file is denied. Authentication stays in the gitignored mode-`0600` `.env`. See the [Docker Compose installation](docs/docker-compose.md#live-only-container-worker) for the exact boundary and preflight steps.
 
 Run tests with `python -m pytest -n auto`; lint and type-check with `ruff check src tests` and `mypy`.
 
 ## Status
 
-This is early. The control plane, adapters, and isolation are tested end to end with simulated and loopback providers. Live-model qualification is still pending. Multi-repository work, a web UI, and previews come later.
+This is early. The control plane, adapters, and isolation are tested end to end with simulated and loopback providers. The pinned local Codex container route has also passed a bounded authenticated isolation probe; a complete factory outcome and independent-model review remain unqualified. Multi-repository work, a web UI, and previews come later.
 
 [Usage guide](docs/usage.md) · [Docker Compose](docs/docker-compose.md) · [Live configuration](examples/factory-live.toml) · [Qualification status](specs/qualification.md) · [Roadmap](specs/tasks.md)
 

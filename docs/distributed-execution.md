@@ -13,7 +13,7 @@ This implements the network boundary inspired by [disler/durable-pi](https://git
 
 `serve --worker` is the single-machine convenience mode: supervisor and worker responsibilities are co-located on one host, but attempts still use fresh isolated workspaces. It does not imply Docker. In a separated deployment, the supervisor may use the repository Dockerfile while workers remain native Macs, VMs, or container-capable hosts. Installing an agent CLI on both tiers is unnecessary unless that machine also acts as an execution worker.
 
-For a local containerized installation, the [Docker Compose stack](docker-compose.md) supplies a server, a disposable operator client and a separate worker without publishing the controller port. The base profile remains the deterministic installation fixture. Its optional live overlay uses a pinned Bubblewrap command environment, exact Pi/Claude binaries and project-scoped external credentials; it does not turn arbitrary Linux containers into qualified workers.
+For a local containerized installation, the [Docker Compose stack](docker-compose.md) supplies a server, a disposable operator client and a separate worker without publishing the controller port. The base profile remains the deterministic installation fixture. Its optional live overlay uses a pinned Bubblewrap command environment, exact Codex/Pi/Claude binaries and project-scoped external credentials; it does not turn arbitrary Linux containers into qualified workers.
 
 ## Independent selections
 

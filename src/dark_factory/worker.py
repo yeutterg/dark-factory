@@ -363,6 +363,8 @@ class Worker:
                     "criteria": json.loads(claimed["work_item"]["plan_json"])
                     .get("proposal", {})
                     .get("acceptance", []),
+                    "writable": snapshot["source"]["allowed_paths"],
+                    "protected": snapshot["source"].get("protected_paths", []),
                 }
                 started = time.monotonic()
                 for event in harness.start(prompt, prepared.workspace, extra):

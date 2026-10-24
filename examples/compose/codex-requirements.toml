@@ -1,0 +1,2 @@
+# Root-owned container policy; ordinary config and prompts cannot relax it.
+enforce_residency = "us"

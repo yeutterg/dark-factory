@@ -15,7 +15,7 @@ def run(tmp_path, events, tail=""):
     binary.write_text(
         f"#!{sys.executable}\n"
         + "import json,sys,os,time\n"
-        + "assert '--ignore-user-config' in sys.argv and '--ignore-rules' in sys.argv\n"
+        + "assert '--strict-config' in sys.argv and '--ignore-user-config' in sys.argv and '--ignore-rules' in sys.argv\n"
         + "assert '--dangerously-bypass-approvals-and-sandbox' not in sys.argv and '--sandbox' not in sys.argv\n"
         + "assert 'forced_login_method=\"chatgpt\"' in sys.argv\n"
         + "assert 'permissions.factory.network.enabled=false' in sys.argv\n"
@@ -98,7 +98,16 @@ def test_timeout_kills_cli_and_removes_credentials(tmp_path):
     assert not run(tmp_path, stream()[:1], "time.sleep(20)\n").ok
 
 
-def test_unqualified_live_route_is_blocked_before_credentials_are_written(tmp_path):
+def test_cli_failure_reports_redacted_stderr(tmp_path):
+    result = run(
+        tmp_path,
+        [],
+        "print('failed with fixture-access', file=sys.stderr)\nsys.exit(17)\n",
+    )
+    assert result.error == "Codex CLI exited 17: failed with [REDACTED]"
+
+
+def test_live_route_requires_an_isolated_execution_environment(tmp_path):
     route = Route(
         id="codex",
         model="gpt-6.1-sol",
@@ -112,9 +121,8 @@ def test_unqualified_live_route_is_blocked_before_credentials_are_written(tmp_pa
         auth_env="AUTH",
         evidence_kind="live",
     )
-    with pytest.raises(ValueError, match="unqualified"):
-        CodexHarness.validate_route(route)
-    with pytest.raises(ValueError, match="unqualified"):
+    CodexHarness.validate_route(route)
+    with pytest.raises(ValueError, match="isolated execution environment"):
         list(
             CodexHarness().start(
                 "brief",
@@ -122,7 +130,6 @@ def test_unqualified_live_route_is_blocked_before_credentials_are_written(tmp_pa
                 {
                     "route": vars(route),
                     "runtime": str(tmp_path / "runtime"),
-                    "prefix": ["sandbox-exec"],
                 },
             )
         )

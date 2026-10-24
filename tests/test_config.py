@@ -89,5 +89,5 @@ def test_compose_live_example_has_only_live_routes(monkeypatch) -> None:
 
     assert set(cfg.role_routes) == {"planner", "critic", "coder", "reviewer"}
     assert set(cfg.role_routes.values()) == set(cfg.routes)
-    assert all(route.harness == "pi" for route in cfg.routes.values())
+    assert all(route.harness == "codex" for route in cfg.routes.values())
     assert all(route.evidence_kind == "live" for route in cfg.routes.values())

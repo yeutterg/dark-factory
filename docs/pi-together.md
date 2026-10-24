@@ -38,4 +38,4 @@ dark-factory --config factory.local.toml status
 
 Coding jobs use the Together coder route. Planning with Claude Fable remains a separate assignment (Claude Code subscription or the in-session planner). Do not send implementation work to a China-hosted DeepSeek endpoint.
 
-The local Compose live profile deliberately uses four role-specific Pi routes to the same pinned Together model so it can start from one explicitly bound API account without fake inference. This is an operational default, not evidence that one model provides sufficient independent criticism or review quality. Change the role routes only after separately pinning and verifying the replacement account, model, geography and price.
+Pi/Together remains available for a separately configured live worker, but the local Compose live profile now uses four role-specific Codex routes. Any Pi replacement must separately pin and verify its account, model, geography and price.

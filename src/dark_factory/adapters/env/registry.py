@@ -267,6 +267,7 @@ class CommandEnvironment(NativeEnvironment):
             "writable": policy["writable"],
             "protected": policy["protected"],
             "immutable_runtime_files": list(policy.get("immutable_runtime_files", ())),
+            "self_sandbox_binaries": self.recipe.get("self_sandbox_binaries", []),
             "limits": {
                 k: self.recipe.get(k, v)
                 for k, v in (("cpu", 1), ("memory_mb", 512), ("pids", 128))

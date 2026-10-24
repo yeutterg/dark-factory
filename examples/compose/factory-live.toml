@@ -47,10 +47,10 @@ end = "23:59"
 timezone = "America/Los_Angeles"
 
 [role_routes]
-planner = "together-planner"
-critic = "together-critic"
-coder = "together-coder"
-reviewer = "together-reviewer"
+planner = "codex-planner"
+critic = "codex-critic"
+coder = "codex-coder"
+reviewer = "codex-reviewer"
 
 [environments.container-bwrap]
 kind = "command"
@@ -61,7 +61,8 @@ geography_evidence = "Operator-controlled local Docker host; operator must confi
 cpu = 2
 memory_mb = 4096
 pids = 512
-harness_binaries = { pi = "/usr/local/bin/pi" }
+harness_binaries = { codex = "/usr/local/bin/codex" }
+self_sandbox_binaries = ["/usr/local/bin/codex"]
 driver_files = { "/usr/local/lib/python3.11/site-packages/dark_factory/adapters/env/linux_bwrap.py" = "REPLACE_WITH_DRIVER_SHA256" }
 
 [workers.compose-worker]
@@ -69,97 +70,85 @@ token_env = "COMPOSE_WORKER_TOKEN"
 environments = ["container-bwrap"]
 lease_seconds = 120
 
-[routes.together-planner]
+[routes.codex-planner]
 project_id = "dark-factory-live"
-account_kind = "api"
+account_kind = "subscription"
 environment = "container-bwrap"
-model = "deepseek-ai/DeepSeek-V4.1-Flash"
-harness = "pi"
-harness_version = "1.4.0"
-provider = "together"
-endpoint = "https://api.together.ai/v1"
-billing_account = "dark-factory-live-together"
+model = "gpt-6.1-sol"
+harness = "codex"
+harness_version = "codex-cli 0.164.0"
+provider = "chatgpt-subscription"
+endpoint = "https://chatgpt.com/backend-api"
+billing_account = "dark-factory-live-codex"
 region = "US"
-geography_evidence = "https://docs.together.ai/docs/privacy-and-security — DeepSeek on Together is hosted in Together North America data centers."
-auth_env = "DARK_FACTORY_LIVE_TOGETHER_KEY"
-api = "openai-completions"
+geography_evidence = "https://learn.chatgpt.com/docs/config-file/config-reference — enforce_residency=us requires Codex service traffic to use supported US residency."
+auth_env = "DARK_FACTORY_LIVE_CODEX_AUTH_JSON"
 evidence_kind = "live"
 role = "planner"
-reasoning = true
-context_window = 1000000
-max_tokens = 8192
+effort = "high"
+context_window = 1050000
+max_tokens = 128000
 max_cents = 100
-pricing = { input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }
-pricing_evidence = "https://www.together.ai/models/deepseek-v4-1-flash"
 
-[routes.together-critic]
+[routes.codex-critic]
 project_id = "dark-factory-live"
-account_kind = "api"
+account_kind = "subscription"
 environment = "container-bwrap"
-model = "deepseek-ai/DeepSeek-V4.1-Flash"
-harness = "pi"
-harness_version = "1.4.0"
-provider = "together"
-endpoint = "https://api.together.ai/v1"
-billing_account = "dark-factory-live-together"
+model = "gpt-6.1-sol"
+harness = "codex"
+harness_version = "codex-cli 0.164.0"
+provider = "chatgpt-subscription"
+endpoint = "https://chatgpt.com/backend-api"
+billing_account = "dark-factory-live-codex"
 region = "US"
-geography_evidence = "https://docs.together.ai/docs/privacy-and-security — DeepSeek on Together is hosted in Together North America data centers."
-auth_env = "DARK_FACTORY_LIVE_TOGETHER_KEY"
-api = "openai-completions"
+geography_evidence = "https://learn.chatgpt.com/docs/config-file/config-reference — enforce_residency=us requires Codex service traffic to use supported US residency."
+auth_env = "DARK_FACTORY_LIVE_CODEX_AUTH_JSON"
 evidence_kind = "live"
 role = "critic"
-reasoning = true
-context_window = 1000000
-max_tokens = 8192
+effort = "high"
+context_window = 1050000
+max_tokens = 128000
 max_cents = 100
-pricing = { input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }
-pricing_evidence = "https://www.together.ai/models/deepseek-v4-1-flash"
 
-[routes.together-coder]
+[routes.codex-coder]
 project_id = "dark-factory-live"
-account_kind = "api"
+account_kind = "subscription"
 environment = "container-bwrap"
-model = "deepseek-ai/DeepSeek-V4.1-Flash"
-harness = "pi"
-harness_version = "1.4.0"
-provider = "together"
-endpoint = "https://api.together.ai/v1"
-billing_account = "dark-factory-live-together"
+model = "gpt-6.1-sol"
+harness = "codex"
+harness_version = "codex-cli 0.164.0"
+provider = "chatgpt-subscription"
+endpoint = "https://chatgpt.com/backend-api"
+billing_account = "dark-factory-live-codex"
 region = "US"
-geography_evidence = "https://docs.together.ai/docs/privacy-and-security — DeepSeek on Together is hosted in Together North America data centers."
-auth_env = "DARK_FACTORY_LIVE_TOGETHER_KEY"
-api = "openai-completions"
+geography_evidence = "https://learn.chatgpt.com/docs/config-file/config-reference — enforce_residency=us requires Codex service traffic to use supported US residency."
+auth_env = "DARK_FACTORY_LIVE_CODEX_AUTH_JSON"
 evidence_kind = "live"
 role = "coder"
-reasoning = true
-context_window = 1000000
-max_tokens = 8192
+effort = "high"
+context_window = 1050000
+max_tokens = 128000
 max_cents = 200
-pricing = { input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }
-pricing_evidence = "https://www.together.ai/models/deepseek-v4-1-flash"
 
-[routes.together-reviewer]
+[routes.codex-reviewer]
 project_id = "dark-factory-live"
-account_kind = "api"
+account_kind = "subscription"
 environment = "container-bwrap"
-model = "deepseek-ai/DeepSeek-V4.1-Flash"
-harness = "pi"
-harness_version = "1.4.0"
-provider = "together"
-endpoint = "https://api.together.ai/v1"
-billing_account = "dark-factory-live-together"
+model = "gpt-6.1-sol"
+harness = "codex"
+harness_version = "codex-cli 0.164.0"
+provider = "chatgpt-subscription"
+endpoint = "https://chatgpt.com/backend-api"
+billing_account = "dark-factory-live-codex"
 region = "US"
-geography_evidence = "https://docs.together.ai/docs/privacy-and-security — DeepSeek on Together is hosted in Together North America data centers."
-auth_env = "DARK_FACTORY_LIVE_TOGETHER_KEY"
-api = "openai-completions"
+geography_evidence = "https://learn.chatgpt.com/docs/config-file/config-reference — enforce_residency=us requires Codex service traffic to use supported US residency."
+auth_env = "DARK_FACTORY_LIVE_CODEX_AUTH_JSON"
 evidence_kind = "live"
 role = "reviewer"
-reasoning = true
-context_window = 1000000
-max_tokens = 8192
+effort = "high"
+context_window = 1050000
+max_tokens = 128000
 max_cents = 100
-pricing = { input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }
-pricing_evidence = "https://www.together.ai/models/deepseek-v4-1-flash"
 
 [sources."yeutterg/dark-factory"]
 path = "/source"

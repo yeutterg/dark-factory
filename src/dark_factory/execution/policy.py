@@ -37,6 +37,7 @@ def validate_deployment(raw, routes):
             "geography_evidence",
             "driver_files",
             "harness_binaries",
+            "self_sandbox_binaries",
             "command_binaries",
             "network",
             "daemon_host",
@@ -103,6 +104,17 @@ def validate_deployment(raw, routes):
                 not isinstance(v, str) or not v.startswith("/") for v in values.values()
             ):
                 raise ConfigError("environment binary overrides must be absolute paths")
+        self_sandbox = recipe.get("self_sandbox_binaries", [])
+        if (
+            not isinstance(self_sandbox, list)
+            or any(
+                not isinstance(v, str) or not v.startswith("/") for v in self_sandbox
+            )
+            or len(set(self_sandbox)) != len(self_sandbox)
+        ):
+            raise ConfigError("self-sandbox binaries must be unique absolute paths")
+        if self_sandbox and recipe["kind"] != "command":
+            raise ConfigError("self-sandbox binaries require a command environment")
         if recipe.get("command_binaries") and recipe["kind"] != "oci":
             raise ConfigError(
                 "portable command binaries require a digest-pinned OCI image"

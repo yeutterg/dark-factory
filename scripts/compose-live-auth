@@ -8,22 +8,32 @@ if [ ! -f "$target" ]; then
     exit 1
 fi
 
-together_key=${DARK_FACTORY_LIVE_TOGETHER_KEY:-${TOGETHER_API_KEY:-}}
-if [ -z "$together_key" ]; then
-    printf 'Together API key (input hidden): ' >&2
-    restore_tty() {
-        stty echo 2>/dev/null || true
-    }
-    trap restore_tty EXIT HUP INT TERM
-    stty -echo
-    IFS= read -r together_key
-    stty echo
-    trap - EXIT HUP INT TERM
-    printf '\n' >&2
-fi
-if [ "${#together_key}" -lt 20 ]; then
-    echo "Together API key is missing or unexpectedly short" >&2
-    exit 1
+codex_auth=${DARK_FACTORY_LIVE_CODEX_AUTH_JSON:-}
+if [ -z "$codex_auth" ]; then
+    codex_auth_path=${CODEX_HOME:-"$HOME/.codex"}/auth.json
+    if [ ! -f "$codex_auth_path" ]; then
+        echo "Codex ChatGPT login not found; run 'codex login' on the host first" >&2
+        exit 1
+    fi
+    codex_auth=$(python -c '
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+tokens = data.get("tokens", {})
+if (data.get("auth_mode") != "chatgpt" or data.get("OPENAI_API_KEY") or
+        not all(tokens.get(key) for key in ("access_token", "refresh_token", "id_token"))):
+    raise SystemExit("Codex login is not a complete ChatGPT subscription login")
+print(json.dumps(data, separators=(",", ":")))
+' "$codex_auth_path")
+else
+    codex_auth=$(CODEX_AUTH_INPUT="$codex_auth" python -c '
+import json, os
+data = json.loads(os.environ["CODEX_AUTH_INPUT"])
+tokens = data.get("tokens", {})
+if (data.get("auth_mode") != "chatgpt" or data.get("OPENAI_API_KEY") or
+        not all(tokens.get(key) for key in ("access_token", "refresh_token", "id_token"))):
+    raise SystemExit("Codex login is not a complete ChatGPT subscription login")
+print(json.dumps(data, separators=(",", ":")))
+')
 fi
 
 github_token=${DARK_FACTORY_GITHUB_TOKEN:-}
@@ -52,7 +62,7 @@ upsert() {
 }
 
 umask 077
-upsert DARK_FACTORY_LIVE_TOGETHER_KEY "$together_key"
+upsert DARK_FACTORY_LIVE_CODEX_AUTH_JSON "$codex_auth"
 if [ -n "$github_token" ]; then
     upsert DARK_FACTORY_GITHUB_TOKEN "$github_token"
 fi

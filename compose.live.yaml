@@ -14,12 +14,15 @@ services:
     cap_add:
       - SYS_ADMIN
       - NET_ADMIN
+      - SETUID
+      - SETGID
+      - SETFCAP
     security_opt:
       - no-new-privileges:true
       - seccomp=unconfined
     environment:
       COMPOSE_WORKER_TOKEN: ${COMPOSE_WORKER_TOKEN:?Run ./scripts/compose-init}
-      DARK_FACTORY_LIVE_TOGETHER_KEY: ${DARK_FACTORY_LIVE_TOGETHER_KEY:-}
+      DARK_FACTORY_LIVE_CODEX_AUTH_JSON: ${DARK_FACTORY_LIVE_CODEX_AUTH_JSON:-}
     volumes:
       - ./execution-worker.local.toml:/config/execution-worker.toml:ro
       - live-worker-state:/state

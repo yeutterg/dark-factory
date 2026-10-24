@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import shutil
+import stat
 from pathlib import Path
 
 
@@ -42,6 +43,32 @@ def sandbox_command(policy: dict, command: list[str]) -> list[str]:
     if not command or not all(isinstance(item, str) and item for item in command):
         raise ValueError("sandbox command is required")
 
+    self_sandbox = policy.get("self_sandbox_binaries", [])
+    if not isinstance(self_sandbox, list) or not all(
+        isinstance(item, str) and item.startswith("/") for item in self_sandbox
+    ):
+        raise ValueError("self-sandbox binaries must be absolute paths")
+    if command[0] in self_sandbox:
+        binary = Path(command[0])
+        binary_target = binary.resolve()
+        mode = binary_target.stat()
+        if (
+            binary.name != "codex"
+            or not binary_target.is_file()
+            or mode.st_uid != 0
+            or stat.S_IMODE(mode.st_mode) & 0o022
+            or not os.access(binary_target, os.X_OK)
+        ):
+            raise ValueError(
+                "self-sandbox Codex binary must be root-owned and immutable"
+            )
+        if command[1:] == ["--version"] or command[1:2] == ["exec"]:
+            # Codex is a trusted pinned broker. Its own Linux Bubblewrap process is
+            # the model-tool boundary; nesting it inside this Bubblewrap boundary
+            # fails closed because the inner process cannot create its user map.
+            return command
+        raise ValueError("unsupported self-sandbox command")
+
     writable = policy.get("writable", [])
     protected = policy.get("protected", [])
     immutable = policy.get("immutable_runtime_files", [])
@@ -65,13 +92,13 @@ def sandbox_command(policy: dict, command: list[str]) -> list[str]:
     for system_path in ("/usr", "/etc"):
         if Path(system_path).is_dir():
             argv += ["--ro-bind", system_path, system_path]
-    for target, source in (
+    for link_target, source in (
         ("/bin", "usr/bin"),
         ("/sbin", "usr/sbin"),
         ("/lib", "usr/lib"),
         ("/lib64", "usr/lib64"),
     ):
-        argv += ["--symlink", source, target]
+        argv += ["--symlink", source, link_target]
     argv += [
         "--proc",
         "/proc",

@@ -4,7 +4,7 @@ worker_id = "compose-worker"
 token_env = "COMPOSE_WORKER_TOKEN"
 state_dir = "/state/worker"
 
-[accounts.dark-factory-live-together]
-provider = "together"
-account_kind = "api"
-auth_env = "DARK_FACTORY_LIVE_TOGETHER_KEY"
+[accounts.dark-factory-live-codex]
+provider = "chatgpt-subscription"
+account_kind = "subscription"
+auth_env = "DARK_FACTORY_LIVE_CODEX_AUTH_JSON"
