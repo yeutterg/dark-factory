@@ -1,0 +1,29 @@
+services:
+  server:
+    environment:
+      GH_TOKEN: ${DARK_FACTORY_GITHUB_TOKEN:-}
+    volumes:
+      - ./factory.local.toml:/config/factory.toml:ro
+      - .:/source:ro
+      - live-supervisor-state:/state
+
+  worker:
+    user: "0:0"
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=unconfined
+    environment:
+      COMPOSE_WORKER_TOKEN: ${COMPOSE_WORKER_TOKEN:?Run ./scripts/compose-init}
+      DARK_FACTORY_LIVE_TOGETHER_KEY: ${DARK_FACTORY_LIVE_TOGETHER_KEY:-}
+    volumes:
+      - ./execution-worker.local.toml:/config/execution-worker.toml:ro
+      - live-worker-state:/state
+
+volumes:
+  live-supervisor-state:
+  live-worker-state:

@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+profile="$repo_root/factory.local.toml"
+worker="$repo_root/execution-worker.local.toml"
+environment="$repo_root/.env"
+
+if [ ! -f "$environment" ]; then
+    echo "Run ./scripts/compose-init first" >&2
+    exit 1
+fi
+if [ -e "$profile" ] || [ -e "$worker" ]; then
+    echo "Live profiles already exist; leaving them unchanged"
+    exit 0
+fi
+
+revision=$(git -C "$repo_root" rev-parse HEAD)
+driver_sha=$(sha256sum "$repo_root/src/dark_factory/adapters/env/linux_bwrap.py" | awk '{print $1}')
+umask 077
+sed \
+    -e "s/REPLACE_WITH_SOURCE_REVISION/$revision/" \
+    -e "s/REPLACE_WITH_DRIVER_SHA256/$driver_sha/" \
+    "$repo_root/examples/compose/factory-live.toml" > "$profile"
+cp "$repo_root/examples/compose/execution-worker-live.toml" "$worker"
+
+temporary="$environment.tmp.$$"
+found=0
+while IFS= read -r line; do
+    case "$line" in
+        COMPOSE_FILE=*)
+            printf '%s\n' 'COMPOSE_FILE=compose.yaml:compose.live.yaml'
+            found=1
+            ;;
+        *) printf '%s\n' "$line" ;;
+    esac
+done < "$environment" > "$temporary"
+if [ "$found" -eq 0 ]; then
+    printf '%s\n' 'COMPOSE_FILE=compose.yaml:compose.live.yaml' >> "$temporary"
+fi
+mv "$temporary" "$environment"
+chmod 600 "$environment" "$profile" "$worker"
+echo "Created live-only private profiles. Authenticate with: ./scripts/compose-live-auth"

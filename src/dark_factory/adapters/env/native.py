@@ -160,7 +160,7 @@ def process_environment(
     (runtime / "home").mkdir(parents=True, exist_ok=True)
     (runtime / "tmp").mkdir(exist_ok=True)
     return {
-        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         "HOME": str(runtime / "home"),
         "TMPDIR": str(runtime / "tmp"),
         "LANG": "en_US.UTF-8",

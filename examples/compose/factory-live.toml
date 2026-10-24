@@ -1,0 +1,183 @@
+# Generated into the gitignored factory.local.toml by scripts/compose-live-init.
+schema_version = 1
+repositories = ["yeutterg/dark-factory"]
+skills = ["@archive-before-delete", "@redesign"]
+date_exceptions = []
+
+[project]
+id = "dark-factory-live"
+name = "dark-factory"
+state_dir = "/state/supervisor"
+
+[labels]
+selected = "factory"
+iteration = "sprint"
+
+[geography_policy]
+blocked_regions = ["CN", "CHINA", "PRC"]
+
+[budgets]
+root_cents = 1000
+planning_cents = 200
+account_cents = 1000
+
+[runtime]
+worker_token_env = "COMPOSE_LEGACY_WORKER_TOKEN"
+operator_token_env = "COMPOSE_OPERATOR_TOKEN"
+api_host = "127.0.0.1"
+api_port = 8745
+default_timeout_seconds = 3600
+max_output_bytes = 2000000
+
+[workflow]
+engine = "pi-durable"
+node_binary = "node"
+
+[continuation]
+max_resumes = 1
+max_repairs = 1
+
+[operators]
+humans = ["greg"]
+
+[[windows]]
+days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+start = "00:00"
+end = "23:59"
+timezone = "America/Los_Angeles"
+
+[role_routes]
+planner = "together-planner"
+critic = "together-critic"
+coder = "together-coder"
+reviewer = "together-reviewer"
+
+[environments.container-bwrap]
+kind = "command"
+qualification = "local-container-bwrap-v1"
+argv = ["/usr/local/bin/python", "-m", "dark_factory.adapters.env.linux_bwrap"]
+region = "US"
+geography_evidence = "Operator-controlled local Docker host; operator must confirm US placement before live approval."
+cpu = 2
+memory_mb = 4096
+pids = 512
+harness_binaries = { pi = "/usr/local/bin/pi" }
+driver_files = { "/usr/local/lib/python3.11/site-packages/dark_factory/adapters/env/linux_bwrap.py" = "REPLACE_WITH_DRIVER_SHA256" }
+
+[workers.compose-worker]
+token_env = "COMPOSE_WORKER_TOKEN"
+environments = ["container-bwrap"]
+lease_seconds = 120
+
+[routes.together-planner]
+project_id = "dark-factory-live"
+account_kind = "api"
+environment = "container-bwrap"
+model = "deepseek-ai/DeepSeek-V4.1-Flash"
+harness = "pi"
+harness_version = "1.4.0"
+provider = "together"
+endpoint = "https://api.together.ai/v1"
+billing_account = "dark-factory-live-together"
+region = "US"
+geography_evidence = "https://docs.together.ai/docs/privacy-and-security — DeepSeek on Together is hosted in Together North America data centers."
+auth_env = "DARK_FACTORY_LIVE_TOGETHER_KEY"
+api = "openai-completions"
+evidence_kind = "live"
+role = "planner"
+reasoning = true
+context_window = 1000000
+max_tokens = 8192
+max_cents = 100
+pricing = { input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }
+pricing_evidence = "https://www.together.ai/models/deepseek-v4-1-flash"
+
+[routes.together-critic]
+project_id = "dark-factory-live"
+account_kind = "api"
+environment = "container-bwrap"
+model = "deepseek-ai/DeepSeek-V4.1-Flash"
+harness = "pi"
+harness_version = "1.4.0"
+provider = "together"
+endpoint = "https://api.together.ai/v1"
+billing_account = "dark-factory-live-together"
+region = "US"
+geography_evidence = "https://docs.together.ai/docs/privacy-and-security — DeepSeek on Together is hosted in Together North America data centers."
+auth_env = "DARK_FACTORY_LIVE_TOGETHER_KEY"
+api = "openai-completions"
+evidence_kind = "live"
+role = "critic"
+reasoning = true
+context_window = 1000000
+max_tokens = 8192
+max_cents = 100
+pricing = { input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }
+pricing_evidence = "https://www.together.ai/models/deepseek-v4-1-flash"
+
+[routes.together-coder]
+project_id = "dark-factory-live"
+account_kind = "api"
+environment = "container-bwrap"
+model = "deepseek-ai/DeepSeek-V4.1-Flash"
+harness = "pi"
+harness_version = "1.4.0"
+provider = "together"
+endpoint = "https://api.together.ai/v1"
+billing_account = "dark-factory-live-together"
+region = "US"
+geography_evidence = "https://docs.together.ai/docs/privacy-and-security — DeepSeek on Together is hosted in Together North America data centers."
+auth_env = "DARK_FACTORY_LIVE_TOGETHER_KEY"
+api = "openai-completions"
+evidence_kind = "live"
+role = "coder"
+reasoning = true
+context_window = 1000000
+max_tokens = 8192
+max_cents = 200
+pricing = { input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }
+pricing_evidence = "https://www.together.ai/models/deepseek-v4-1-flash"
+
+[routes.together-reviewer]
+project_id = "dark-factory-live"
+account_kind = "api"
+environment = "container-bwrap"
+model = "deepseek-ai/DeepSeek-V4.1-Flash"
+harness = "pi"
+harness_version = "1.4.0"
+provider = "together"
+endpoint = "https://api.together.ai/v1"
+billing_account = "dark-factory-live-together"
+region = "US"
+geography_evidence = "https://docs.together.ai/docs/privacy-and-security — DeepSeek on Together is hosted in Together North America data centers."
+auth_env = "DARK_FACTORY_LIVE_TOGETHER_KEY"
+api = "openai-completions"
+evidence_kind = "live"
+role = "reviewer"
+reasoning = true
+context_window = 1000000
+max_tokens = 8192
+max_cents = 100
+pricing = { input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }
+pricing_evidence = "https://www.together.ai/models/deepseek-v4-1-flash"
+
+[sources."yeutterg/dark-factory"]
+path = "/source"
+revision = "REPLACE_WITH_SOURCE_REVISION"
+require_live_evidence = true
+checks = ["verify"]
+allowed_paths = ["src", "tests", "docs", "specs", "examples", "scripts", ".github", "Dockerfile", "README.md", "compose.yaml", "compose.live.yaml"]
+protected_paths = ["AGENTS.md", ".specify/memory/constitution.md", "pyproject.toml", ".github/workflows/tests.yml"]
+manual_acceptance = ["Inspect candidate diff", "Confirm authorized human merge"]
+
+[commands.verify]
+argv = ["python", "-m", "pytest", "-n", "auto"]
+timeout_seconds = 900
+
+[commands.tracking]
+argv = ["dark-factory", "adapter", "github-tracking"]
+timeout_seconds = 60
+
+[commands.code_host]
+argv = ["dark-factory", "adapter", "github-codehost"]
+timeout_seconds = 60

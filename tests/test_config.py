@@ -74,3 +74,20 @@ def test_durable_example_is_simulation_only():
     assert cfg.raw["workflow"]["engine"] == "pi-durable"
     assert cfg.raw["continuation"]["max_repairs"] == 1
     assert all(r.harness == "fake" for r in cfg.routes.values())
+
+
+def test_compose_live_example_has_only_live_routes(monkeypatch) -> None:
+    path = Path("examples/compose/factory-live.toml").resolve()
+    text = path.read_text(encoding="utf-8")
+    text = text.replace("REPLACE_WITH_SOURCE_REVISION", "a" * 40)
+    text = text.replace("REPLACE_WITH_DRIVER_SHA256", "b" * 64)
+    text = text.replace('path = "/source"', f'path = "{Path.cwd()}"')
+    monkeypatch.setenv("COMPOSE_LEGACY_WORKER_TOKEN", "legacy-test-token")
+    monkeypatch.setenv("COMPOSE_OPERATOR_TOKEN", "operator-test-token")
+
+    cfg = parse_toml_bytes(text.encode(), path)
+
+    assert set(cfg.role_routes) == {"planner", "critic", "coder", "reviewer"}
+    assert set(cfg.role_routes.values()) == set(cfg.routes)
+    assert all(route.harness == "pi" for route in cfg.routes.values())
+    assert all(route.evidence_kind == "live" for route in cfg.routes.values())

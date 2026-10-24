@@ -16,7 +16,7 @@ from dark_factory.runner import CommandRunner
 
 ENGINE_DIR = Path(__file__).parent / "pi_engine"
 # Must match the exact versions pinned in pi_engine/package.json.
-PACKAGE_VERSION = "1.3.0"
+PACKAGE_VERSION = "1.4.0"
 # Reasons the engine may report for a failed dispatch (see main.ts).
 DISPATCH_FAILURE_REASONS = frozenset({"storage", "bridge", "inputs_changed", "engine"})
 

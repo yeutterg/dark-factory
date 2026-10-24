@@ -42,6 +42,7 @@ async function call(operation: "observe" | "execute", input: Input): Promise<Obs
 
 const Attempts = defineDoc<{ items: Record<string, { taskId: number; digest: string }> }>({
   kind: "factory.dispatches", version: 1, scope: "session", initial: () => ({ items: {} }),
+  checkpointWhen: () => false,
 });
 const Dispatch = defineTask<Input, { phase: "execute" }, Observation>({
   name: "factory.cli-dispatch", version: 1, initial: () => ({ phase: "execute" }),

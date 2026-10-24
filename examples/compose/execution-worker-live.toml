@@ -1,0 +1,10 @@
+url = "http://127.0.0.1:8745"
+project_id = "dark-factory-live"
+worker_id = "compose-worker"
+token_env = "COMPOSE_WORKER_TOKEN"
+state_dir = "/state/worker"
+
+[accounts.dark-factory-live-together]
+provider = "together"
+account_kind = "api"
+auth_env = "DARK_FACTORY_LIVE_TOGETHER_KEY"

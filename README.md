@@ -80,6 +80,17 @@ docker compose run --rm client tui --actor operator
 
 This Compose profile is simulation-only and publishes no controller port. See the [Docker Compose installation](docs/docker-compose.md) before substituting a live worker.
 
+For a live-only local container worker, initialize the private profile and authenticate its pinned Together route before starting it:
+
+```bash
+./scripts/compose-init
+./scripts/compose-live-init
+./scripts/compose-live-auth
+docker compose up --build -d server worker
+```
+
+The live overlay contains no fake routes. Its root broker creates a restricted Bubblewrap namespace for every model assignment; the model process receives no Linux capabilities, Docker socket, operator token, or worker token. Authentication stays in the gitignored mode-`0600` `.env`. See the [Docker Compose installation](docs/docker-compose.md#live-only-container-worker) for the exact boundary and preflight steps.
+
 Run tests with `python -m pytest -n auto`; lint and type-check with `ruff check src tests` and `mypy`.
 
 ## Status
