@@ -39,5 +39,6 @@ if [ "$found" -eq 0 ]; then
     printf '%s\n' 'COMPOSE_FILE=compose.yaml:compose.live.yaml' >> "$temporary"
 fi
 mv "$temporary" "$environment"
-chmod 600 "$environment" "$profile" "$worker"
+chmod 600 "$environment"
+chmod 644 "$profile" "$worker"
 echo "Created live-only private profiles. Authenticate with: ./scripts/compose-live-auth"
