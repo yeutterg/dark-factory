@@ -80,7 +80,8 @@ RUN engine_dir="$(python -c 'from dark_factory.adapters.workflow.pi_durable impo
     && dark-factory --help >/dev/null
 RUN useradd --uid 10001 --create-home factory \
     && mkdir /state \
-    && chown factory:factory /state
+    && chown factory:factory /state \
+    && chmod 1777 /state
 USER 10001:10001
 WORKDIR /state
 ENV PYTHONDONTWRITEBYTECODE=1

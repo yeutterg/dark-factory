@@ -131,6 +131,6 @@ def inspect_configuration(cfg):
         "capability_limits": [
             "single-repository roots only; required-child graphs unsupported",
             "hosted-CI continuation and automated publishing unsupported",
-            "Claude Code is read-only; live Codex admission remains blocked",
+            "Claude Code is read-only; Codex qualification is route/environment-specific",
         ],
     }
