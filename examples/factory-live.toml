@@ -33,15 +33,15 @@ harness = "pi"
 evidence_kind = "live"
 harness_version = "1.4.0"
 provider = "together"
-endpoint = "https://api.together.ai/v1"
+endpoint = "https://us-api.together.ai/v1"
 billing_account = "REPLACE_WITH_APPROVED_ACCOUNT_REFERENCE"
 region = "US"
-geography_evidence = "https://docs.together.ai/docs/privacy-and-security — DeepSeek on Together is hosted in Together North America data centers."
+geography_evidence = "https://docs.together.ai/docs/serverless/geo-specific-inference — us-api.together.ai guarantees inference processing in the United States and does not fall back outside the selected geography."
 auth_env = "TOGETHER_API_KEY"
 api = "openai-completions"
 # Example published rates, not an account/invoice spending guarantee. Verify at approval time.
-pricing = { input = 0.30, output = 1.20, cache_read = 0.006, cache_write = 0.0 }
-pricing_evidence = "https://www.together.ai/models/deepseek-v4-1-flash"
+pricing = { input = 0.375, output = 1.50, cache_read = 0.0075, cache_write = 0.0 }
+pricing_evidence = "https://docs.together.ai/docs/serverless/models — US-only pricing includes the published 25% geography premium."
 role = "coder"
 reasoning = true
 context_window = 1000000

@@ -7,7 +7,7 @@ For a deployment where Pi 1.4.0 is logged into Together (`pi auth check --provid
 1. `TOGETHER_API_KEY` if set, otherwise
 2. `pi auth print-api-key --provider together`
 
-The isolated `models.json` points at `https://api.together.ai/v1` with `api = "openai-completions"`.
+The isolated `models.json` points at `https://us-api.together.ai/v1` with `api = "openai-completions"`. Together documents that this endpoint keeps inference processing in the United States and returns an error rather than falling back outside the selected geography. This processing guarantee does not by itself govern storage, logs or request routing; review those separately under the account's privacy settings.
 
 ## Pin prices before live custom-model execution
 
@@ -15,7 +15,7 @@ Pi defaults custom model prices to zero. Live routes with an explicit `api` ther
 
 Harness metadata declares `agent/models.json` and `agent/settings.json` immutable inside the native sandbox. The environment denies writes to those approved inputs and its own sandbox policy while retaining writable session/output paths. Parent-side setup occurs before the sandboxed CLI starts; model tools cannot rewrite route/pricing/retry inputs under the broader runtime write grant. Installed Pi still completes its four fresh contexts against the deterministic local provider with these input guards and nonzero fixture estimates.
 
-The [Together model page](https://www.together.ai/models/deepseek-v4-1-flash) currently lists per-million-token input/output/cache-read rates of $0.30/$1.20/$0.006. The annotated live template supplies those illustrative values and a zero cache-write rate for this OpenAI-compatible route; verify the actual account/model contract before approving it. These are client estimates, not provider invoices. Native CLI usage arrives after a request, so cancellation at the estimate ceiling can lag an in-flight request. A strict invoice ceiling needs separately verified provider/account spending controls; controller reservations alone cannot guarantee it. No new private profile, account budget or inference run is approved by these examples.
+Together's [serverless model table](https://docs.together.ai/docs/serverless/models) currently lists per-million-token U.S-only input/output/cache-read rates of $0.375/$1.50/$0.0075 for DeepSeek V4.1 Flash, including the published 25% geography premium. The annotated live template supplies those illustrative values and a zero cache-write rate for this OpenAI-compatible route; verify the actual account/model contract before approving it. These are client estimates, not provider invoices. Native CLI usage arrives after a request, so cancellation at the estimate ceiling can lag an in-flight request. A strict invoice ceiling needs separately verified provider/account spending controls; controller reservations alone cannot guarantee it. No new private profile, account budget or inference run is approved by these examples.
 
 ## Live profile
 
@@ -24,10 +24,10 @@ A deployment-local `factory.local.toml` is gitignored. The provided template is 
 - harness `pi` 1.4.0
 - provider `together`
 - model `deepseek-ai/DeepSeek-V4.1-Flash` (registered explicitly; Together's Pi catalog still listed V4-Flash-0731 after `pi update --models`)
-- region `US` with Together's published North America hosting evidence for DeepSeek
+- endpoint `https://us-api.together.ai/v1`, region `US`, and Together's published geo-specific inference evidence
 - `macos-sandbox`
 
-Together serverless does not let the customer pick a region. Dedicated endpoints would if a later run requires a pin.
+Together's geo-specific serverless endpoint pins inference processing to the United States with no cross-geography fallback. The default `api.together.ai` endpoint is not an acceptable substitute for this route.
 
 ## Run
 
