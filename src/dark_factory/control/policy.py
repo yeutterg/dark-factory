@@ -110,6 +110,7 @@ class PolicyMixin(ControllerCore):
                     "max_resumes": self.cfg.max_resumes,
                 },
                 "decider": self.cfg.decider,
+                "task_supervisor": self.cfg.task_supervisor,
                 "budgets": self.cfg.raw.get("budgets", {}),
                 "geography": self.cfg.geography_policy,
                 "deployment": {

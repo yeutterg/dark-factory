@@ -214,6 +214,27 @@ class ExecutionService:
             self.ctrl.mark_running(aid)
             return True
 
+    def task_progress(self, worker, data):
+        self._owned(worker, data["attempt_id"])
+        return self.ctrl.record_task_progress(
+            data["attempt_id"],
+            data["task_id"],
+            data["kind"],
+            data.get("payload") or {},
+            worker,
+            data["event_id"],
+        )
+
+    def task_instructions(self, worker, aid):
+        self._owned(worker, aid)
+        return self.ctrl.pending_task_instructions(aid, worker)
+
+    def task_ack(self, worker, data):
+        self._owned(worker, data["attempt_id"])
+        return self.ctrl.acknowledge_task_instruction(
+            data["attempt_id"], data["instruction_id"], worker
+        )
+
     def finish(self, worker, data):
         ack = self._finish(worker, data)
         # Settlement is committed before dropping reproducible transport copies.
@@ -314,6 +335,35 @@ class ExecutionService:
                     else:
                         shutil.move(str(archive), destination)
                     artifacts.sync_tree(destination)
+                    for index, update in enumerate(result.get("task_updates", [])):
+                        if not isinstance(update, dict):
+                            continue
+                        kind = {
+                            "progress": "task_progress",
+                            "done": "task_reported_done",
+                            "blocked": "task_blocked",
+                        }.get(update.get("state"))
+                        if not kind or not isinstance(update.get("task_id"), str):
+                            continue
+                        try:
+                            self.ctrl.record_task_progress(
+                                aid,
+                                update["task_id"],
+                                kind,
+                                update,
+                                worker,
+                                f"{aid}:report:{index}",
+                            )
+                        except ControllerError as exc:
+                            self.store.audit(
+                                worker,
+                                "task_progress.rejected",
+                                {
+                                    "attempt": aid,
+                                    "task": update["task_id"],
+                                    "error": str(exc)[:500],
+                                },
+                            )
             self.ctrl.finish_attempt(
                 aid,
                 receipt["ok"],

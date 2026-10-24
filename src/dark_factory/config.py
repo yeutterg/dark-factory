@@ -21,6 +21,9 @@ DEFAULT_MAX_REPAIRS = 0
 DEFAULT_MAX_RESUMES = 1
 MAX_RESUMES_LIMIT = 3
 DEFAULT_DECIDER_CONFIDENCE = 0.8
+DEFAULT_TASK_SUPERVISOR_REQUESTS = 20
+DEFAULT_TASK_SUPERVISOR_INPUT_TOKENS = 4000
+DEFAULT_TASK_SUPERVISOR_OUTPUT_TOKENS = 800
 DEFAULT_MAX_SECONDS = 7200
 DEFAULT_LEASE_SECONDS = 30
 DEFAULT_WORKFLOW_ENGINE = "native"
@@ -155,6 +158,30 @@ class FactoryConfig:
             "command": table.get("command", "decider"),
             "region": table["region"],
             "min_confidence": table.get("min_confidence", DEFAULT_DECIDER_CONFIDENCE),
+        }
+
+    @property
+    def task_supervisor(self) -> dict[str, Any]:
+        """Optional bounded structured-output task reconciler."""
+        table = self._table("task_supervisor")
+        if not table:
+            return {}
+        return {
+            "command": table.get("command", "task-supervisor"),
+            "region": table["region"],
+            "model": table["model"],
+            "provider": table["provider"],
+            "pricing_evidence": table["pricing_evidence"],
+            "max_requests_per_root": table.get(
+                "max_requests_per_root", DEFAULT_TASK_SUPERVISOR_REQUESTS
+            ),
+            "budget_cents": table.get("budget_cents", 0),
+            "max_input_tokens": table.get(
+                "max_input_tokens", DEFAULT_TASK_SUPERVISOR_INPUT_TOKENS
+            ),
+            "max_output_tokens": table.get(
+                "max_output_tokens", DEFAULT_TASK_SUPERVISOR_OUTPUT_TOKENS
+            ),
         }
 
     @property
@@ -323,6 +350,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             "environments",
             "workers",
             "decider",
+            "task_supervisor",
         },
         "profile",
     )
@@ -424,6 +452,45 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         confidence = decider.get("min_confidence", DEFAULT_DECIDER_CONFIDENCE)
         if type(confidence) not in {int, float} or not 0.5 <= confidence <= 1:
             raise ConfigError("decider.min_confidence must be between 0.5 and 1")
+    task_supervisor = raw.get("task_supervisor", {})
+    if not isinstance(task_supervisor, dict):
+        raise ConfigError("task_supervisor must be a table")
+    _fields(
+        task_supervisor,
+        {
+            "command",
+            "region",
+            "max_requests_per_root",
+            "budget_cents",
+            "max_input_tokens",
+            "max_output_tokens",
+            "model",
+            "provider",
+            "pricing_evidence",
+        },
+        "task_supervisor",
+    )
+    if task_supervisor:
+        region = task_supervisor.get("region")
+        if not isinstance(region, str) or not region.strip():
+            raise ConfigError(
+                "task_supervisor.region is required; unknown geography blocks it"
+            )
+        if region.upper() in blocked:
+            raise ConfigError("task supervisor region is blocked by geography policy")
+        for key in ("model", "provider", "pricing_evidence"):
+            if (
+                not isinstance(task_supervisor.get(key), str)
+                or not task_supervisor[key].strip()
+            ):
+                raise ConfigError(f"task_supervisor.{key} is required")
+        for key, default, minimum in (
+            ("max_requests_per_root", DEFAULT_TASK_SUPERVISOR_REQUESTS, 1),
+            ("budget_cents", 0, 0),
+            ("max_input_tokens", DEFAULT_TASK_SUPERVISOR_INPUT_TOKENS, 1),
+            ("max_output_tokens", DEFAULT_TASK_SUPERVISOR_OUTPUT_TOKENS, 1),
+        ):
+            _integer(task_supervisor, key, default, minimum)
 
     for rid, item in routes_raw.items():
         if not isinstance(item, dict):
@@ -605,6 +672,12 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     decider_table = raw.get("decider", {})
     if decider_table and decider_table.get("command", "decider") not in commands:
         raise ConfigError("decider.command must name a configured command")
+    supervisor_table = raw.get("task_supervisor", {})
+    if (
+        supervisor_table
+        and supervisor_table.get("command", "task-supervisor") not in commands
+    ):
+        raise ConfigError("task_supervisor.command must name a configured command")
 
     prompts_raw = raw.get("prompts", {})
     if not isinstance(prompts_raw, dict):

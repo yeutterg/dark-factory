@@ -21,6 +21,7 @@ from dark_factory.adapters.harness.registry import (
 from dark_factory.execution.policy import recipe_for
 from dark_factory.models import ACTIVE_ATTEMPT
 from dark_factory.runner import CommandRunner, RunnerTimeout
+from dark_factory.store import new_id
 from dark_factory.workflow import runtime_for
 
 
@@ -57,6 +58,7 @@ class Worker:
             "routes": snapshot["policy"]["routes"],
             "spending_ceiling_cents": root["spending_ceiling_cents"],
             "revision_feedback": snapshot.get("revision_feedback", []),
+            "task_list": claimed.get("task_list", {}),
         }
         if kind == "plan":
             common["selected_work"] = {"title": root["title"], "body": root["body"]}
@@ -387,6 +389,26 @@ class Worker:
                         events.append(
                             {"type": event.type, "text": event.text, "data": event.data}
                         )
+                        if (
+                            event.type
+                            in {
+                                "task_started",
+                                "task_progress",
+                                "task_reported_done",
+                                "task_blocked",
+                                "task_proposed",
+                            }
+                            and isinstance(event.data.get("task_id"), str)
+                            and hasattr(self.controller, "record_task_progress")
+                        ):
+                            self.controller.record_task_progress(
+                                attempt_id,
+                                event.data["task_id"],
+                                event.type,
+                                event.data,
+                                self.worker_id,
+                                str(event.data.get("event_id") or new_id("evt")),
+                            )
                 answer = harness.wait()
                 output = answer.output
                 ok = answer.ok
@@ -421,6 +443,55 @@ class Worker:
                     result["assumptions_recorded"] = (
                         isinstance(report, dict) and "assumptions" in report
                     )
+                    task_updates = (
+                        report.get("task_updates", [])
+                        if isinstance(report, dict)
+                        else []
+                    )
+                    if (
+                        not isinstance(task_updates, list)
+                        or len(task_updates) > 50
+                        or not all(
+                            isinstance(update, dict)
+                            and isinstance(update.get("task_id"), str)
+                            and update.get("state") in {"progress", "done", "blocked"}
+                            and isinstance(update.get("summary", ""), str)
+                            and (
+                                update.get("state") != "blocked"
+                                or isinstance(update.get("reason"), str)
+                                and update["reason"].strip()
+                            )
+                            for update in task_updates
+                        )
+                    ):
+                        raise RuntimeError("implementation task_updates are invalid")
+                    result["task_updates"] = task_updates
+                    if hasattr(self.controller, "record_task_progress"):
+                        for index, update in enumerate(task_updates):
+                            kind = {
+                                "progress": "task_progress",
+                                "done": "task_reported_done",
+                                "blocked": "task_blocked",
+                            }[update["state"]]
+                            try:
+                                self.controller.record_task_progress(
+                                    attempt_id,
+                                    update["task_id"],
+                                    kind,
+                                    update,
+                                    self.worker_id,
+                                    f"{attempt_id}:report:{index}",
+                                )
+                            except Exception as exc:
+                                self.store.audit(
+                                    self.worker_id,
+                                    "task_progress.rejected",
+                                    {
+                                        "attempt": attempt_id,
+                                        "task": update["task_id"],
+                                        "error": str(exc)[:500],
+                                    },
+                                )
                     result["candidate"] = capture(
                         prepared.workspace,
                         snapshot["base"],

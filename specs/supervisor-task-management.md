@@ -1,10 +1,10 @@
 # Supervisor task management plan
 
-Status: proposed design, not implementation approval.
+Status: implemented candidate; live model and harness qualification pending.
 
 Create a durable task list for each complete root outcome. The supervisor maintains the list as agents report progress and people add work, answers, or verification. Show what is happening now, what happens next, and who is needed in the TUI, a browser view, and a readable `tasks.md` file. Use a small model only where interpreting language is necessary; structured events and controller facts handle routine updates without inference.
 
-The complete outcome includes persistence, agent reporting and instruction delivery, human interaction, Markdown reconciliation, both user interfaces, recovery, and verification. Implementation milestones below are parts of that outcome, not substitute roots. This document does not authorize implementation, live inference, new routes or spending, deployment, or acceptance.
+The complete outcome includes persistence, agent reporting and instruction delivery, human interaction, Markdown reconciliation, both user interfaces, recovery, and verification. Implementation milestones below are parts of that outcome, not substitute roots. The candidate does not authorize live inference, new routes or spending, deployment, merge, or acceptance.
 
 ## Existing foundations and gaps
 
@@ -17,7 +17,7 @@ The complete outcome includes persistence, agent reporting and instruction deliv
 | `adapters/harness/base.py` and `worker.py` | Harness events exist, but general progress is accumulated for the attempt archive. The interface has no instruction-delivery method for an active agent. Add durable progress and capability-declared delivery. |
 | `execution/service.py` and `execution/client.py` | Extend the existing authenticated, project-scoped worker boundary for reports and instructions. Workers must not open controller state. |
 | `operator_commands.py`, `api.py`, and `ui/` | Share task commands and one projection across CLI, TUI, Markdown imports, and browser controls. |
-| Browser UI | Not implemented in this checkout. Deliver a focused task dashboard as part of this outcome; it need not implement the entire future web product. |
+| Browser UI | A focused authenticated task dashboard now shares the controller projection and commands with the TUI. It does not attempt to implement the entire future web product. |
 
 The current controller uses a bounded execution graph. Adding a task does not currently create another approved implementation attempt. Required-child and cross-repository execution remain capability gaps; a nested checklist must not conceal them.
 
@@ -118,7 +118,7 @@ Backups include accepted task records, event history, the Markdown file, and pen
 
 ## Cheap model and structured outputs
 
-Add a configurable `task_supervisor` inference role. A lightweight Luna/Flash-class model is the initial candidate for evaluation. The repository has inference routing and a limited optional decider, but no implemented task-supervisor role or verified model selection for this use case. Choose an actual available provider/model/version during implementation and pin its route, processing region, schema support, and pricing before live qualification.
+The configurable `task_supervisor` inference role is implemented with an OpenAI-compatible strict-JSON-Schema adapter. A lightweight Luna/Flash-class model remains the intended live candidate. No provider account, model version, route, region, or spending has been selected or qualified by this candidate; pin those values and current price evidence before a live run.
 
 The model interprets free text, proposes decomposition, matches updates to tasks, identifies duplicates, drafts concise summaries, and recommends a next task. Code owns persistence, dependencies, eligibility, approvals, limits, evidence checks, and instruction delivery. The model receives no shell, tracker-write, merge, signing, or operator tools.
 
@@ -134,12 +134,9 @@ An illustrative response envelope:
   "processed_event_ids": ["event_41"],
   "operations": [
     {
-      "op": "propose_task",
-      "temporary_id": "new_1",
-      "title": "Test reconnect after a brief network interruption",
-      "owner_kind": "agent",
+      "op": "admit_task",
+      "task_id": "task_inbox_1",
       "criterion_ids": ["AC-2"],
-      "depends_on": ["t2"],
       "source_event_ids": ["event_41"]
     }
   ],

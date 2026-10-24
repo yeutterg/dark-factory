@@ -21,6 +21,11 @@ dark-factory --config factory.toml serve --worker
 dark-factory --config factory.toml tui --actor greg
 ```
 
+Open `http://127.0.0.1:8745/operator/login` for the focused task dashboard and
+enter the configured operator credential and actor. The service exchanges it for
+an HttpOnly, same-site session; browser mutations also require a session CSRF
+token and the current task revision. The credential is not embedded in the page.
+
 `demo` uses explicit fake model routes but real disposable Git checkouts, a real candidate commit, and a canonical Python check. It auto-approves only this simulation, records `simulation-demo` as the actor, and stops at result review. It never calls a model provider, creates a PR or merges. Packaged skills use `@name`; project prompt/skill paths resolve relative to the profile.
 
 ## Check a deployment before dispatch
@@ -112,6 +117,59 @@ when that issue is opened.
 The settings view reads the active profile and can request a validated reload,
 but `factory.toml` remains the source of truth. Human decisions are confirmed and
 recorded with the supplied actor.
+
+### Tasks, current state and next actions
+
+Once the planner returns, each root has tasks distinct from its executable jobs.
+The TUI's eighth issue tab and the browser dashboard show current work, eligible
+next actions, human-owned tasks, waiting reasons, verification and delivery
+state. Adding an agent task puts it in the inbox; it cannot create an execution
+job or expand the approved outcome. A configured task supervisor may bind it to
+an existing criterion and approved implementation job.
+
+```bash
+dark-factory --config factory.toml task-add <work-item-id> "Check the reconnect edge case" --owner-kind agent --expected-revision 4 --actor greg
+dark-factory --config factory.toml task-reconcile <work-item-id> --actor greg
+dark-factory --config factory.toml task-export <work-item-id>
+dark-factory --config factory.toml task-import <work-item-id> --expected-revision 5 --actor greg
+```
+
+The controller maintains `<state_dir>/work-items/<id>/tasks.md`. Direct edits are
+proposals until `task-import` validates them. Generated state and next actions
+cannot be changed through the file, a required task cannot be removed as a
+waiver, and candidate-specific manual checks still require authenticated
+evidence. If the file changed since its last export, the controller preserves it
+as `tasks.pending.md` instead of overwriting it.
+
+The optional supervisor is a named JSON command. The included adapter uses an
+OpenAI-compatible chat-completions endpoint with strict JSON Schema output and
+explicit token prices:
+
+```toml
+[task_supervisor]
+command = "task-supervisor"
+provider = "your-provider"
+model = "your-small-flash-model"
+region = "US"
+pricing_evidence = "provider price page and verification date"
+max_requests_per_root = 20
+budget_cents = 20
+max_input_tokens = 4000
+max_output_tokens = 800
+
+[commands.task-supervisor]
+argv = ["dark-factory", "adapter", "task-supervisor",
+  "--endpoint", "https://provider.example/v1/chat/completions",
+  "--model", "your-small-flash-model",
+  "--api-key-env", "TASK_SUPERVISOR_API_KEY",
+  "--input-price-per-million", "0.30",
+  "--output-price-per-million", "1.20"]
+timeout_seconds = 30
+```
+
+No supervisor calls occur on polling, heartbeats or idle refreshes. Failures leave
+events visible and pending. Unknown failed-call usage consumes the per-call
+reservation; there is no automatic larger-model fallback.
 
 To connect from a different host or override the configured loopback endpoint:
 

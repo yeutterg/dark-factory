@@ -262,6 +262,7 @@ def backup(store, destination: Path) -> None:
             "runtime",
             "workflow",
             "dispatch",
+            "work-items",
         ):
             path = store.state_dir / directory
             if path.exists():

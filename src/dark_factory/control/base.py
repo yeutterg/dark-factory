@@ -45,6 +45,20 @@ class ControllerCore:
             self, root, job, attempt_id, error, timed_out
         ) -> None: ...
         def _resume_input(self, job_id, attempt_id) -> dict | None: ...
+        def seed_plan_tasks(
+            self, wid: str, proposal: dict, actor: str = "controller"
+        ) -> int: ...
+        def tasks_view(self, wid: str) -> dict: ...
+        def _refresh_task_document(self, wid: str, actor: str) -> None: ...
+        def record_manual_gate(
+            self,
+            wid: str,
+            name: str,
+            candidate: str,
+            actor: str,
+            evidence: str,
+            passed: bool = True,
+        ) -> None: ...
 
 
 def atomic(method):

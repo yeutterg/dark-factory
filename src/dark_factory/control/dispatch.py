@@ -231,6 +231,11 @@ class DispatchMixin(ControllerCore):
                     ),
                 )
                 self.store.execute(
+                    """UPDATE task_instructions SET attempt_id=?
+                    WHERE root_id=? AND job_id=? AND attempt_id IS NULL AND state='queued'""",
+                    (attempt, root["id"], job["id"]),
+                )
+                self.store.execute(
                     "INSERT INTO workers(id,capabilities,last_heartbeat,busy) VALUES (?,?,?,1) ON CONFLICT(id) DO UPDATE SET capabilities=excluded.capabilities,last_heartbeat=excluded.last_heartbeat,busy=1",
                     (worker_id, json.dumps(capabilities), now_iso()),
                 )
@@ -253,6 +258,7 @@ class DispatchMixin(ControllerCore):
                     "prompt": snapshot["policy"]["assets"]
                     .get(role, {})
                     .get("body", ""),
+                    "task_list": self.tasks_view(root["id"]),
                 }, blocked
         return None, blocked
 

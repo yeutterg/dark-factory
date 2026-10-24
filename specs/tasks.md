@@ -39,3 +39,13 @@ Implementation authority remains the [specification](spec.md) and [constitution]
 - [x] Authenticated projection and operator-command transport with a service-owned default TUI; explicit embedded maintenance mode never runs a worker or opens state beside the service.
 - [x] Target-size and compact-terminal smoke coverage, authenticated projection tests, and command-boundary regressions.
 - [x] Bounded read-only tracker discovery with hierarchy metadata, complete-root selection guards, and on-demand native archived diff rendering.
+
+## Supervisor task management increment
+
+- [x] Durable revisioned tasks distinct from jobs, seeded from planner output and bound to approved criteria, jobs and manual gates.
+- [x] Current/next/human-needed projection, attributed agent progress, explicit instruction delivery states and stale-attempt fencing.
+- [x] Conflict-preserving `tasks.md` export and authenticated import of the documented checkbox subset.
+- [x] Bounded structured-output supervisor command with schema validation, geography/config binding, usage accounting and no expensive fallback.
+- [x] Shared task commands and controls in the TUI and authenticated browser dashboard with HttpOnly sessions, CSRF and revision checks.
+- [ ] Qualify the selected small model/provider/pricing and each desired harness's live instruction boundary. Fixture and mocked-schema tests are not live qualification.
+- [ ] Human review of the exact candidate in both UIs and explicit merge/installation decision.

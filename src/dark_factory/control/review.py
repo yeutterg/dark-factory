@@ -527,6 +527,16 @@ class ReviewMixin(ControllerCore):
             raise ControllerError(
                 "live evidence required; simulation cannot qualify this outcome"
             )
+        unfinished_tasks = [
+            task
+            for task in self.tasks_view(work_item_id)["tasks"]
+            if task["required"] and task["state"] != "done"
+        ]
+        if unfinished_tasks:
+            raise ControllerError(
+                "required tasks remain incomplete: "
+                + ", ".join(task["title"] for task in unfinished_tasks[:5])
+            )
         self._require_human(actor, row)
         self.store.execute(
             "UPDATE work_items SET status='accepted',presentation_stage='Done',accepted_at=? WHERE id=?",
