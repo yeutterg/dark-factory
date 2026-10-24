@@ -2,9 +2,6 @@ services:
   server:
     environment:
       GH_TOKEN: ${DARK_FACTORY_GITHUB_TOKEN:-}
-      GIT_CONFIG_COUNT: "1"
-      GIT_CONFIG_KEY_0: safe.directory
-      GIT_CONFIG_VALUE_0: /source
     volumes:
       - ./factory.local.toml:/config/factory.toml:ro
       - .:/source:ro

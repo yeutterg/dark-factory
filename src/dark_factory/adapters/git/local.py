@@ -46,6 +46,8 @@ def git(cwd: Path, *args: str) -> str:
         [
             git_binary(),
             "-c",
+            f"safe.directory={cwd.resolve()}",
+            "-c",
             "core.hooksPath=/dev/null",
             "-c",
             "core.fsmonitor=false",
