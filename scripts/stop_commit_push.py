@@ -25,10 +25,50 @@ DIRECTORIES = {
     "scripts",
     ".specify",
     ".github",
+    "web",
 }
 SECRET = re.compile(
     rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-(?:proj-|ant-)?[A-Za-z0-9_-]{30,}|AKIA[A-Z0-9]{16})"
 )
+PRIVATE_PATH = re.compile(rb"/(?:Users|home)/[A-Za-z0-9_.-]+/|/(?:private/)?var/folders/[A-Za-z0-9]+/")
+SESSION_TOKEN = re.compile(rb"\beyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{15,}\b")
+
+
+def check_content(body):
+    # Report the category only, never echo the matching private value.
+    if SECRET.search(body) or SESSION_TOKEN.search(body):
+        raise RuntimeError("possible credential; inspect privately before publishing")
+    if PRIVATE_PATH.search(body):
+        raise RuntimeError("machine-local path; redact before publishing")
+
+
+def check_index(repo):
+    for entry in git(repo, "ls-files", "--stage", "-z").split(b"\0"):
+        if not entry:
+            continue
+        metadata, raw_name = entry.split(b"\t", 1)
+        mode, oid, stage = metadata.split()
+        if not allowed(os.fsdecode(raw_name)) or mode in {b"120000", b"160000"} or stage != b"0":
+            raise RuntimeError("index contains files requiring explicit publication review")
+        check_content(git(repo, "cat-file", "blob", oid.decode()))
+
+
+def check_outgoing(repo):
+    # Include prior local commits even when the checkout is clean, including a
+    # secret added then deleted in a later commit. Do not print blob contents.
+    commits = git(repo, "rev-list", "HEAD", "--not", "--remotes=origin").splitlines()
+    seen = set()
+    for commit in commits:
+        for entry in git(repo, "ls-tree", "-r", "-z", commit.decode()).split(b"\0"):
+            if not entry:
+                continue
+            metadata, raw_name = entry.split(b"\t", 1)
+            mode, kind, oid = metadata.split()
+            if not allowed(os.fsdecode(raw_name)) or mode == b"120000" or kind != b"blob":
+                raise RuntimeError("outgoing commit contains files requiring explicit publication review")
+            if oid not in seen:
+                check_content(git(repo, "cat-file", "blob", oid.decode()))
+                seen.add(oid)
 
 
 def git(repo, *args):
@@ -54,10 +94,19 @@ def allowed(name):
             "build",
             "node_modules",
             "__pycache__",
+            "credentials",
+            "secrets",
+            "sessions",
+            ".codex",
+            ".claude",
         }
         or part.startswith(".env")
         for part in path.parts
     ):
+        return False
+    if path.name in {"auth.json", "credentials.json", "secrets.json"}:
+        return False
+    if path.name.startswith("factory") and path.suffix == ".toml" and path.parts[0] != "examples":
         return False
     if path.suffix.lower() in {
         ".db",
@@ -75,7 +124,6 @@ def allowed(name):
     return (
         name in ROOT_FILES
         or path.parts[0] in DIRECTORIES
-        or name == ".codex/hooks.json"
     )
 
 
@@ -116,7 +164,7 @@ def checkpoint(repo, remotes=REMOTES):
             names.update(os.fsdecode(n) for n in git(repo, *args).split(b"\0") if n)
         staged = {
             os.fsdecode(n)
-            for n in git(repo, "diff", "--cached", "--name-only", "-z").split(b"\0")
+            for n in git(repo, "diff", "--cached", "--diff-filter=d", "--name-only", "-z").split(b"\0")
             if n
         }
         if any(not allowed(n) for n in staged):
@@ -128,16 +176,16 @@ def checkpoint(repo, remotes=REMOTES):
             path = repo / name
             if path.is_symlink():
                 raise RuntimeError("review symlinks before checkpointing")
-            if path.is_file() and SECRET.search(path.read_bytes()):
-                raise RuntimeError(
-                    "possible credential in a development file; inspect before publishing"
-                )
+            if path.is_file():
+                check_content(path.read_bytes())
         if selected:
             git(repo, "add", "-A", "--", *selected)
+        check_index(repo)
         if git(repo, "diff", "--cached", "--name-only"):
             git(repo, "diff", "--cached", "--check")
             git(repo, "commit", "-m", "chore: checkpoint Dark Factory session")
         sha = git(repo, "rev-parse", "HEAD").decode().strip()
+        check_outgoing(repo)
         # Always retry a prior failed push, even when the working tree is clean.
         git(
             repo,
