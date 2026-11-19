@@ -557,6 +557,8 @@ class ReviewMixin(ControllerCore):
 
     @decided
     def status(self):
+        from dark_factory.improvement import analyze_improvements
+
         allowed, reason = self.dispatch_allowed()
         return {
             "project": self.cfg.project_name,
@@ -582,4 +584,5 @@ class ReviewMixin(ControllerCore):
                 self.continuation(r["id"])
                 for r in self.store.query("SELECT id FROM work_items")
             ],
+            "improvements": analyze_improvements(self.store, self.cfg),
         }

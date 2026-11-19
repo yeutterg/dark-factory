@@ -249,6 +249,8 @@ COMMANDS: dict[str, OperatorCommand] = {
 LOCAL_ONLY = frozenset(
     {
         "preflight",  # Reads configuration without opening controller state.
+        "definition-validate",  # Reads an inert definition tree without state.
+        "improve",  # Reads local evidence; performs no external action.
         "execution-worker",  # Separate outbound worker process.
         "adapter",  # JSON command adapters invoked by the controller.
         "restore",  # Writes a new state directory.

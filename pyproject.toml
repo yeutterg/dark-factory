@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Greg Yeutter" }]
 license = "MIT"
-dependencies = ["textual>=8.2,<9"]
+dependencies = ["PyYAML>=6.0,<7", "textual>=8.2,<9"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-xdist==3.8.0", "ruff==0.17.1", "mypy==2.4.0"]

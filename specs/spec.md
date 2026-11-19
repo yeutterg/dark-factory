@@ -34,6 +34,13 @@ Declare reasonable planning and implementation assumptions in the executive summ
 - Durable task records distinct from execution jobs, with revisioned user actions, attributed progress, instruction delivery states, and a conflict-safe `tasks.md` projection.
 - A bounded optional structured-output task supervisor. It may interpret task text and suggest updates; code retains scope, dependency, budget, evidence and acceptance authority.
 - Task interaction in the TUI and authenticated focused browser dashboard over the shared operator projection and commands.
+- Optional Warp `v1alpha1` definition input for the fixed workflow: mapped role
+  prompts, shared and role-scoped skills, requested-model validation, complete
+  resource digests, and an explicit compatibility report. YAML cannot grant
+  routes, credentials, network access, budget, scheduling, or acceptance.
+- Deterministic recurring-failure analysis across distinct roots. It emits only
+  inert recommendations and tracker-ready proposal text; it performs no
+  inference or external write and does not select its own work.
 
 Still separate from bootstrap execution authority: multi-repo graphs, automatic model fallback, preview/merge automation, DORA, arena and Claude coding/session takeover. The TUI and focused task dashboard are thin operator clients over the same command boundary; neither owns scheduling or execution.
 
@@ -51,6 +58,15 @@ Still separate from bootstrap execution authority: multi-repo graphs, automatic 
 9. Simulation evidence cannot satisfy an operator-declared live-evidence requirement.
 10. Task text, structured model output, Markdown edits and checkboxes cannot expand approved scope or manufacture evidence. Task progress binds to the active attempt; human verification binds to identity, candidate and evidence.
 11. Task edits use expected revisions and idempotency keys. Markdown export preserves conflicting edits, and instruction transport distinguishes queued, delivered, acknowledged and resolved.
+12. A configured Warp definition must exactly match profile repositories, map
+    only `SPEC`, `IMPLEMENT`, and `REVIEW` into the existing graph, bind explicit
+    model requests to approved local routes, and enter the immutable approval
+    policy. Unknown fields fail closed; known unsupported resources remain
+    visible and inactive.
+13. Improvement analysis groups each signal by distinct root, applies a
+    configurable conservative threshold, cites its evidence, and reports that
+    it made no external change. Prompts, skills, models, or application code are
+    never changed or selected by the analysis.
 
 ## Presentation stages
 

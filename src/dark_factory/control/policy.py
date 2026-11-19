@@ -111,6 +111,7 @@ class PolicyMixin(ControllerCore):
                 },
                 "decider": self.cfg.decider,
                 "task_supervisor": self.cfg.task_supervisor,
+                "definition": self._definition_snapshot(),
                 "budgets": self.cfg.raw.get("budgets", {}),
                 "geography": self.cfg.geography_policy,
                 "deployment": {
@@ -127,26 +128,41 @@ class PolicyMixin(ControllerCore):
         for role in ("planner", "critic", "coder", "reviewer"):
             body, sha = load_prompt(self.cfg, role, self.packaged_prompts)
             assets[role] = {"body": body, "sha256": sha}
-        skills = []
-        for name in self.cfg.skills:
-            path = Path(name)
-            if not path.is_dir() or not (path / "SKILL.md").is_file():
-                raise ControllerError(f"selected skill not found: {path}")
-            files = {}
-            for file in sorted(path.rglob("*")):
-                if file.is_symlink():
-                    raise ControllerError("skill resources cannot be symlinks")
-                if file.is_file():
-                    files[str(file.relative_to(path))] = digest_cached(file)
-            skills.append(
-                {
-                    "name": path.name,
-                    "body": (path / "SKILL.md").read_text(),
-                    "files": files,
-                }
-            )
-        assets["skills"] = skills
+
+        def snapshot_skills(names: list[str]) -> list[dict[str, Any]]:
+            skills = []
+            for name in names:
+                path = Path(name)
+                if not path.is_dir() or not (path / "SKILL.md").is_file():
+                    raise ControllerError(f"selected skill not found: {path}")
+                files = {}
+                for file in sorted(path.rglob("*")):
+                    if file.is_symlink():
+                        raise ControllerError("skill resources cannot be symlinks")
+                    if file.is_file():
+                        files[str(file.relative_to(path))] = digest_cached(file)
+                skills.append(
+                    {
+                        "name": path.name,
+                        "body": (path / "SKILL.md").read_text(encoding="utf-8"),
+                        "files": files,
+                    }
+                )
+            return skills
+
+        assets["skills"] = snapshot_skills(self.cfg.skills)
+        assets["role_skills"] = {
+            role: snapshot_skills(paths)
+            for role, paths in sorted(self.cfg.role_skills.items())
+        }
         return assets
+
+    def _definition_snapshot(self) -> dict:
+        if not self.cfg.definition:
+            return {}
+        from dark_factory.adapters.definition.warp import public_report
+
+        return public_report(self.cfg.definition)
 
     def _bindings(self) -> dict:
 

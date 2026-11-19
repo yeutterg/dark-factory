@@ -4,6 +4,12 @@ Plan selected work, approve it, execute one isolated repository change, and revi
 
 The bootstrap implementation includes real Git workspaces and checks, structured plan/critique/review assignments, a Pi adapter, native macOS isolation, SQLite approvals and leases, verified archives, backup/restore, and JSON GitHub commands. The installed Pi adapter is exercised with a deterministic local HTTP provider in tests; this is not evidence of frontier-model quality or permission to use a live inference account. See [qualification](../specs/qualification.md).
 
+An optional [Warp-shaped definition](warp-compatibility.md) can supply the
+portable prompt and skill layer for the same fixed workflow. It does not replace
+`factory.toml` authority or activate Warp automations. The `improve` command
+reads existing evidence and emits proposal-only recurring-failure
+recommendations without inference or external writes.
+
 The optional [durable execution layer](durable-execution.md) checkpoints dispatch without replacing individual CLI agents. It also describes preapproved bounded correctness repairs, subscription adapters and named human decision policy.
 
 ## Install and try the isolated fixture

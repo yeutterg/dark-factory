@@ -49,3 +49,15 @@ Implementation authority remains the [specification](spec.md) and [constitution]
 - [x] Shared task commands and controls in the TUI and authenticated browser dashboard with HttpOnly sessions, CSRF and revision checks.
 - [ ] Qualify the selected small model/provider/pricing and each desired harness's live instruction boundary. Fixture and mocked-schema tests are not live qualification.
 - [ ] Human review of the exact candidate in both UIs and explicit merge/installation decision.
+
+## Portable definition and improvement slice
+
+- [x] Strict Warp `v1alpha1` definition reader with complete resource hashing,
+  fixed-role prompt mapping, shared and role-scoped skills, repository/model
+  binding checks, compatibility reporting, and approval-policy inclusion.
+- [x] Deterministic proposal-only recurring-failure analysis with distinct-root
+  thresholds, cited evidence, suggested definition targets, and no inference or
+  external action.
+- [ ] Behavioral compatibility for automations, routers, benchmarks, webhooks,
+  arbitrary agent graphs, or external skill references remains outside this
+  slice and must not be implied by syntax compatibility.

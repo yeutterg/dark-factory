@@ -92,6 +92,8 @@ class FactoryConfig:
     commands: dict[str, IntegrationCommand]
     prompts: dict[str, str]
     skills: list[str]
+    role_skills: dict[str, list[str]]
+    definition: dict[str, Any]
     geography_policy: list[str]
     worker_token: str
     api_host: str
@@ -121,6 +123,8 @@ class FactoryConfig:
             commands={},
             prompts={},
             skills=[],
+            role_skills={},
+            definition={},
             geography_policy=[],
             worker_token="",
             api_host="",
@@ -351,6 +355,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             "workers",
             "decider",
             "task_supervisor",
+            "definition",
         },
         "profile",
     )
@@ -373,6 +378,31 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         if not isinstance(table, dict):
             raise ConfigError(f"{key} must be a table")
         _fields(table, allowed, key)
+    definition_table = raw.get("definition", {})
+    if not isinstance(definition_table, dict):
+        raise ConfigError("definition must be a table")
+    _fields(definition_table, {"format", "path", "strict"}, "definition")
+    definition: dict[str, Any] = {}
+    if definition_table:
+        if definition_table.get("format") != "warp-v1alpha1":
+            raise ConfigError("definition.format must be warp-v1alpha1")
+        definition_path = definition_table.get("path")
+        if not isinstance(definition_path, str) or not definition_path.strip():
+            raise ConfigError("definition.path is required")
+        strict = definition_table.get("strict", True)
+        if type(strict) is not bool:
+            raise ConfigError("definition.strict must be a boolean")
+        from dark_factory.adapters.definition.warp import (
+            WarpDefinitionError,
+            load_definition,
+        )
+
+        try:
+            definition = load_definition(
+                _resolve(source_path.parent, definition_path), strict=strict
+            )
+        except WarpDefinitionError as exc:
+            raise ConfigError(f"invalid Warp definition: {exc}") from exc
     _integer(raw.get("budgets", {}), "root_cents", BUDGET_DEFAULTS["root_cents"])
     continuation = raw.get("continuation", {})
     if not isinstance(continuation, dict):
@@ -421,6 +451,10 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     repositories = _require(raw, "repositories", list)
     if not repositories or not all(isinstance(r, str) and r for r in repositories):
         raise ConfigError("repositories must be a non-empty list of strings")
+    if definition and definition["repositories"] != repositories:
+        raise ConfigError(
+            "Warp definition repositories must exactly match the operator profile"
+        )
 
     labels = raw.get("labels", {})
     if not isinstance(labels, dict) or not all(
@@ -597,6 +631,31 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     if not routes:
         raise ConfigError("at least one route is required")
 
+    if definition:
+        from dark_factory.adapters.harness.registry import adapter_for
+
+        for role, requested in definition["requested_models"].items():
+            eligible = [
+                route
+                for route in routes.values()
+                if role in adapter_for(route.harness).roles
+            ]
+            exact = [route for route in eligible if route.role == role]
+            shared = [
+                route
+                for route in eligible
+                if route.harness == "fake" and route.evidence_kind == "simulation"
+            ]
+            choices = exact or shared
+            selected = choices[0] if choices else None
+            if selected is None:
+                raise ConfigError(f"Warp agent role {role} has no approved local route")
+            if requested != "auto" and selected.model != requested:
+                raise ConfigError(
+                    f"Warp agent role {role} requests model {requested!r}, but the "
+                    f"approved local route pins {selected.model!r}"
+                )
+
     windows: list[Window] = []
     if not isinstance(raw.get("windows", []), list):
         raise ConfigError("windows must be a list")
@@ -685,16 +744,17 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     _fields(prompts_raw, {"planner", "critic", "coder", "reviewer"}, "prompts")
     if not all(isinstance(v, str) and v for v in prompts_raw.values()):
         raise ConfigError("prompt paths must be non-empty strings")
-    prompts = {
-        str(k): _resolve(source_path.parent, str(v)) for k, v in prompts_raw.items()
-    }
+    prompts = dict(definition.get("role_prompts", {}))
+    prompts.update(
+        {str(k): _resolve(source_path.parent, str(v)) for k, v in prompts_raw.items()}
+    )
 
     skills_raw = raw.get("skills", [])
     if not isinstance(skills_raw, list) or not all(
         isinstance(x, str) for x in skills_raw
     ):
         raise ConfigError("skills must be a list of paths")
-    skills = []
+    skills = list(definition.get("shared_skills", []))
     for value in skills_raw:
         if value.startswith("@"):
             if not re.fullmatch(r"@[a-z0-9-]+", value):
@@ -705,6 +765,11 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         if not (path / "SKILL.md").is_file():
             raise ConfigError(f"selected skill is missing: {value}")
         skills.append(str(path.resolve()))
+    skills = list(dict.fromkeys(skills))
+    role_skills = {
+        role: list(dict.fromkeys(paths))
+        for role, paths in definition.get("role_skills", {}).items()
+    }
     for path in prompts.values():
         if not Path(path).is_file():
             raise ConfigError(f"selected prompt is missing: {path}")
@@ -904,12 +969,15 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     from dark_factory.execution.policy import validate_deployment
 
     project_id = validate_deployment(raw, routes)
+    config_digest = digest
+    if definition:
+        config_digest = _hash_bytes(f"{digest}:{definition['digest']}".encode())
     return FactoryConfig(
         schema_version=version,
         project_name=name,
         state_dir=state_dir,
         source_path=source_path,
-        digest=digest,
+        digest=config_digest,
         repositories=list(repositories),
         labels={str(k): str(v) for k, v in labels.items()},
         routes=routes,
@@ -918,6 +986,8 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         commands=commands,
         prompts=prompts,
         skills=skills,
+        role_skills=role_skills,
+        definition=definition,
         geography_policy=sorted(blocked),
         worker_token=token,
         api_host=str(runtime.get("api_host", "127.0.0.1")),

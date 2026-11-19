@@ -1,0 +1,9 @@
+schemaVersion: v1alpha1
+name: dark-factory-compatible
+description: A Warp-shaped definition executed by Dark Factory's fixed workflow.
+repositories:
+  - owner: yeutterg
+    name: dark-factory
+agentDefaults:
+  model: auto
+  runner: local-approved

@@ -45,6 +45,17 @@ def build_parser() -> argparse.ArgumentParser:
         "preflight",
         help="Read-only installation/configuration checks; no inference or state access",
     )
+    p_definition = sub.add_parser(
+        "definition-validate",
+        help="Validate a Warp v1alpha1 definition and report supported semantics",
+    )
+    p_definition.add_argument("path", type=Path)
+    p_definition.add_argument("--no-strict", action="store_true")
+    p_improve = sub.add_parser(
+        "improve",
+        help="Report recurring failure patterns as inert improvement proposals",
+    )
+    p_improve.add_argument("--minimum-occurrences", type=int, default=3)
     p_intake = sub.add_parser("intake")
     p_intake.add_argument(
         "--issues-json", required=True, help="JSON file of selected issues"
@@ -212,6 +223,15 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _dispatch(args: argparse.Namespace) -> int:
+    if args.cmd == "definition-validate":
+        from dark_factory.adapters.definition.warp import (
+            load_definition,
+            public_report,
+        )
+
+        result = load_definition(args.path, strict=not args.no_strict)
+        print(json.dumps(public_report(result), indent=2))
+        return 0
     if args.cmd == "execution-worker":
         import os
         import time
@@ -342,6 +362,16 @@ def _dispatch(args: argparse.Namespace) -> int:
             from dark_factory.artifacts import backup
 
             backup(store, Path(args.destination))
+            return 0
+        if args.cmd == "improve":
+            from dark_factory.improvement import analyze_improvements
+
+            print(
+                json.dumps(
+                    analyze_improvements(store, ctrl.cfg, args.minimum_occurrences),
+                    indent=2,
+                )
+            )
             return 0
         if args.cmd == "run-worker":
             worker = Worker(ctrl.cfg, store, ctrl, args.worker_id)

@@ -131,7 +131,11 @@ class Worker:
             if ".git" not in path.parts and not path.is_symlink():
                 instructions[str(path.relative_to(workspace))] = path.read_text()
         common["repository_instructions_source_material"] = instructions
-        common["selected_skills"] = claimed["snapshot"]["policy"]["assets"]["skills"]
+        assets = claimed["snapshot"]["policy"]["assets"]
+        role = claimed["spec"].get("role")
+        common["selected_skills"] = assets["skills"] + assets.get(
+            "role_skills", {}
+        ).get(role, [])
         return (
             claimed["prompt"]
             + "\n\nFactory factual brief (permissions are enforced by code):\n"

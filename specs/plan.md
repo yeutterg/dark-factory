@@ -5,6 +5,8 @@ The package remains under `src/dark_factory/`. One controller owns one state dir
 | Module | Responsibility |
 | --- | --- |
 | `config.py` | Strict TOML, explicit asset/source/command references, route validation |
+| `adapters/definition/warp.py` | Strict Warp-shaped parsing, inert compatibility reporting, and normalized fixed-role assets |
+| `improvement.py` | Read-only aggregation of recurring evidence into proposal-only recommendations |
 | `models.py` | Normalized job/graph and record definitions |
 | `store.py` | SQLite schema, process lock, transactions, audit and restored path resolution |
 | `contracts.py`, `runner.py` | Versioned JSON and bounded process supervision |
@@ -27,3 +29,8 @@ Roots retain selected intent, versioned proposals, approved scope/budgets/assets
 The local worker can run synchronously through CLI or within the controller service. Outbound execution workers claim project-scoped packages over authenticated TLS and own only their disposable execution directories; no shared filesystem is required. Operator CLI, TUI and browser calls use the service API while the state directory is owned. Task records describe work and decisions; they never create an execution job or grant a route.
 
 Backup includes SQLite, workflow checkpoints, pinned source snapshots, evidence and retained workspaces; authentication files are excluded. Restore uses a new directory, verifies data and resolves historical state-owned paths without changing evidence or approval digests. Profiles may preapprove one targeted correctness repair followed by fresh canonical checks and independent review. Failures outside that branch stop with durable evidence. No automatic provider fallback, merge or installation upgrade.
+
+The Warp definition adapter is an authoring frontend, not another controller.
+It contributes immutable prompts and skills to the existing policy snapshot.
+The improvement reader consumes existing attempt, interruption, and human
+decision records and never mutates controller or external state.
