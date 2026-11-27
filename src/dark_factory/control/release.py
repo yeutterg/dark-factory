@@ -224,7 +224,15 @@ class ReleaseMixin(ControllerCore):
         if stage_name == "close":
             return self._close(release)
         if stage_name in AFTER_PACKAGE_APPROVAL:
-            self._verify_package(release)
+            try:
+                self._verify_package(release)
+            except ControllerError as exc:
+                self.store.execute(
+                    "UPDATE releases SET status='failed',reason=? WHERE id=?",
+                    (str(exc), rid),
+                )
+                self.store.audit(actor, "release.package_mismatch", {"release": rid})
+                return {"stage": stage_name, "ok": False}
         pipeline = self._pipeline_of(release)
         stage = pipeline.releases[release["kind"]].stages[stage_name]
         if not stage.applicable:

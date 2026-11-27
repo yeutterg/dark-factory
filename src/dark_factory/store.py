@@ -286,6 +286,11 @@ class Store:
         CREATE TABLE IF NOT EXISTS release_confirmations (
             release_id TEXT NOT NULL, item TEXT NOT NULL, actor TEXT NOT NULL,
             at TEXT NOT NULL, evidence TEXT NOT NULL, PRIMARY KEY(release_id, item));
+        CREATE TABLE IF NOT EXISTS external_submissions (
+            root_id TEXT NOT NULL, seq INTEGER NOT NULL, path TEXT NOT NULL,
+            digest TEXT NOT NULL, plan_digest TEXT NOT NULL, base TEXT NOT NULL,
+            consumed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+            PRIMARY KEY(root_id, seq));
         CREATE TABLE IF NOT EXISTS external_work (
             root_id TEXT PRIMARY KEY, actor TEXT NOT NULL, worktree TEXT,
             proposal_json TEXT, submitted INTEGER NOT NULL DEFAULT 0,

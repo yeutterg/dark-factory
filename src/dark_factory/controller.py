@@ -27,6 +27,9 @@ from dark_factory.control.resources import ResourcesMixin
 from dark_factory.control.results import ResultsMixin
 from dark_factory.control.review import ReviewMixin
 from dark_factory.control.tasks import TaskMixin
+from dark_factory.control.tasks_markdown import TaskMarkdownMixin
+from dark_factory.control.tasks_progress import TaskProgressMixin
+from dark_factory.control.tasks_supervisor import TaskSupervisorMixin
 from dark_factory.control.windows import window_open
 from dark_factory.runner import CommandRunner
 from dark_factory.store import Store
@@ -56,6 +59,9 @@ class Controller(
     ImprovementMixin,
     ReleaseMixin,
     ResourcesMixin,
+    TaskSupervisorMixin,
+    TaskProgressMixin,
+    TaskMarkdownMixin,
     TaskMixin,
     AttemptRecords,
 ):

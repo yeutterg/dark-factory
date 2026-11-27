@@ -275,17 +275,10 @@ def test_a_package_changed_after_approval_is_never_deployed(world):
     ctrl.release_approve(rid, "package", "greg")
     (cfg.state_dir / "release-artifacts" / rid / "app.bin").write_text("swapped")
     status = run_automatic(ctrl, rid)
-    assert (
-        status["status"] == "failed"
-        and "no longer matches"
-        in str(
-            store.one("SELECT evidence_json FROM release_stages WHERE stage='stage'")
-            or status
-        )
-        or "no longer matches" in status["reason"]
-        or status["status"] == "failed"
+    assert status["status"] == "failed" and "no longer matches" in status["reason"]
+    assert not store.query(
+        "SELECT 1 FROM release_stages WHERE stage IN ('stage','promote')"
     )
-    assert not store.query("SELECT 1 FROM release_stages WHERE stage='promote'")
 
 
 def test_stage_and_promote_steps_are_told_where_the_verified_package_is(world):
@@ -310,8 +303,8 @@ def test_a_failed_release_can_be_retried_or_cancelled_by_a_person_only(world):
     cfg, store, ctrl, repo, name = world
     (repo / PIPELINE_PATH).write_text(
         PIPELINE.replace(
-            'steps: [["python", "-c", "pass"]]}\n    stage',
-            'steps: [["python", "-c", "raise SystemExit(4)"]]}\n    stage',
+            'test: {steps: [["python", "-c", "pass"]]}',
+            'test: {steps: [["python", "-c", "raise SystemExit(4)"]]}',
             1,
         )
     )

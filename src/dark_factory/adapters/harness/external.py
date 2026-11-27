@@ -15,6 +15,27 @@ from pathlib import Path
 from dark_factory.adapters.harness.base import HarnessEvent, HarnessResult
 
 
+def tree_fingerprint(root: Path) -> str:
+    """A digest of a tree's files, links and executable bits, ignoring .git."""
+    import hashlib
+    import os
+
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if ".git" in relative.parts:
+            continue
+        if path.is_symlink():
+            digest.update(f"L {relative} -> {os.readlink(path)}\n".encode())
+        elif path.is_file():
+            mode = "x" if os.access(path, os.X_OK) else "-"
+            digest.update(f"F {relative} {mode} ".encode())
+            digest.update(
+                hashlib.sha256(path.read_bytes()).hexdigest().encode() + b"\n"
+            )
+    return digest.hexdigest()
+
+
 def replace_tree(source: Path, destination: Path) -> None:
     """Make destination's files (not its .git) exactly source's files (not its .git)."""
     for entry in destination.iterdir():
@@ -48,7 +69,14 @@ class ExternalHarness:
         if role == "planner":
             output = self.external["proposal_json"]
         elif role == "coder":
-            replace_tree(Path(self.external["worktree"]), Path(workspace))
+            frozen = Path(self.external["worktree"])
+            # The captured submission, not the agent's editable worktree: it must still
+            # be exactly what was submitted when the plan was approved.
+            if tree_fingerprint(frozen) != self.external["submission"]["digest"]:
+                raise ValueError(
+                    "the captured submission changed after it was submitted"
+                )
+            replace_tree(frozen, Path(workspace))
             output = json.dumps(
                 {
                     "summary": f"Candidate submitted by {actor}",

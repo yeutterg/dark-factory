@@ -14,13 +14,35 @@ import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from dark_factory.control.base import ControllerCore
+from dark_factory.control.base import ControllerCore, ControllerError
 from dark_factory.improvement import collect_signals
 from dark_factory.models import TERMINAL_ROOT, sql_set
 from dark_factory.store import new_id, now_iso
 
+PACKAGED = ["src/dark_factory/agents/prompts", "src/dark_factory/agents/skills"]
+# The output contracts are code-owned: no standing policy may edit them.
+CONTRACTS = [
+    f"src/dark_factory/agents/prompts/{role}.contract.md"
+    for role in ("planner", "critic", "coder", "reviewer")
+]
 ORIGIN = "improvement:"
 POLICY_ACTOR = "policy:improvement"
+
+
+def _covers(outer: str, inner: str) -> bool:
+    return inner == outer or inner.startswith(outer.rstrip("/") + "/")
+
+
+def _intersect(first: list[str], second: list[str]) -> list[str]:
+    """Paths allowed by both lists; where one is inside the other, the narrower wins."""
+    out = []
+    for a in first:
+        for b in second:
+            if _covers(b, a):
+                out.append(a)
+            elif _covers(a, b):
+                out.append(b)
+    return list(dict.fromkeys(out))
 
 
 def slug(value: str) -> str:
@@ -45,18 +67,42 @@ class ImprovementMixin(ControllerCore):
         )
         if repo not in self.cfg.sources and not simulation:
             return None, "the target repository has no configured source"
+        if repo in self.cfg.sources:
+            try:
+                self.improvement_scope(self.cfg.sources[repo])
+            except ControllerError as exc:
+                return None, str(exc)
         return repo, ""
 
-    def improvement_scope(self, source):
-        """The source as the loop may use it: narrow paths, extra protection, a diff cap."""
+    def improvement_scope(self, source, fixture=False):
+        """The source as the standing policy may use it.
+
+        Eligible paths are the factory definition's prompts and skills (or the packaged
+        ones), intersected with the repository's own allowlist and with any narrower
+        operator restriction. The policy can only narrow what the repository allows,
+        never widen it; protected paths stay in force, and the code-owned output
+        contracts are always protected.
+        """
         settings = self.cfg.improvement
-        allowed = settings["allowed_paths"] or self._default_improvement_paths(source)
+        eligible = self._eligible_paths(source, fixture)
+        allowed = _intersect(eligible, source["allowed_paths"])
+        if settings["allowed_paths"]:
+            allowed = _intersect(allowed, settings["allowed_paths"])
+        if not allowed:
+            raise ControllerError(
+                "no eligible prompt or skill path is inside the repository's allowlist "
+                "and the improvement restriction"
+            )
         return {
             **source,
             "allowed_paths": allowed,
             "protected_paths": list(
                 dict.fromkeys(
-                    [*source.get("protected_paths", []), *settings["protected_paths"]]
+                    [
+                        *source.get("protected_paths", []),
+                        *settings["protected_paths"],
+                        *CONTRACTS,
+                    ]
                 )
             ),
             "diff_limits": {
@@ -65,19 +111,31 @@ class ImprovementMixin(ControllerCore):
             },
         }
 
-    def _default_improvement_paths(self, source):
-        """The factory definition: its tree if it lives in the target, else the packaged prompts."""
-        root = self.cfg.definition.get("root")
+    def _eligible_paths(self, source, fixture):
+        """Prompt and skill paths in the target checkout; nothing else is eligible."""
+        if fixture:
+            # A simulation fixture has no real definition; it exercises the machinery.
+            return list(source["allowed_paths"])
         checkout = Path(source["path"]).resolve()
-        if root and Path(root).resolve().is_relative_to(checkout):
-            relative = Path(root).resolve().relative_to(checkout)
-            if str(relative) != ".":
-                return [str(relative)]
-            # The definition is the whole repository: only its prompts and skills.
-            narrow = [d for d in ("agents", "skills") if (Path(root) / d).is_dir()]
-            if narrow:
-                return narrow
-        return ["src/dark_factory/agents/prompts", "src/dark_factory/agents/skills"]
+        root = self.cfg.definition.get("root")
+        if not root or not Path(root).resolve().is_relative_to(checkout):
+            return list(PACKAGED)
+        base = Path(root).resolve().relative_to(checkout)
+        definition = self.cfg.definition
+        paths = [
+            (base / agent["prompt"]).as_posix()
+            for agent in definition.get("agents", [])
+            if agent.get("selected") and agent.get("role") and agent.get("prompt")
+        ]
+        skills = [
+            *definition.get("shared_skills", []),
+            *(p for group in definition.get("role_skills", {}).values() for p in group),
+        ]
+        for skill in skills:
+            resolved = Path(skill).resolve()
+            if resolved.is_relative_to(checkout):
+                paths.append(resolved.relative_to(checkout).as_posix())
+        return list(dict.fromkeys(paths))
 
     # ---- signals -------------------------------------------------------------
 

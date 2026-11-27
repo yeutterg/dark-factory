@@ -85,3 +85,12 @@ Implementation authority remains the [specification](spec.md) and [constitution]
 - [x] P6 code-host contract: written contract, reference fake, conformance suite over both adapters, no GitHub calls outside the two adapters.
 - [x] P7 metrics: one report over both loops.
 - [ ] P8 adoption, one repository at a time, each with human approval. Dark Factory's own pipeline file is written; cloud, app and firmware are not adopted.
+
+## Follow-up issues 19 to 24
+
+- [x] #19 live `work-start` names only repository and number.
+- [x] #20 the standing policy covers prompts and skills only, intersected with the allowlist; empty intersection idles with a reason.
+- [x] #21 submissions are frozen and digest-bound; unsubmitted edits are preserved before checkout removal.
+- [x] #22 recovery, gate, publication and the claim path do their code-host and decision-agent I/O outside write transactions; remote actions reconcile through pending actions after a restart.
+- [x] #23 the target branch is pinned in the approved snapshot.
+- [x] #24 `publish.skipped` records root, origin and reason.

@@ -639,9 +639,13 @@ def _normalize_sources(
                 "require_live_evidence",
                 "ephemeral_paths",
                 "pipeline_ref",
+                "target_branch",
             },
             "source",
         )
+        target = source.get("target_branch", "main")
+        if not isinstance(target, str) or not target or target.startswith("-"):
+            raise ConfigError("source target_branch must be a branch name")
         if "require_live_evidence" in source:
             _require(source, "require_live_evidence", bool)
         path = Path(_resolve(source_path.parent, _require(source, "path", str)))

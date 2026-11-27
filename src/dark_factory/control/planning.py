@@ -266,6 +266,7 @@ class PlanningMixin(ControllerCore):
                 "reconcile outstanding reservations before replanning"
             )
         source = self.cfg.sources.get(row["repo"])
+        fixture_source = False
         simulation = any(
             route.evidence_kind == "simulation" for route in self.cfg.routes.values()
         )
@@ -273,9 +274,10 @@ class PlanningMixin(ControllerCore):
             if not simulation:
                 raise ControllerError("source repository configuration required")
             source = fixture(self.cfg.state_dir)
+            fixture_source = True
         improving = row["origin"].startswith("improvement:")
         if improving:
-            source = self.improvement_scope(source)
+            source = self.improvement_scope(source, fixture_source)
         pipeline = self._pin_pipeline(source)
         if pipeline:
             # The pipeline file is part of what judges a change, so a change cannot edit it.
@@ -354,6 +356,14 @@ class PlanningMixin(ControllerCore):
                 )
             ],
             "source": dict(source),
+            # The branch a pull request for this work targets, fixed with the approved
+            # base commit: an improvement root uses the improvement table's branch,
+            # anything else the repository's own `target_branch`.
+            "target_branch": (
+                self.cfg.improvement["base_branch"]
+                if improving
+                else source.get("target_branch", "main")
+            ),
             "pipeline": pipeline,
             "base": base,
             "input_repo": str(inputs / "repo"),

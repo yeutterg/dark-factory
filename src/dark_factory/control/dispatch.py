@@ -488,9 +488,22 @@ class DispatchMixin(ControllerCore):
         )
         self.store.audit(actor, "cancel", {"job_id": job_id})
 
-    @atomic
     def recover(self, actor="operator"):
-        """Fence expired work; never automatically replace an interrupted attempt."""
+        """Fence expired work, then do the background work that may touch the network.
+
+        Fencing is one short transaction on local records. Everything that can wait on
+        a code host (pull-request status, publication, hosted runs) happens after it
+        commits and never holds the database lock, so a slow host cannot delay another
+        worker's claim or heartbeat. Remote actions are recorded first as pending
+        actions and reconciled with the host on any retry, including after a restart.
+        """
+        count = self._fence_expired(actor)
+        with self.decision():
+            self._background_work()
+        return count
+
+    @atomic
+    def _fence_expired(self, actor):
         count = 0
         for attempt in self.store.query(
             "SELECT a.*,j.lease_until FROM attempts a JOIN jobs j ON a.job_id=j.id WHERE a.status IN ('leased','running','cancelling')"
@@ -541,31 +554,6 @@ class DispatchMixin(ControllerCore):
         if count or actor == "operator":
             self.store.audit(actor, "recover", {"fenced_attempts": count})
         self.release_orphaned_supervisor_calls(actor)
-        try:
-            self.sweep_if_due()
-        except Exception as exc:  # Cleanup must never stop recovery.
-            self.store.audit("controller", "resources.error", {"error": str(exc)[:500]})
-        if not getattr(self, "_releases_recovered", False):
-            self._releases_recovered = True
-            self.recover_releases()
-        try:
-            self.release_tick()
-        except Exception as exc:  # A release must never stop recovery.
-            self.store.audit("controller", "release.error", {"error": str(exc)[:500]})
-        try:
-            self.gate_tick()
-        except Exception as exc:  # The gate must never stop recovery.
-            self.store.audit("controller", "gate.error", {"error": str(exc)[:500]})
-        try:
-            self.external_tick()
-        except Exception as exc:  # Publishing must never stop recovery.
-            self.store.audit("controller", "external.error", {"error": str(exc)[:500]})
-        try:
-            self.improvement_tick()
-        except Exception as exc:  # The loop must never stop recovery.
-            self.store.audit(
-                "controller", "improvement.error", {"error": str(exc)[:500]}
-            )
         self.scrub_retired_credentials()
         self.reconcile_continuations()
         return count
@@ -608,6 +596,34 @@ class DispatchMixin(ControllerCore):
             "shutdown",
             {"reason": reason, "stopped_attempts": [a["id"] for a in stopped]},
         )
+
+    def _background_work(self):
+        """Housekeeping with network or heavy file I/O, run outside any transaction."""
+        try:
+            self.sweep_if_due()
+        except Exception as exc:  # Cleanup must never stop recovery.
+            self.store.audit("controller", "resources.error", {"error": str(exc)[:500]})
+        if not getattr(self, "_releases_recovered", False):
+            self._releases_recovered = True
+            self.recover_releases()
+        try:
+            self.release_tick()
+        except Exception as exc:  # A release must never stop recovery.
+            self.store.audit("controller", "release.error", {"error": str(exc)[:500]})
+        try:
+            self.gate_tick()
+        except Exception as exc:  # The gate must never stop recovery.
+            self.store.audit("controller", "gate.error", {"error": str(exc)[:500]})
+        try:
+            self.external_tick()
+        except Exception as exc:  # Publishing must never stop recovery.
+            self.store.audit("controller", "external.error", {"error": str(exc)[:500]})
+        try:
+            self.improvement_tick()
+        except Exception as exc:  # The loop must never stop recovery.
+            self.store.audit(
+                "controller", "improvement.error", {"error": str(exc)[:500]}
+            )
 
     def scrub_retired_credentials(self):
         """Only adapter-declared credential files in retired, owned attempt runtimes.
