@@ -164,6 +164,8 @@ def test_a_hosted_stage_is_dispatched_found_and_its_artifacts_are_listed_by_the_
     ]
     dispatched = host.calls[0][1]
     assert dispatched["inputs"]["runs_on"] == "ubuntu-24.04"
+    assert dispatched["ref"] == "main"  # a branch, not the commit
+    assert host.calls[1][1]["commit"] == "a" * 40  # the run is found by commit
     assert json.loads(dispatched["inputs"]["steps_json"]) == [["./pack"]]
 
 

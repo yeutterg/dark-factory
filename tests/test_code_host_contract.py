@@ -28,9 +28,9 @@ class GitHubWorld:
         self.source = str(tmp_path)
         monkeypatch.setattr(github, "api", self.api)
         monkeypatch.setattr(
-            github.CommandRunner,
-            "supervise",
-            lambda runner, argv, stdin, timeout, cwd, env, **kw: self.push(argv),
+            github,
+            "_push_exact_commit",
+            lambda repo, source, branch, sha: self.branches.__setitem__(branch, sha),
         )
 
     def push(self, argv):
@@ -68,10 +68,9 @@ class GitHubWorld:
         if path.startswith(f"repos/{REPO}/statuses/"):
             return {}
         if path.endswith("/dispatches"):
+            inputs = payload["inputs"]
             self.runs[41] = {
-                "name": "dark-factory "
-                + payload["inputs"]["request_id"]
-                + " release/package"
+                "name": f"dark-factory {inputs['request_id']} {inputs.get('commit', '')} release/package"
             }
             return {}
         if path.startswith(f"repos/{REPO}/actions/runs?"):
@@ -84,7 +83,7 @@ class GitHubWorld:
                 "html_url": "u",
                 "head_sha": SHA,
             }
-        if path.endswith("/artifacts"):
+        if "/artifacts" in path:
             return {"artifacts": []}
         raise AssertionError(f"unstubbed GitHub call {method} {path}")
 
@@ -214,15 +213,18 @@ def test_a_hosted_run_is_dispatched_found_by_request_and_read(host):
         )
     with pytest.raises(ContractError):
         call(handle, "dispatch_workflow", workflow="s.yml", ref="main", inputs={"n": 1})
-    assert call(handle, "find_run", request_id="r9")["run_id"] is None
+    assert call(handle, "find_run", request_id="r9", commit=SHA)["run_id"] is None
+    with pytest.raises(ContractError):
+        call(handle, "find_run", request_id="r9")  # a run is found for an exact commit
     call(
         handle,
         "dispatch_workflow",
         workflow="s.yml",
         ref="main",
-        inputs={"request_id": "r9"},
+        inputs={"request_id": "r9", "commit": SHA},
     )
-    run_id = call(handle, "find_run", request_id="r9")["run_id"]
+    assert call(handle, "find_run", request_id="r9", commit="b" * 40)["run_id"] is None
+    run_id = call(handle, "find_run", request_id="r9", commit=SHA)["run_id"]
     assert run_id is not None
     state = call(handle, "get_run", run_id=run_id)
     assert state["status"] == "completed" and state["conclusion"] == "success"

@@ -162,6 +162,7 @@ class FakeCodeHost:
         run_id = len(self.runs) + 41
         self.runs[run_id] = {
             "request_id": inputs.get("request_id"),
+            "commit": inputs.get("commit", ""),
             "status": "completed",
             "conclusion": "success",
             "head_sha": p.get("ref", ""),
@@ -169,8 +170,12 @@ class FakeCodeHost:
         return {"observed": True, "request_id": inputs.get("request_id")}
 
     def op_find_run(self, repo, p, rid):
+        if not isinstance(p.get("commit"), str) or not SHA.fullmatch(p["commit"]):
+            raise ContractError("exact commit required")
         matches = [
-            i for i, r in self.runs.items() if r["request_id"] == p.get("request_id")
+            i
+            for i, r in self.runs.items()
+            if r["request_id"] == p.get("request_id") and r["commit"] == p["commit"]
         ]
         return {"run_id": matches[0] if len(matches) == 1 else None}
 

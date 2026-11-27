@@ -153,12 +153,14 @@ class HostedRunner:
         timeout: float,
         sleep=time.sleep,
         poll_seconds: float = 10.0,
+        branch: str = "main",
     ) -> HostedResult:
         self._call(
             "dispatch_workflow",
             {
                 "workflow": self.runner["workflow"],
-                "ref": commit,
+                # GitHub dispatches a branch or tag; the workflow checks out `commit`.
+                "ref": branch,
                 "inputs": {
                     "request_id": self.request_id,
                     "stage": stage.name,

@@ -36,6 +36,59 @@ def api(path, method="GET", payload=None):
 BRANCH = re.compile(r"dark-factory/[a-z0-9][a-z0-9._/-]{2,100}")
 
 
+def _push_exact_commit(repo, source, branch, expected):
+    """Push one commit from a fresh repository, never from the agent's checkout.
+
+    The candidate checkout is agent-written: its .git may hold hooks or config that
+    would run with the controller's credentials. Only the commit's objects leave it
+    (through a bundle, which runs no hooks); the push happens from a new bare
+    repository with no hooks, no template and no inherited repository config.
+    """
+    import os
+    import tempfile
+
+    from dark_factory.adapters.git.local import git
+
+    if git(source, "rev-parse", "HEAD") != expected:
+        raise ContractError("the candidate checkout is not at the exact commit")
+    with tempfile.TemporaryDirectory(prefix="push-") as scratch:
+        bundle = Path(scratch) / "candidate.bundle"
+        fresh = Path(scratch) / "fresh.git"
+        git(source, "bundle", "create", str(bundle), "HEAD")
+        fresh.mkdir()
+        git(fresh, "init", "--bare", "--template=")
+        git(fresh, "fetch", "--no-tags", str(bundle), "HEAD")
+        if git(fresh, "rev-parse", "FETCH_HEAD") != expected:
+            raise ContractError("the bundle did not contain the exact commit")
+        env = {
+            **os.environ,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+        code, _, err = CommandRunner(fresh).supervise(
+            [
+                "git",
+                "--git-dir",
+                str(fresh),
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "credential.helper=",
+                "-c",
+                "credential.helper=!gh auth git-credential",
+                "push",
+                f"https://github.com/{repo}.git",
+                f"{expected}:refs/heads/{branch}",
+            ],
+            b"",
+            120,
+            fresh,
+            env,
+        )
+    if code:
+        raise ContractError(f"push failed: {err.decode(errors='replace')[-500:]}")
+
+
 def push_branch(op, repo, payload, result):
     """Publish one exact commit as a new branch. Never overwrites, never forces.
 
@@ -51,7 +104,11 @@ def push_branch(op, repo, payload, result):
     ref = f"repos/{repo}/git/ref/heads/{quote(branch, safe='/')}"
     try:
         existing = api(ref).get("object", {}).get("sha")
-    except ContractError:
+    except ContractError as exc:
+        # Only a missing branch means "absent"; rate limits, auth and network
+        # failures must not fall through to a write.
+        if "404" not in str(exc) and "not found" not in str(exc).lower():
+            raise
         existing = None
     if existing:
         if existing != expected:
@@ -70,27 +127,7 @@ def push_branch(op, repo, payload, result):
     source = payload.get("source_path")
     if not isinstance(source, str) or not Path(source).is_dir():
         raise ContractError("source_path must be the candidate checkout")
-    import os
-
-    runner = CommandRunner(Path(source))
-    code, _, err = runner.supervise(
-        [
-            "git",
-            "-c",
-            "credential.helper=",
-            "-c",
-            "credential.helper=!gh auth git-credential",
-            "push",
-            f"https://github.com/{repo}.git",
-            f"{expected}:refs/heads/{branch}",
-        ],
-        b"",
-        120,
-        Path(source),
-        dict(os.environ),
-    )
-    if code:
-        raise ContractError(f"push failed: {err.decode(errors='replace')[-500:]}")
+    _push_exact_commit(repo, Path(source), branch, expected)
     observed = api(ref).get("object", {}).get("sha")
     if observed != expected:
         raise ContractError("branch read-back did not match the pushed commit")
@@ -210,14 +247,19 @@ def handle(request):
         )
         result["evidence"] = {"observed": True, "request_id": inputs.get("request_id")}
     elif op == "find_run":
-        marker = payload.get("request_id")
+        marker, commit = payload.get("request_id"), payload.get("commit")
         if not isinstance(marker, str) or not marker:
             raise ContractError("request_id required")
+        if not isinstance(commit, str) or not re.fullmatch("[0-9a-f]{40}", commit):
+            raise ContractError("exact commit required")
         runs = api(f"repos/{repo}/actions/runs?event=workflow_dispatch&per_page=50")
+        # The run name carries both the request id and the commit it was asked to
+        # build; a run for another commit is never accepted as this stage's.
         matches = [
             r
             for r in runs.get("workflow_runs", [])
             if marker in (r.get("name") or r.get("display_title") or "")
+            and commit in (r.get("name") or r.get("display_title") or "")
         ]
         result["evidence"] = {"run_id": matches[0]["id"] if len(matches) == 1 else None}
     elif op == "get_run":
@@ -229,7 +271,13 @@ def handle(request):
             "head_sha": run["head_sha"],
         }
     elif op == "list_run_artifacts":
-        listing = api(f"repos/{repo}/actions/runs/{int(payload['run_id'])}/artifacts")
+        listing = api(
+            f"repos/{repo}/actions/runs/{int(payload['run_id'])}/artifacts?per_page=100"
+        )
+        if listing.get("total_count", 0) > 100:
+            raise ContractError(
+                "more artifacts than one page; the digest would be partial"
+            )
         # Only artifacts GitHub attributes to this exact run, with the digest GitHub
         # computed, are evidence; a forged upload elsewhere is never listed here.
         result["evidence"] = {

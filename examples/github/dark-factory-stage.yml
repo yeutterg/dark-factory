@@ -1,10 +1,10 @@
 # Reusable stage workflow for Dark Factory's hosted runners (GitHub Actions or Blacksmith).
 # Copy it into the repository's .github/workflows/. Dark Factory dispatches it with the
 # stage, the exact commit and the steps; every runner runs the same argv, so local and
-# hosted evidence have the same shape. The run-name carries the request id so the
-# factory can find exactly this run.
+# hosted evidence have the same shape. The run-name carries the request id and the
+# commit so the factory finds exactly this run and no other.
 name: dark-factory-stage
-run-name: dark-factory ${{ inputs.request_id }} ${{ inputs.kind }}/${{ inputs.stage }}
+run-name: dark-factory ${{ inputs.request_id }} ${{ inputs.commit }} ${{ inputs.kind }}/${{ inputs.stage }}
 on:
   workflow_dispatch:
     inputs:
