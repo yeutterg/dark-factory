@@ -358,7 +358,9 @@ class Worker:
             prepared = self.env.prepare(attempt_id, source)
             self.controller.record_workspace(attempt_id, prepared.workspace)
             if job["kind"] == "implement":
-                last_checkpoint_digest = artifacts.git_fingerprint(prepared.workspace)
+                last_checkpoint_digest = artifacts.workspace_fingerprint(
+                    prepared.workspace, snapshot["source"].get("ephemeral_paths", [])
+                )
             if job["kind"] in {"plan", "critique", "review"}:
                 baseline = (
                     source["commit"],
@@ -471,8 +473,9 @@ class Worker:
                             }
                         )
                         if job["kind"] == "implement":
-                            current_digest = artifacts.git_fingerprint(
-                                prepared.workspace
+                            current_digest = artifacts.workspace_fingerprint(
+                                prepared.workspace,
+                                snapshot["source"].get("ephemeral_paths", []),
                             )
                             if current_digest != last_checkpoint_digest:
                                 try:

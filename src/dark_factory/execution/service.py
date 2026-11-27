@@ -6,7 +6,7 @@ import json
 import re
 import shutil
 import tempfile
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dark_factory import artifacts
@@ -267,6 +267,11 @@ class ExecutionService:
         row = self._owned(worker, aid)
         if row["status"] not in ACTIVE_ATTEMPT:
             raise ControllerError("attempt is fenced")
+        job_lease = self.store.one(
+            "SELECT lease_until FROM jobs WHERE id=?", (row["job_id"],)
+        )["lease_until"]
+        if not job_lease or datetime.fromisoformat(job_lease) <= datetime.now(UTC):
+            raise ControllerError("attempt is fenced")
         with tempfile.TemporaryDirectory(
             prefix="factory-checkpoint-", dir=self.store.state_dir
         ) as temporary:
@@ -312,6 +317,19 @@ class ExecutionService:
                         "checkpoint_id": checkpoint_id,
                         "manifest_digest": manifest_digest,
                     }
+                if self.store.one(
+                    "SELECT COUNT(*) n FROM attempt_checkpoints WHERE attempt_id=?",
+                    (aid,),
+                )["n"] >= 5 or self.store.one(
+                    "SELECT id FROM attempt_checkpoints WHERE attempt_id=? AND sequence=?",
+                    (aid, metadata["sequence"]),
+                ):
+                    raise ControllerError("checkpoint limit or sequence already used")
+                lease = self.store.one(
+                    "SELECT lease_until FROM jobs WHERE id=?", (row["job_id"],)
+                )["lease_until"]
+                if not lease or datetime.fromisoformat(lease) <= datetime.now(UTC):
+                    raise ControllerError("attempt is fenced")
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(source), destination)
                 detail = json.loads((destination / "checkpoint.json").read_text())
@@ -363,6 +381,13 @@ class ExecutionService:
         try:
             return self.finish(worker, data)
         except ControllerError as exc:
+            if str(exc) == "attempt lease expired before result submission":
+                self.ctrl.recover("execution-supervisor")
+                if (
+                    self._owned(worker, data.get("attempt_id"))["status"]
+                    not in ACTIVE_ATTEMPT
+                ):
+                    exc = ControllerError("attempt is fenced")
             if str(exc) != "attempt is fenced":
                 raise
             return {

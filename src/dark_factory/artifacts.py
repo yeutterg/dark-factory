@@ -208,6 +208,26 @@ def git_fingerprint(workspace: Path) -> str:
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 
+def workspace_fingerprint(workspace: Path, ephemeral_paths=()) -> str:
+    """Content-sensitive digest for recoverable work, excluding owned Git state."""
+    root = Path(workspace)
+    excluded = [Path(value) for value in ephemeral_paths]
+    entries = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if ".git" in relative.parts or any(
+            relative == item or item in relative.parents for item in excluded
+        ):
+            continue
+        if path.is_symlink():
+            entries.append((str(relative), "link", str(path.readlink())))
+        elif path.is_file():
+            entries.append((str(relative), "file", digest(path)))
+    return hashlib.sha256(
+        json.dumps(entries, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def workspace_matches(workspace: Path, commit: str, fingerprint: str) -> bool:
     from dark_factory.adapters.git.local import git
 
@@ -247,6 +267,7 @@ def backup(store, destination: Path) -> None:
             target.close()
         for directory in (
             "archives",
+            "checkpoints",
             "artifacts",
             "workspaces",
             "inputs",
@@ -268,7 +289,7 @@ def backup(store, destination: Path) -> None:
             destination,
             {
                 "kind": "controller-backup",
-                "schema_version": 3,
+                "schema_version": 4,
                 "origin": str(store.state_dir.resolve()),
             },
         )
@@ -282,7 +303,7 @@ def restore(source: Path, destination: Path) -> None:
     metadata = verify(source)
     if metadata.get("kind") != "controller-backup" or metadata.get(
         "schema_version"
-    ) not in {2, 3}:
+    ) not in {2, 3, 4}:
         raise ValueError("incompatible backup")
     shutil.copytree(source, destination, symlinks=True)
     try:

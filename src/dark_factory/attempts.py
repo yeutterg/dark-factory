@@ -76,7 +76,10 @@ class AttemptRecords:
         if not root or not root["approved_digest"]:
             return None
         workspace = Path(workspace)
-        workspace_digest = artifacts.git_fingerprint(workspace)
+        ephemeral = json.loads(root["snapshot_json"])["source"].get(
+            "ephemeral_paths", []
+        )
+        workspace_digest = artifacts.workspace_fingerprint(workspace, ephemeral)
         existing = self.store.one(
             "SELECT * FROM attempt_checkpoints WHERE attempt_id=? AND workspace_digest=?",
             (attempt_id, workspace_digest),
@@ -116,9 +119,7 @@ class AttemptRecords:
                     "sequence": count + 1,
                 },
                 {"checkpoint.json": json.dumps(bounded_detail, sort_keys=True)},
-                ephemeral_paths=json.loads(root["snapshot_json"])["source"].get(
-                    "ephemeral_paths", []
-                ),
+                ephemeral_paths=ephemeral,
             )
             temporary.replace(destination)
             artifacts.sync_tree(parent)

@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -97,6 +98,7 @@ class WorkerClient:
                 json.dump(expected, output)
         self.accounts = accounts or {}
         self._preflighted: tuple[str, float] | None = None
+        self._checkpoint_upload: threading.Thread | None = None
         import ssl
 
         context = ssl.create_default_context(cafile=str(ca_file) if ca_file else None)
@@ -264,7 +266,7 @@ class WorkerClient:
                         cancel.touch()
                     elif alive:
                         lease.touch()
-                        self._upload_checkpoints(directory, aid)
+                        self._schedule_checkpoint_upload(directory, aid)
                     # None: the controller could not be reached. The executor
                     # stops by itself if the lease file ages past the lease.
                     try:
@@ -285,7 +287,7 @@ class WorkerClient:
             if time.time() - item.get("started_at", 0) < 12:
                 return False  # The start-intent/PID-publication gap must expire conservatively.
         result = self._load_result(directory, assignment)
-        self._upload_checkpoints(directory, aid)
+        self._drain_checkpoint_upload(directory, aid)
         ack = self.request("finish", result)
         if ack.get("terminal") and ack.get("disposition") == "fenced":
             item.update(phase="fenced", terminal_ack=ack)
@@ -348,6 +350,23 @@ class WorkerClient:
             ):
                 raise ValueError("controller did not verify checkpoint")
             self._write(marker, ack)
+
+    def _schedule_checkpoint_upload(self, directory, aid):
+        """Transfer milestones off the heartbeat path."""
+        if self._checkpoint_upload and self._checkpoint_upload.is_alive():
+            return
+        self._checkpoint_upload = threading.Thread(
+            target=self._upload_checkpoints, args=(directory, aid), daemon=True
+        )
+        self._checkpoint_upload.start()
+
+    def _drain_checkpoint_upload(self, directory, aid):
+        self._schedule_checkpoint_upload(directory, aid)
+        while self._checkpoint_upload and self._checkpoint_upload.is_alive():
+            alive = self._heartbeat(aid)
+            if alive is False:
+                break
+            self._checkpoint_upload.join(timeout=1)
 
     def _retire_fenced(self, journal, item):
         """Preserve a late result locally and let this worker claim fresh work."""

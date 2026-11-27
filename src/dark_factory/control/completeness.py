@@ -95,7 +95,10 @@ class CompletenessMixin(ControllerCore):
         settings = self.cfg.decider
         command = self.cfg.commands[settings["command"]]
         checks = []
-        for item in check_result.get("checks", []):
+        for item in [
+            *check_result.get("checks", []),
+            *check_result.get("stages", []),
+        ]:
             if not isinstance(item, dict):
                 continue
             checks.append(
@@ -134,6 +137,12 @@ class CompletenessMixin(ControllerCore):
         evidence_digest = identity({"state": state, "questions": questions})
         assessment_id = new_id("ca")
         budget = settings["completeness_budget_cents"]
+        review = next(
+            job
+            for job in self.jobs(root["id"])
+            if job["kind"] == "review" and job["status"] == "ready"
+        )
+        review_budget = json.loads(review["spec_json"])["budget_cents"]
         with self.store.transaction():
             if self.store.one(
                 "SELECT id FROM completeness_assessments WHERE root_id=? AND candidate=? "
@@ -146,7 +155,10 @@ class CompletenessMixin(ControllerCore):
                 (root["id"],),
             )
             if (
-                current["spent_cents"] + current["reserved_cents"] + budget
+                current["spent_cents"]
+                + current["reserved_cents"]
+                + budget
+                + review_budget
                 > current["spending_ceiling_cents"]
             ):
                 status = "budget_unavailable"
@@ -186,7 +198,11 @@ class CompletenessMixin(ControllerCore):
             result = self.runner.run_json(
                 command.command,
                 "decide",
-                {"state": state, "questions": questions},
+                {
+                    "state": state,
+                    "questions": questions,
+                    "model": settings["completeness_model"],
+                },
                 "completeness-" + evidence_digest[:24],
                 command.timeout_seconds,
             )
@@ -215,6 +231,9 @@ class CompletenessMixin(ControllerCore):
             cost = reported
             final_status = "recorded"
         except Exception as exc:
+            # Once the command starts, missing or invalid accounting is charged
+            # conservatively within the prior reservation.
+            cost = cost or budget
             response = {"error": str(exc)[:500]}
         with self.store.transaction():
             self.store.execute(
@@ -259,17 +278,29 @@ class CompletenessMixin(ControllerCore):
         for row in rows:
             response = json.loads(row["response_json"] or "{}")
             choices = [a.get("choice") for a in response.get("answers", {}).values()]
-            reviewer_blocked = bool(
-                self.store.one(
-                    """SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id
-                    WHERE j.work_item_id=? AND j.kind='review' AND a.status='failed' LIMIT 1""",
+            reviewer_blocked = any(
+                json.loads(attempt["inputs_json"] or "{}")
+                .get("candidate", {})
+                .get(
+                    self.store.one(
+                        "SELECT repo FROM work_items WHERE id=?", (row["root_id"],)
+                    )["repo"],
+                    {},
+                )
+                .get("commit")
+                == row["candidate"]
+                for attempt in self.store.query(
+                    """SELECT a.inputs_json FROM attempts a JOIN jobs j ON j.id=a.job_id
+                    WHERE j.work_item_id=? AND j.kind='review' AND a.status='failed'""",
                     (row["root_id"],),
                 )
             )
-            human_rejected = bool(
-                self.store.one(
-                    "SELECT 1 FROM audit WHERE action='reject' AND "
-                    "json_extract(payload_json,'$.work_item_id')=? LIMIT 1",
+            human_rejected = any(
+                json.loads(item["payload_json"] or "{}").get("candidate")
+                == row["candidate"]
+                for item in self.store.query(
+                    "SELECT payload_json FROM audit WHERE action='reject' AND "
+                    "json_extract(payload_json,'$.work_item_id')=?",
                     (row["root_id"],),
                 )
             )

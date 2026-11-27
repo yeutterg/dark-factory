@@ -29,6 +29,10 @@ class CheckpointThenDisconnect(FakeHarness):
             '# worker-a-milestone\ndef message():\n    return "partial"\n'
         )
         yield HarnessEvent("task_progress", "saved unique edit", {"task_id": "fixture"})
+        Path(workspace, "message.py").write_text(
+            '# worker-a-milestone-newest\ndef message():\n    return "partial"\n'
+        )
+        yield HarnessEvent("task_progress", "saved newest edit", {"task_id": "fixture"})
         self._last = HarnessResult(
             False, "", {}, "worker-a", cost_cents=1, error="HTTP 503 disconnected"
         )
@@ -40,8 +44,10 @@ class CompleteRestoredWork(FakeHarness):
             yield from super().start(prompt, workspace, extra)
             return
         path = Path(workspace, "message.py")
-        assert "worker-a-milestone" in path.read_text()
-        path.write_text('# worker-a-milestone\ndef message():\n    return "ready"\n')
+        assert "worker-a-milestone-newest" in path.read_text()
+        path.write_text(
+            '# worker-a-milestone-newest\ndef message():\n    return "ready"\n'
+        )
         body = json.dumps(
             {
                 "summary": "Completed worker A's checkpointed edit",
@@ -88,21 +94,23 @@ def test_worker_b_reaches_review_once_after_worker_a_disk_is_unavailable(
             ADAPTERS, "fake", HarnessAdapter("fake", CheckpointThenDisconnect)
         )
         late_result = execute_assignment(assignment, tmp_path / "worker-a")
-        checkpoint = next((tmp_path / "worker-a" / "checkpoints" / aid).iterdir())
-        service.checkpoint(
-            "worker1",
-            {
-                "attempt_id": aid,
-                "checkpoint_id": checkpoint.name,
-                "checkpoint": pack({"checkpoint": checkpoint}),
-            },
-        )
+        checkpoints = list((tmp_path / "worker-a" / "checkpoints" / aid).iterdir())
+        assert len(checkpoints) == 2
+        for checkpoint in reversed(checkpoints):
+            service.checkpoint(
+                "worker1",
+                {
+                    "attempt_id": aid,
+                    "checkpoint_id": checkpoint.name,
+                    "checkpoint": pack({"checkpoint": checkpoint}),
+                },
+            )
         active = next(
             worker["active"]
             for worker in controller_projection(ctrl)["workers"]
             if worker["id"] == "worker1"
         )
-        assert active["last_checkpoint"]["detail"]["summary"] == "saved unique edit"
+        assert active["last_checkpoint"]["detail"]["summary"] == "saved newest edit"
         assert active["remaining_seconds"] > 0
         assert active["remaining_cents"] >= 0
 

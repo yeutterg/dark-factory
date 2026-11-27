@@ -79,21 +79,21 @@ def test_shadow_completeness_never_blocks_independent_review(
 
         assessment = store.one("SELECT * FROM completeness_assessments")
         assert assessment["model"] == ("jev-test-2026-11-01" if available else "")
-        if available:
-            assert assessment["cost_cents"] == 2
-            assert (
-                store.one(
-                    "SELECT amount_cents FROM costs WHERE source='completeness-shadow'"
-                )[0]
-                == 2
-            )
+        expected_cost = 2 if available else 5
+        assert assessment["cost_cents"] == expected_cost
+        assert (
+            store.one(
+                "SELECT amount_cents FROM costs WHERE source='completeness-shadow'"
+            )[0]
+            == expected_cost
+        )
         assert worker.run_once()  # independent reviewer still owns the gate
         assert (
             store.one("SELECT status FROM work_items WHERE id=?", (root_id,))[0]
             == "awaiting_review"
         )
         report = ctrl.completeness_report()
-        assert report["runs"] == 1 and report["cost_cents"] == (2 if available else 0)
+        assert report["runs"] == 1 and report["cost_cents"] == expected_cost
     finally:
         store.close()
 

@@ -35,6 +35,9 @@ def handle(request, key, model=DEFAULT_MODEL, send=post):
     if request["operation"] != "decide":
         raise ContractError(f"unsupported decision operation {request['operation']!r}")
     payload = request["input"]
+    requested_model = payload.get("model")
+    if requested_model is not None and requested_model != model:
+        raise ContractError("requested model differs from the configured Jev model")
     questions = payload.get("questions")
     if not isinstance(questions, dict) or not questions:
         raise ContractError("questions required")
