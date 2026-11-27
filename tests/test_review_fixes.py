@@ -7,7 +7,6 @@ import pytest
 from test_loop import cfg_for
 
 from dark_factory.controller import Controller, ControllerError
-from dark_factory.execution.policy import selected_route
 from dark_factory.store import Store
 from dark_factory.worker import Worker
 
@@ -34,7 +33,7 @@ def test_stale_root_does_not_block_other_roots(tmp_path):
         store.execute("UPDATE work_items SET plan_json='{}' WHERE id=?", (stale,))
         fresh = ctrl.intake_issues([issue(2)])[0]
         ctrl.start_planning(fresh)
-        claim = ctrl.claim_job("w", ["native", "fake"])
+        claim = ctrl.claim_job("w", ["native", "fake", "environment:local"])
         assert claim["work_item"]["id"] == fresh
         assert ctrl.continuation(stale)["next_action"]["kind"] == "blocked"
     finally:
@@ -58,7 +57,7 @@ def test_stale_root_alone_reports_reason_after_committing_scan(tmp_path):
             (expired,),
         )
         with pytest.raises(ControllerError, match="approved inputs changed"):
-            ctrl.claim_job("w", ["native", "fake"])
+            ctrl.claim_job("w", ["native", "fake", "environment:local"])
         status = store.one("SELECT status FROM work_items WHERE id=?", (expired,))
         assert status[0] == "failed"
     finally:
@@ -79,13 +78,17 @@ def test_live_routes_reject_caller_supplied_issue_fixtures(tmp_path):
         store.close()
 
 
-def test_live_route_for_one_role_never_serves_another(tmp_path):
-    cfg = cfg_for(tmp_path)
-    assert selected_route(cfg, "planner") is not None
-    for route in cfg.routes.values():
-        route.evidence_kind = "live"
-    assert selected_route(cfg, "planner") is None
-    assert selected_route(cfg, "coder") is not None
+def test_live_route_for_one_role_never_serves_another():
+    import tomllib
+
+    from dark_factory.config import ConfigError, validate_raw
+
+    path = Path("examples/factory.toml").resolve()
+    raw = tomllib.loads(path.read_text())
+    validate_raw(raw, path, "digest")  # the simulation fake may span roles
+    raw["routes"]["fake-coder"]["evidence_kind"] = "live"
+    with pytest.raises(ConfigError):
+        validate_raw(raw, path, "digest")
 
 
 def test_legacy_jobs_are_backfilled_and_ordered_numerically(tmp_path):

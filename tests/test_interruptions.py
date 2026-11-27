@@ -17,7 +17,7 @@ from dark_factory.adapters.harness.pi import PiHarness
 from dark_factory.config import ConfigError, IntegrationCommand, parse_toml_bytes
 from dark_factory.contracts import ContractError, make_request
 from dark_factory.controller import Controller, ControllerError
-from dark_factory.interruptions import categorize, decide, is_interruption
+from dark_factory.resume_policy import categorize, decide, is_interruption
 from dark_factory.store import Store
 from dark_factory.worker import Worker
 
@@ -26,7 +26,7 @@ from dark_factory.worker import Worker
     "error,timed_out,category",
     [
         ("worker interrupted; workspace retained", True, "worker_lost"),
-        ("durable dispatch failed: storage", False, "engine"),
+        ("worker error", False, "worker_error"),
         ("provider returned HTTP 429: rate limited", False, "provider"),
         ("upstream 503 Service Unavailable", False, "provider"),
         ("invalid role result: missing criteria", False, "invalid_output"),
@@ -39,13 +39,20 @@ def test_causes_are_categorized(error, timed_out, category):
     assert categorize(error, timed_out) == category
 
 
+def test_controller_markers_only_count_at_the_start_of_the_error():
+    assert (
+        categorize("note: worker interrupted; credential unavailable", False)
+        == "unknown"
+    )
+    assert not is_interruption("see: worker error somewhere", False, None)
+
+
 @pytest.mark.parametrize(
     "error",
     [
         "approved inputs changed during attempt",
         "protected or out-of-scope changes: ['x']",
         "trusted command binding changed",
-        "durable dispatch failed: inputs_changed",
     ],
 )
 def test_policy_failures_are_never_interruptions(error):
@@ -55,10 +62,14 @@ def test_policy_failures_are_never_interruptions(error):
 def test_verdict_combines_rules_advice_and_hard_limits():
     assert decide("provider", 0, 1, []).action == "resume"
     assert decide("time_limit", 0, 1, []).action == "ask"
-    # Confident advice can move either way; unconfident advice is ignored.
+    # Advice can hold a transient cause but can never make another cause automatic.
     assert (
         decide("time_limit", 0, 1, [], {"decision": "resume", "confidence": 0.9}).action
-        == "resume"
+        == "ask"
+    )
+    assert (
+        decide("provider", 0, 1, [], {"decision": "ask", "confidence": 0.9}).action
+        == "ask"
     )
     asked = decide("provider", 0, 1, [], {"decision": "stop", "confidence": 0.95})
     assert (asked.action, asked.recommendation) == ("ask", "stop")
@@ -291,3 +302,85 @@ def test_pi_continues_the_interrupted_session_as_a_fork(tmp_path):
     forked = Path(argv[argv.index("--fork") + 1])
     assert forked.read_text() == '{"type": "session", "id": "s1"}\n'
     assert "--no-mcp" in argv
+
+
+def test_unstarted_claim_does_not_consume_the_saved_work_link(loop):
+    cfg, store, ctrl, wid, worker = loop
+    first = ctrl.claim_job("w", ["native", "fake", "environment:local"])
+    assert first["job"]["kind"] == "implement"
+    ctrl.finish_attempt(
+        first["attempt_id"],
+        False,
+        "",
+        0,
+        None,
+        error="HTTP 503 overloaded",
+        timed_out=True,
+    )
+    ctrl.settle_interruptions()
+    second = ctrl.claim_job("w", ["native", "fake", "environment:local"])
+    assert second["inputs"]["resume"]["attempt"] == first["attempt_id"]
+    # The worker dies before starting; the saved-work link must survive.
+    assert ctrl.release_unstarted_claim(second["attempt_id"], "w", "restart")
+    third = ctrl.claim_job("w", ["native", "fake", "environment:local"])
+    assert third["inputs"]["resume"]["attempt"] == first["attempt_id"]
+
+
+def test_prompt_only_claims_restored_work_when_it_was_restored(loop):
+    cfg, store, ctrl, wid, worker = loop
+    first = ctrl.claim_job("w", ["native", "fake", "environment:local"])
+    ctrl.finish_attempt(
+        first["attempt_id"],
+        False,
+        "",
+        0,
+        None,
+        error="HTTP 503 overloaded",
+        timed_out=True,
+    )
+    ctrl.settle_interruptions()
+    second = ctrl.claim_job("w", ["native", "fake", "environment:local"])
+    claimed = {
+        **second,
+        "work_item": store.one("SELECT * FROM work_items WHERE id=?", (wid,)),
+    }
+    claimed["snapshot"] = json.loads(claimed["work_item"]["snapshot_json"])
+    claimed["spec"] = json.loads(second["job"]["spec_json"])
+    claimed["task_list"] = {}
+    claimed["prompt"] = ""
+
+    def brief(restored):
+        text = worker._context(claimed, Path("."), restored=restored)
+        return json.loads(text[text.index("{") :])["resumed_after_interruption"]
+
+    assert brief(False)["work_restored"] is False
+    assert "start the step again" in brief(False)["instructions"]
+    assert brief(True)["work_restored"] is True
+    assert "already in the workspace" in brief(True)["instructions"]
+
+
+def test_a_reported_decider_cost_is_recorded_against_the_root(loop):
+    cfg, store, ctrl, wid, worker = loop
+    first = ctrl.claim_job("w", ["native", "fake", "environment:local"])
+    ctrl.finish_attempt(
+        first["attempt_id"],
+        False,
+        "",
+        0,
+        None,
+        error="HTTP 503 overloaded",
+        timed_out=True,
+    )
+    row = store.one("SELECT * FROM interruptions")
+    before = store.one("SELECT spent_cents FROM work_items")[0]
+    ctrl._record_decider_cost(
+        row, {"agent": "test-decider", "usage": {"cost_cents": 3}}
+    )
+    ctrl._record_decider_cost(
+        row, {"agent": "test-decider", "usage": {}}
+    )  # unknown: nothing
+    assert store.one("SELECT spent_cents FROM work_items")[0] == before + 3
+    cost = store.one(
+        "SELECT source,amount_cents,status FROM costs WHERE source LIKE 'decider:%'"
+    )
+    assert tuple(cost) == ("decider:test-decider", 3, "reported")

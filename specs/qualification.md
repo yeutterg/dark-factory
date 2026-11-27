@@ -78,7 +78,7 @@ python -m pytest
 3. Inspect the result packet and exact candidate, record its manual criteria, and accept the outcome.
 4. Review this bootstrap revision before human merge or installation. Keep the running installation pinned; drain and back up before any future upgrade.
 
-The original review identified a simulation-only scaffold. Those implementation findings are addressed by the code and tests above; the historical [implementation review](implementation-review.md) remains as a record of why the changes were needed. No fixture output should be represented as a frontier-model evaluation.
+The original review identified a simulation-only scaffold. Those implementation findings are addressed by the code and tests above; the historical [implementation review](history/implementation-review.md) remains as a record of why the changes were needed. No fixture output should be represented as a frontier-model evaluation.
 
 Verified wheel: `dist/dark_factory-0.1.0-py3-none-any.whl`, SHA-256 `9f4d7512741dd5f7370ce3d3db2d5a34e62b10f1fcac272e72c6c03fa5500bc6`. This is a review artifact, not an installed-controller upgrade.
 
@@ -89,3 +89,5 @@ Claude Code 2.1.268 is integrated for read-only planner/critic/reviewer roles. T
 The ordinary Max keychain login is visible outside the sandbox but unavailable inside it. The adapter therefore uses the supported inference-only token from `claude setup-token`, supplied through an external environment reference. It does not expose the operator home/keychain or extract native credentials. No real token was generated, stored or used during these tests, and no live inference was performed.
 
 A live subscription pass still needs that credential, the exact model and processing geography, approved limits and account usage-policy verification. No comparison/consolidation workflow or multi-repository controller execution is implied. See [subscription setup](../docs/claude-subscription.md). The wheel hash above belongs to the earlier bootstrap artifact and does not contain this addition; no running installation was upgraded.
+
+> Note (2026-11-19): the Pi Durable engine described above was removed; its qualification statements are historical.

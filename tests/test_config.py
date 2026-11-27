@@ -54,10 +54,6 @@ def test_operator_endpoint_reads_only_runtime_and_normalizes_bind_all(tmp_path):
 @pytest.mark.parametrize(
     "extra",
     [
-        '[workflow]\nengine = "other"',
-        "[workflow]\nengine = []",
-        "[workflow]\nengine = 1",
-        '[workflow]\nengine = "native"\nfallback = true',
         "[continuation]\nmax_repairs = 2",
         "[continuation]\nmax_repairs = true",
         '[operators]\nhumans = ["greg", "greg"]',
@@ -69,9 +65,10 @@ def test_runtime_policy_rejects_implicit_expansion(extra):
         parse_toml_bytes(text.encode(), Path("examples/factory.toml").resolve())
 
 
-def test_durable_example_is_simulation_only():
-    cfg = load_config("examples/factory-durable.toml")
-    assert cfg.raw["workflow"]["engine"] == "pi-durable"
+def test_continuation_can_be_configured_on_the_simulation_example():
+    path = Path("examples/factory.toml").resolve()
+    text = path.read_text(encoding="utf-8") + "\n[continuation]\nmax_repairs = 1\n"
+    cfg = parse_toml_bytes(text.encode(), path)
     assert cfg.raw["continuation"]["max_repairs"] == 1
     assert all(r.harness == "fake" for r in cfg.routes.values())
 
@@ -82,8 +79,9 @@ def test_compose_live_example_has_only_live_routes(monkeypatch) -> None:
     text = text.replace("REPLACE_WITH_SOURCE_REVISION", "a" * 40)
     text = text.replace("REPLACE_WITH_DRIVER_SHA256", "b" * 64)
     text = text.replace('path = "/source"', f'path = "{Path.cwd()}"')
-    monkeypatch.setenv("COMPOSE_LEGACY_WORKER_TOKEN", "legacy-test-token")
-    monkeypatch.setenv("COMPOSE_OPERATOR_TOKEN", "operator-test-token")
+    monkeypatch.setenv(
+        "COMPOSE_OPERATOR_TOKEN", "operator-test-token-0123456789-abcdefghij"
+    )
 
     cfg = parse_toml_bytes(text.encode(), path)
 

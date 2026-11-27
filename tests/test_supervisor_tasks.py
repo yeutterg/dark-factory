@@ -185,7 +185,7 @@ def test_agent_progress_is_bound_to_active_attempt(tmp_path):
     _, store, ctrl, wid = planned(tmp_path)
     try:
         ctrl.approve(wid, "greg")
-        claim = ctrl.claim_job("worker-a", ["native", "fake"])
+        claim = ctrl.claim_job("worker-a", ["native", "fake", "environment:local"])
         assert claim["job"]["kind"] == "implement"
         task = next(
             task
@@ -246,41 +246,40 @@ def test_late_required_instruction_cannot_be_lost_at_acceptance(tmp_path):
             "SELECT id FROM task_events WHERE task_id=?", (added["task_id"],)
         )["id"]
         criterion = next(iter(ctrl._criteria(root)))
-        ctrl.apply_supervisor_response(
-            wid,
-            {
-                "schema_version": 1,
-                "root_id": wid,
-                "base_revision": added["revision"],
-                "processed_event_ids": [event_id],
-                "operations": [
-                    {
-                        "op": "admit_task",
-                        "task_id": added["task_id"],
-                        "criterion_ids": [criterion],
-                        "source_event_ids": [event_id],
-                    }
-                ],
-                "current_summary": "A late required request is queued.",
-                "suggested_next_task_id": added["task_id"],
-                "needs_decision": [],
-            },
-        )
-        with pytest.raises(ControllerError, match="required tasks remain incomplete"):
+        late = {
+            "schema_version": 1,
+            "root_id": wid,
+            "base_revision": added["revision"],
+            "processed_event_ids": [event_id],
+            "operations": [
+                {
+                    "op": "admit_task",
+                    "task_id": added["task_id"],
+                    "criterion_ids": [criterion],
+                    "source_event_ids": [event_id],
+                }
+            ],
+            "current_summary": "A late required request is queued.",
+            "suggested_next_task_id": added["task_id"],
+            "needs_decision": [],
+        }
+        # The implementation has finished: the request cannot be bound to it.
+        with pytest.raises(ControllerError, match="no open implementation step"):
+            ctrl.apply_supervisor_response(wid, late)
+        # And the request is never silently dropped at acceptance.
+        with pytest.raises(ControllerError, match="waiting for admission"):
             ctrl.accept(wid, "greg")
-        instruction = store.one(
-            "SELECT state,attempt_id FROM task_instructions WHERE task_id=?",
-            (added["task_id"],),
+        task = next(
+            t for t in ctrl.tasks_view(wid)["tasks"] if t["id"] == added["task_id"]
         )
-        assert instruction["state"] == "queued"
-        assert instruction["attempt_id"] is None
+        assert task["state"] == "inbox"
     finally:
         store.close()
 
 
 def test_browser_session_requires_csrf_for_mutation(tmp_path):
     cfg, store, ctrl, wid = planned(tmp_path)
-    server = serve(ctrl, "127.0.0.1", 0, cfg.worker_token)
+    server = serve(ctrl, "127.0.0.1", 0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)

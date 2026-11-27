@@ -9,7 +9,7 @@ from pathlib import Path
 
 from dark_factory.adapters.env.base import PreparedEnv
 from dark_factory.adapters.git.local import clone
-from dark_factory.runner import CommandRunner
+from dark_factory.protected import protected_paths
 
 
 class NativeEnvironment:
@@ -81,14 +81,7 @@ class NativeEnvironment:
             if not path.is_relative_to(workspace):
                 raise ValueError("write path escapes workspace")
             lines.append(f"(allow file-write* (subpath {json.dumps(str(path))}))")
-        for name in protected + [
-            ".git",
-            ".pi",
-            ".claude",
-            ".mcp.json",
-            ".agents",
-            ".github",
-        ]:
+        for name in protected_paths(protected):
             path = (workspace / name).resolve()
             if not path.is_relative_to(workspace):
                 raise ValueError("protected path escapes workspace")
@@ -116,22 +109,6 @@ class NativeEnvironment:
         policy = runtime / "sandbox.sb"
         policy.write_text("\n".join(lines))
         return ["/usr/bin/sandbox-exec", "-f", str(policy)]
-
-    def run(
-        self, argv: list[str], cwd: Path, timeout_seconds: int
-    ) -> tuple[int, str, str]:
-        cwd = cwd.resolve()
-        if cwd.parent != self.root:
-            raise ValueError("execution must use an owned workspace")
-        runtime = self.root.parent / "runtime" / (cwd.name + "-command")
-        prepared = PreparedEnv(cwd, self.name, {})
-        prefix = self.prefix(
-            prepared, runtime, network=False, writable=[], protected=[]
-        )
-        code, out, err = CommandRunner(cwd).supervise(
-            prefix + argv, b"", timeout_seconds, cwd, process_environment(runtime)
-        )
-        return code, out.decode(errors="replace"), err.decode(errors="replace")
 
     def stop(self, prepared: PreparedEnv) -> None:
         # Every execution is synchronously supervised by CommandRunner, which kills

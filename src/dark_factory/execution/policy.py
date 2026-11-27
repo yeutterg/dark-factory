@@ -9,15 +9,10 @@ def validate_deployment(raw, routes):
     from dark_factory.config import ConfigError
 
     project = raw.get("project", {}).get("id", "")
-    enabled = bool(
-        project or any(k in raw for k in ("workers", "environments", "role_routes"))
-    )
-    if not enabled:
-        return ""
     if not isinstance(project, str) or not re.fullmatch(
         r"[a-z0-9][a-z0-9_-]{2,63}", project
     ):
-        raise ConfigError("distributed deployment requires stable project.id")
+        raise ConfigError("[project] id is required: a stable lowercase name")
     envs = raw.get("environments", {})
     if not isinstance(envs, dict) or not envs:
         raise ConfigError("project-scoped deployment requires environments")
@@ -190,7 +185,10 @@ def validate_deployment(raw, routes):
                 "only a simulation fake route may serve another configured role"
             )
     workers = raw.get("workers", {})
-    if not isinstance(workers, dict) or not workers:
+    # A simulation-only profile runs with the in-process worker; any real route
+    # needs separately registered, individually credentialed workers.
+    needs_workers = any(r.account_kind != "simulation" for r in routes.values())
+    if not isinstance(workers, dict) or (needs_workers and not workers):
         raise ConfigError(
             "project-scoped deployments require separately registered workers"
         )
@@ -223,10 +221,7 @@ def validate_deployment(raw, routes):
             or any(e not in envs for e in choices)
         ):
             raise ConfigError("worker environment is not configured")
-    reserved = refs | {
-        raw.get("runtime", {}).get(k)
-        for k in ("worker_token_env", "operator_token_env")
-    }
+    reserved = refs | {raw.get("runtime", {}).get("operator_token_env")}
     if any(r.auth_env and r.auth_env in reserved for r in routes.values()):
         raise ConfigError(
             "inference credentials cannot use worker/operator credential references"
@@ -235,26 +230,12 @@ def validate_deployment(raw, routes):
 
 
 def selected_route(cfg, role):
-    if cfg.project_id:
-        return cfg.routes[cfg.role_routes[role]]
-    from dark_factory.adapters.harness.registry import adapter_for
-
-    eligible = [r for r in cfg.routes.values() if role in adapter_for(r.harness).roles]
-    exact = [r for r in eligible if r.role == role]
-    # Only the deterministic fake fixture may span roles. A real CLI can spend,
-    # receive different tools, or expose project data even when its evidence is
-    # deliberately classified as simulation during qualification.
-    shared = [
-        r for r in eligible if r.harness == "fake" and r.evidence_kind == "simulation"
-    ]
-    return (exact or shared or [None])[0]
+    return cfg.routes[cfg.role_routes[role]]
 
 
 def recipe_for(cfg, route):
-    if cfg.project_id:
-        return cfg.environments[
-            route["environment"]
-            if route
-            else cfg.routes[cfg.role_routes["coder"]].environment
-        ]
-    return {"kind": cfg.execution.get("profile", "native")}
+    return cfg.environments[
+        route["environment"]
+        if route
+        else cfg.routes[cfg.role_routes["coder"]].environment
+    ]

@@ -1,0 +1,9 @@
+description: Provides the default x86_64 compute for the foreman and reviewer.
+instanceShape:
+  vcpus: 4
+  memoryGb: 8
+platform:
+  os: linux
+  arch: x86_64
+  linux:
+    dockerImage: ubuntu:24.04

@@ -10,6 +10,7 @@ skills = [
 date_exceptions = []
 
 [project]
+id = "dark-factory"
 name = "dark-factory"
 state_dir = "./state"
 
@@ -24,8 +25,7 @@ blocked_regions = ["CN", "CHINA", "PRC"]
 root_cents = 2000
 
 [runtime]
-worker_token = "bootstrap-dev-token"
-operator_token = "bootstrap-operator-dev-token"
+operator_token = "bootstrap-operator-dev-token-0123456789"
 api_host = "127.0.0.1"
 api_port = 8745
 default_timeout_seconds = 3600
@@ -37,7 +37,19 @@ start = "00:00"
 end = "23:59"
 timezone = "America/Los_Angeles"
 
+[role_routes]
+planner = "fake-coder"
+critic = "fake-coder"
+coder = "fake-coder"
+reviewer = "fake-coder"
+
+[environments.local]
+kind = "native" # Fake-only fixture; never admits a real CLI without isolation.
+
 [routes.fake-coder]
+project_id = "dark-factory"
+account_kind = "simulation"
+environment = "local"
 model = "fake-local"
 harness = "fake"
 harness_version = "0.1"

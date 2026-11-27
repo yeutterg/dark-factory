@@ -8,7 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from dark_factory.controller import Controller
-from dark_factory.interruptions import CATEGORY_TEXT
+from dark_factory.resume_policy import CATEGORY_TEXT
 
 TERMINAL = frozenset({"accepted", "cancelled", "failed", "rejected"})
 NEEDS_HUMAN = frozenset(
@@ -117,7 +117,7 @@ def _steps(controller: Controller, jobs: list[dict[str, Any]]) -> list[dict[str,
         spec = _json(job["spec_json"], {})
         attempts = controller.store.query(
             """SELECT id,status,worker_id,route_id,started_at,ended_at,deadline,
-            cost_cents,error FROM attempts WHERE job_id=? ORDER BY started_at,id""",
+            cost_cents,error FROM attempts WHERE job_id=? ORDER BY started_at,rowid""",
             (job["id"],),
         )
         latest = dict(attempts[-1]) if attempts else {}
@@ -256,7 +256,7 @@ def _work_item(
             dict(attempt)
             for attempt in controller.store.query(
                 """SELECT a.* FROM attempts a JOIN jobs j ON j.id=a.job_id
-                WHERE j.work_item_id=? ORDER BY a.started_at,a.id""",
+                WHERE j.work_item_id=? ORDER BY a.started_at,a.rowid""",
                 (row["id"],),
             )
         ]
@@ -283,7 +283,7 @@ def _work_item(
                 """SELECT at,actor,action,payload_json FROM audit
                 WHERE json_extract(payload_json,'$.root')=?
                    OR json_extract(payload_json,'$.work_item_id')=?
-                ORDER BY at,id""",
+                ORDER BY at,rowid""",
                 (row["id"], row["id"]),
             )
         ]
@@ -370,7 +370,7 @@ def controller_projection(
     with controller.decision():
         allowed, dispatch_reason = controller.dispatch_allowed()
         rows = controller.store.query(
-            "SELECT * FROM work_items WHERE is_root=1 ORDER BY created_at,id"
+            "SELECT * FROM work_items WHERE is_root=1 ORDER BY created_at,rowid"
         )
         items = [
             _work_item(controller, row, include_detail=row["id"] == detail_id)
@@ -462,7 +462,6 @@ def controller_projection(
                 "budgets": controller.cfg.budgets,
                 "windows": [window.__dict__ for window in controller.cfg.windows],
                 "people": controller.cfg.humans,
-                "workflow": controller.cfg.workflow_engine,
                 "task_supervisor": controller.cfg.task_supervisor,
             },
         }

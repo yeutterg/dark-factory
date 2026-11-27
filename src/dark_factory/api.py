@@ -14,12 +14,46 @@ from urllib.parse import parse_qs, urlparse
 from dark_factory import operator_commands
 from dark_factory.controller import Controller, ControllerError
 
+SESSION_LIMIT = 200
+LOGIN_FAILURES = 5
+LOGIN_WINDOW_SECONDS = 60
+SOCKET_TIMEOUT_SECONDS = 30
 
-def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHandler]:
+
+def make_handler(controller: Controller) -> type[BaseHTTPRequestHandler]:
     sessions: dict[str, dict[str, Any]] = {}
+    failures: dict[str, list[float]] = {}
+
+    def purge_sessions() -> None:
+        now = time.time()
+        for key in [k for k, v in sessions.items() if v["expires"] <= now]:
+            del sessions[key]
+        while len(sessions) >= SESSION_LIMIT:
+            del sessions[min(sessions, key=lambda k: sessions[k]["expires"])]
+
+    def throttled(source: str) -> bool:
+        now = time.time()
+        recent = [t for t in failures.get(source, []) if now - t < LOGIN_WINDOW_SECONDS]
+        if recent:
+            failures[source] = recent
+        else:
+            failures.pop(source, None)
+        return len(recent) >= LOGIN_FAILURES
 
     class Handler(BaseHTTPRequestHandler):
-        def _auth(self, expected: str = token) -> bool:
+        # Bounds every header and body read, so a silent client cannot hold a thread.
+        timeout = SOCKET_TIMEOUT_SECONDS
+
+        def setup(self) -> None:
+            # TLS handshakes happen here, in the connection's own thread and under
+            # the socket timeout, never on the accepting thread.
+            do_handshake = getattr(self.request, "do_handshake", None)
+            if do_handshake:
+                self.request.settimeout(SOCKET_TIMEOUT_SECONDS)
+                do_handshake()
+            super().setup()
+
+        def _auth(self, expected: str) -> bool:
             if not expected:
                 return False
             header = self.headers.get("Authorization", "")
@@ -96,12 +130,21 @@ def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHand
             return
 
         def do_GET(self) -> None:  # noqa: N802
+            self._guarded(self._get)
+
+        def _guarded(self, handler) -> None:
             try:
-                self._get()
+                handler()
             except ControllerError as exc:
                 self._send(409, {"ok": False, "error": str(exc)})
             except (ValueError, TypeError, KeyError) as exc:
                 self._send(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                # Never drop the connection without an answer, and never echo internals.
+                controller.store.audit(
+                    "api", "api.error", {"error": type(exc).__name__}
+                )
+                self._send(500, {"ok": False, "error": "internal error"})
 
         def _get(self) -> None:
             path = urlparse(self.path).path
@@ -143,16 +186,19 @@ def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHand
             self._send(404, {"ok": False})
 
         def do_POST(self) -> None:  # noqa: N802
-            try:
-                self._post()
-            except ControllerError as exc:
-                self._send(409, {"ok": False, "error": str(exc)})
-            except (ValueError, TypeError, KeyError) as exc:
-                self._send(400, {"ok": False, "error": str(exc)})
+            self._guarded(self._post)
 
         def _post(self) -> None:
             path = urlparse(self.path).path
             if path == "/operator/session":
+                source = self.client_address[0]
+                if throttled(source):
+                    self._send(
+                        429,
+                        {"ok": False, "error": "too many failed logins; wait"},
+                        {"Retry-After": str(LOGIN_WINDOW_SECONDS)},
+                    )
+                    return
                 data = self._read(8192)
                 supplied = data.get("token")
                 actor = data.get("actor")
@@ -164,8 +210,10 @@ def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHand
                     or not actor.strip()
                     or len(actor) > 100
                 ):
+                    failures.setdefault(source, []).append(time.time())
                     self._send(401, {"ok": False, "error": "unauthorized"})
                     return
+                purge_sessions()
                 session_id, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
                 sessions[session_id] = {
                     "actor": actor.strip(),
@@ -229,91 +277,48 @@ def make_handler(controller: Controller, token: str) -> type[BaseHTTPRequestHand
                     raise ValueError("unsupported execution operation")
                 self._send(200, {"ok": True, "result": result})
                 return
-            if controller.cfg.project_id and path != "/operator":
-                self._send(
-                    401, {"ok": False, "error": "legacy worker channel disabled"}
-                )
+            if path != "/operator":
+                self._send(404, {"ok": False})
                 return
-            session = self._session() if path == "/operator" else None
-            operator_bearer = path == "/operator" and self._auth(
-                controller.cfg.operator_token
-            )
-            if (
-                path == "/operator"
-                and session
-                and not self._session_mutation_allowed(session)
-            ):
+            session = self._session()
+            operator_bearer = self._auth(controller.cfg.operator_token)
+            contributor_bearer = self._auth(controller.cfg.contributor_token)
+            if session and not self._session_mutation_allowed(session):
                 self._send(403, {"ok": False, "error": "invalid browser request"})
                 return
-            if not (operator_bearer or session) and not self._auth(
-                token if path != "/operator" else controller.cfg.operator_token
-            ):
+            if not (operator_bearer or session or contributor_bearer):
                 self._send(401, {"ok": False, "error": "unauthorized"})
                 return
-            path = urlparse(self.path).path
             data = self._read()
-            if path == "/operator":
-                command = operator_commands.COMMANDS.get(str(data.get("cmd")))
-                if command is None or not command.api:
-                    raise ControllerError("unsupported operator command")
-                params = {name: data[name] for name in command.params if name in data}
-                result = operator_commands.run(
-                    controller,
-                    command.name,
-                    params,
-                    session["actor"] if session else data.get("actor") or "operator",
-                )
-                self._send(200, {"ok": True, "result": result})
-                return
-            if path == "/claim":
-                claimed = controller.claim_job(
-                    data.get("worker_id") or "worker", data.get("capabilities") or []
-                )
-                self._send(200, {"ok": True, "claimed": claimed})
-                return
-            if path == "/heartbeat":
-                controller.heartbeat(data.get("worker_id") or "worker")
-                self._send(200, {"ok": True})
-                return
-            if path == "/finish":
-                attempt = controller.store.one(
-                    "SELECT worker_id FROM attempts WHERE id=?",
-                    (data.get("attempt_id"),),
-                )
-                if not attempt or attempt["worker_id"] != data.get("worker_id"):
-                    raise ControllerError("attempt belongs to another worker")
-                for flag in ("ok", "timed_out", "cancelled"):
-                    if flag in data and type(data[flag]) is not bool:
-                        raise ValueError(f"{flag} must be a boolean")
-                if type(data.get("cost_cents", 0)) is not int:
-                    raise ValueError("cost_cents must be an integer")
-                controller.finish_attempt(
-                    data["attempt_id"],
-                    ok=bool(data.get("ok")),
-                    output=data.get("output") or "",
-                    cost_cents=int(data.get("cost_cents") or 0),
-                    archive_path=data.get("archive_path"),
-                    error=data.get("error"),
-                    timed_out=bool(data.get("timed_out")),
-                    cancelled=bool(data.get("cancelled")),
-                )
-                self._send(200, {"ok": True})
-                return
-            self._send(404, {"ok": False})
+            command = operator_commands.COMMANDS.get(str(data.get("cmd")))
+            if command is None or not command.api:
+                raise ControllerError("unsupported operator command")
+            if contributor_bearer and not (operator_bearer or session):
+                if not command.contributor:
+                    self._send(
+                        403,
+                        {"ok": False, "error": "contributor credential cannot do this"},
+                    )
+                    return
+                actor = "contributor:" + str(data.get("actor") or "agent")[:60]
+            else:
+                actor = session["actor"] if session else data.get("actor") or "operator"
+            params = {name: data[name] for name in command.params if name in data}
+            result = operator_commands.run(controller, command.name, params, actor)
+            self._send(200, {"ok": True, "result": result})
+            return
 
     return Handler
 
 
 def serve(
-    controller: Controller, host: str, port: int, token: str, tls=None
+    controller: Controller, host: str, port: int, tls=None
 ) -> ThreadingHTTPServer:
-    if host not in {"127.0.0.1", "localhost", "::1"} and not (
-        controller.cfg.project_id and tls
-    ):
+    if host not in {"127.0.0.1", "localhost", "::1"} and not tls:
         raise ControllerError(
             "bootstrap API is local-only; remote workers require later qualification"
         )
-    server = ThreadingHTTPServer((host, port), make_handler(controller, token))
+    server = ThreadingHTTPServer((host, port), make_handler(controller))
     if tls:
         import ssl
 
@@ -321,7 +326,9 @@ def serve(
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         try:
             context.load_cert_chain(*tls)
-            server.socket = context.wrap_socket(server.socket, server_side=True)
+            server.socket = context.wrap_socket(
+                server.socket, server_side=True, do_handshake_on_connect=False
+            )
         except BaseException:
             server.server_close()
             raise

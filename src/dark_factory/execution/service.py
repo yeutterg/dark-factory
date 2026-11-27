@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import tempfile
 from datetime import UTC
@@ -12,8 +11,9 @@ from pathlib import Path
 from dark_factory import artifacts
 from dark_factory.controller import ControllerError
 from dark_factory.execution.packages import identity, pack, unpack
+from dark_factory.models import ACTIVE_ATTEMPT
+from dark_factory.secrets import secret
 from dark_factory.store import now_iso
-from dark_factory.workflow import runtime_for
 
 
 class ExecutionService:
@@ -25,14 +25,12 @@ class ExecutionService:
         import hmac
 
         item = self.cfg.workers.get(worker)
-        if not item or not self.cfg.project_id:
+        if not item:
             return False
-        expected = os.environ.get(item["token_env"], "")
-        forbidden = {self.cfg.worker_token, self.cfg.operator_token}
+        expected = secret(item["token_env"])
+        forbidden = {self.cfg.operator_token}
         other = [
-            os.environ.get(v["token_env"], "")
-            for k, v in self.cfg.workers.items()
-            if k != worker
+            secret(v["token_env"]) for k, v in self.cfg.workers.items() if k != worker
         ]
         return (
             len(expected) >= 32
@@ -95,9 +93,6 @@ class ExecutionService:
                     raise ControllerError("replayed assignment is fenced")
                 path = self.store.state_dir / "dispatch" / previous / "assignment.json"
                 return json.loads(path.read_text())
-            # Workflow installation is validated before the lease, never by the remote agent.
-            runtime = runtime_for(self.cfg, self.store)
-            runtime.validate()
             self.ctrl.recover("execution-supervisor")
             self.ctrl.settle_interruptions("execution-supervisor")
             claimed = self.ctrl.claim_job(worker, caps)
@@ -112,7 +107,21 @@ class ExecutionService:
                 artifacts.sync_tree(directory)
                 self.store.set_op(key, claimed["attempt_id"], "execution")
 
-            runtime.run(claimed, publish)
+            try:
+                publish()
+            except ValueError as exc:
+                # A tree that cannot be packaged is a recorded failure of this
+                # attempt, not a claim that waits for its lease to expire.
+                shutil.rmtree(directory, ignore_errors=True)
+                self.ctrl.finish_attempt(
+                    claimed["attempt_id"],
+                    False,
+                    "",
+                    0,
+                    None,
+                    error=f"package refused at pack time: {exc}",
+                )
+                raise ControllerError(f"package refused at pack time: {exc}") from exc
             from datetime import datetime, timedelta
 
             row = self._owned(worker, claimed["attempt_id"])
@@ -261,7 +270,7 @@ class ExecutionService:
                 if previous != request:
                     raise ControllerError("conflicting duplicate result")
                 return {"accepted": True, "attempt_id": aid, "result_digest": request}
-            if row["status"] not in {"leased", "running", "cancelling"}:
+            if row["status"] not in ACTIVE_ATTEMPT:
                 raise ControllerError("attempt is fenced")
             from datetime import datetime
 
@@ -376,7 +385,6 @@ class ExecutionService:
             )
             self.ctrl.record_cleanup(aid, receipt["cleanup_status"])
             self.store.set_op(key, request, "execution")
-            self.store.set_op("workflow-settled:" + aid, "remote-settled", "execution")
             self.ctrl.reconcile_continuations()
             return {"accepted": True, "attempt_id": aid, "result_digest": request}
 

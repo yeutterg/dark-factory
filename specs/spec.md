@@ -4,7 +4,7 @@
 
 Spend less time coordinating coding agents. A human selects work, approves a plan, and later reviews a result packet. The factory executes bounded jobs and records evidence.
 
-This specification covers **bootstrap**: one project, one machine, one worker and interchangeable per-task CLI harnesses for single-repo outcomes. The [durable extension](durable-runtime.md) adds optional dispatch checkpoints and one preapproved correctness repair. The [task supervisor increment](supervisor-task-management.md) adds a task-level view and focused browser dashboard over the same authority. Multi-repo execution, preview delivery, and automatic provider fallback remain later increments.
+This specification covers **bootstrap**: one project, one machine, one worker and interchangeable per-task CLI harnesses for single-repo outcomes. The [durable extension](durable-runtime.md) adds restart continuation and one preapproved correctness repair. The [task supervisor increment](supervisor-task-management.md) adds a task-level view and focused browser dashboard over the same authority. Multi-repo execution, preview delivery, and automatic provider fallback remain later increments.
 
 ## User loop
 
@@ -29,7 +29,7 @@ Declare reasonable planning and implementation assumptions in the executive summ
 - Native macOS execution profile for bootstrap.
 - Claude Code subscription OAuth adapter for read-only planning/critique/review: explicit model/effort, isolated credentials, no API fallback, native stream evidence and bounded cancellation. Live route qualification remains separate.
 - Cancellation, timeouts, restart from durable state, archive-before-cleanup.
-- Native or Pi Durable dispatch runtime, independent of the selected CLI harness; Codex subscription adapter with live isolation qualification pending.
+- One native dispatch path, independent of the selected CLI harness, that re-acquires unstarted claims after restart; Codex subscription adapter with live isolation qualification pending.
 - Optional original-approval-bound repair/check/review branch; no reset of root budgets or deadlines.
 - Durable task records distinct from execution jobs, with revisioned user actions, attributed progress, instruction delivery states, and a conflict-safe `tasks.md` projection.
 - A bounded optional structured-output task supervisor. It may interpret task text and suggest updates; code retains scope, dependency, budget, evidence and acceptance authority.
@@ -38,9 +38,12 @@ Declare reasonable planning and implementation assumptions in the executive summ
   prompts, shared and role-scoped skills, requested-model validation, complete
   resource digests, and an explicit compatibility report. YAML cannot grant
   routes, credentials, network access, budget, scheduling, or acceptance.
-- Deterministic recurring-failure analysis across distinct roots. It emits only
-  inert recommendations and tracker-ready proposal text; it performs no
-  inference or external write and does not select its own work.
+- Self-improvement, on by default and bounded by `[improvement]` in the
+  profile. Recurring failures across distinct roots create at most one
+  improvement root at a time. It runs the ordinary graph under the operator's
+  standing approval and ends as a draft pull request limited to the allowed
+  paths. It never merges, accepts or installs anything. `dark-factory improve`
+  is the read-only report.
 
 Still separate from bootstrap execution authority: multi-repo graphs, automatic model fallback, preview/merge automation, DORA, arena and Claude coding/session takeover. The TUI and focused task dashboard are thin operator clients over the same command boundary; neither owns scheduling or execution.
 
@@ -58,16 +61,28 @@ Still separate from bootstrap execution authority: multi-repo graphs, automatic 
 9. Simulation evidence cannot satisfy an operator-declared live-evidence requirement.
 10. Task text, structured model output, Markdown edits and checkboxes cannot expand approved scope or manufacture evidence. Task progress binds to the active attempt; human verification binds to identity, candidate and evidence.
 11. Task edits use expected revisions and idempotency keys. Markdown export preserves conflicting edits, and instruction transport distinguishes queued, delivered, acknowledged and resolved.
-12. A configured Warp definition must exactly match profile repositories, map
-    only `SPEC`, `IMPLEMENT`, and `REVIEW` into the existing graph, bind explicit
-    model requests to approved local routes, and enter the immutable approval
-    policy. Unknown fields fail closed; known unsupported resources remain
-    visible and inactive.
-13. Improvement analysis groups each signal by distinct root, applies a
-    configurable conservative threshold, cites its evidence, and reports that
-    it made no external change. Prompts, skills, models, or application code are
-    never changed or selected by the analysis.
+12. A configured Warp `v1alpha1` definition that Warp's own validator accepts
+    must load. It must match profile repositories, map `SPEC`, `IMPLEMENT` and
+    `REVIEW` agents into the existing graph (several candidates are selected by
+    `[definition.roles]`), bind model requests to approved local routes, and
+    enter the immutable approval policy with every file digested. The
+    code-owned output contract is always delivered with the authored prompt.
+    The report states per resource whether it is executed, mapped, or
+    recognised and not executed. `v1alpha2` is reported as unsupported.
+13. Improvement signals are computed from structured failure kinds, grouped by
+    distinct root, and persisted with their evidence. A signal at threshold
+    creates one improvement root (origin `improvement:<signal>`) subject to the
+    configured concurrency, cooldown, budget, path and diff-size limits. The
+    root uses the ordinary graph; approval is the standing policy bound to the
+    profile digest. Any limit breach, failed critique or blocking planner
+    question stops the root for a human. The only external write is a draft
+    pull request. Prompts, skills and models never expand permissions.
 
 ## Presentation stages
 
 Plan, Build, Check, Review, Done are display groups. They summarize workflow; they are not extra execution states.
+
+
+## Universal pipeline (amendment, 2026-11-26)
+
+See [pipeline-plan.md](pipeline-plan.md). One host runs many repositories. Each repository carries its own pipeline configuration (`factory/x-dark-factory.yaml`, read from its main branch by commit and pinned per root). Core owns the stage names and order for the change loop and the release loop. An external coding agent is a client of the factory: it works from an issue, an approved plan and a factory-owned worktree, and a required pull-request status blocks anything without them. Release roots are created only by an operator command. Merge, release approval and production promotion remain human decisions; signing on local runners is deferred (issue 18).

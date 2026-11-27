@@ -306,8 +306,3 @@ class ClaudeCodeHarness(StreamingCliHarness):
                 )
 
         yield from self._stream(run)
-
-    def attach_command(self, session_id):
-        raise NotImplementedError(
-            "read-only Claude assignments do not retain resumable sessions"
-        )

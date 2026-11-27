@@ -9,6 +9,7 @@ from pathlib import Path
 
 from dark_factory.adapters.env.base import Environment
 from dark_factory.adapters.env.native import NativeEnvironment
+from dark_factory.protected import protected_paths
 
 
 def docker_command(recipe):
@@ -152,9 +153,7 @@ class OciEnvironment(NativeEnvironment):
                 mount(path, True)
             else:
                 raise ValueError("OCI writable roots must exist in approved source")
-        for name in dict.fromkeys(
-            protected + [".git", ".pi", ".claude", ".mcp.json", ".agents", ".github"]
-        ):
+        for name in protected_paths(protected):
             path = (workspace / name).resolve()
             if not path.is_relative_to(workspace):
                 raise ValueError("protected path escapes workspace")

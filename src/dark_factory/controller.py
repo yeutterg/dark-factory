@@ -15,10 +15,15 @@ from dark_factory.config import FactoryConfig
 from dark_factory.control.base import ControllerError, _digest, atomic, decided
 from dark_factory.control.dispatch import DispatchMixin
 from dark_factory.control.external import ExternalMixin
+from dark_factory.control.external_work import ExternalWorkMixin
+from dark_factory.control.gate import GateMixin
 from dark_factory.control.graph import default_bootstrap_graph, validate_graph
+from dark_factory.control.improvement import ImprovementMixin
 from dark_factory.control.interruptions import InterruptionMixin
 from dark_factory.control.planning import PlanningMixin
 from dark_factory.control.policy import PolicyMixin
+from dark_factory.control.release import ReleaseMixin
+from dark_factory.control.resources import ResourcesMixin
 from dark_factory.control.results import ResultsMixin
 from dark_factory.control.review import ReviewMixin
 from dark_factory.control.tasks import TaskMixin
@@ -45,7 +50,12 @@ class Controller(
     ResultsMixin,
     ReviewMixin,
     ExternalMixin,
+    ExternalWorkMixin,
+    GateMixin,
     InterruptionMixin,
+    ImprovementMixin,
+    ReleaseMixin,
+    ResourcesMixin,
     TaskMixin,
     AttemptRecords,
 ):
@@ -68,11 +78,7 @@ class Controller(
             owner = store.one("SELECT value FROM meta WHERE key='project_identity'")
             if owner and owner["value"] != identity:
                 raise ControllerError("state belongs to a different project")
-            if (
-                not owner
-                and cfg.project_id
-                and store.one("SELECT id FROM work_items LIMIT 1")
-            ):
+            if not owner and store.one("SELECT id FROM work_items LIMIT 1"):
                 raise ControllerError(
                     "project-scoped deployment requires fresh state; legacy adoption is not implicit"
                 )

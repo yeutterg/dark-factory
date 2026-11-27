@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent.schema.json",
+  "$comment": "Generated from the Factory file parser and the catalogues its apply path validates against. Edit logic/factoryfile/schema, then regenerate; a hand edit is reverted by the drift test.",
+  "title": "agents/<name>/agent.md or workers/<name>/worker.md (also workers/<name>/agent.md; do not combine roots) frontmatter (v1alpha1)",
+  "description": "YAML frontmatter of a worker file. The worker's name comes from its directory, never from a field. The Markdown body after the closing fence is the worker's prompt.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "extends": {
+      "$ref": "common.schema.json#/$defs/agentRef"
+    },
+    "params": {
+      "$ref": "common.schema.json#/$defs/promptParams"
+    },
+    "networkPolicy": {
+      "$ref": "common.schema.json#/$defs/networkPolicy"
+    },
+    "prewarmedPool": {
+      "$ref": "common.schema.json#/$defs/prewarmedPool"
+    },
+    "description": {
+      "$ref": "common.schema.json#/$defs/optionalText"
+    },
+    "workerRole": {
+      "$ref": "common.schema.json#/$defs/agentType"
+    },
+    "agentType": {
+      "$ref": "common.schema.json#/$defs/agentType",
+      "deprecated": true,
+      "description": "Deprecated alias of workerRole. Set only one of the two."
+    },
+    "credentialStrategy": {
+      "$ref": "common.schema.json#/$defs/credentialStrategy"
+    },
+    "spawnableBy": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "common.schema.json#/$defs/nonEmptyString"
+      },
+      "description": "Factory workers allowed to spawn this worker, named by their directory names. Omit to allow only the Factory foreman. An empty list allows no Factory worker. A non-empty list is the exact allowlist, so include the foreman explicitly to retain its access. Not valid when factory.yaml declares a blueprint, which derives every worker's allowlist itself."
+    },
+    "model": {
+      "$ref": "common.schema.json#/$defs/ozModelOverride"
+    },
+    "harness": {
+      "$ref": "common.schema.json#/$defs/agentHarnessOverride"
+    },
+    "runner": {
+      "$ref": "common.schema.json#/$defs/runnerRef"
+    },
+    "environmentId": {
+      "$ref": "common.schema.json#/$defs/environmentId"
+    },
+    "secrets": {
+      "$ref": "common.schema.json#/$defs/secrets"
+    },
+    "mcpServers": {
+      "$ref": "common.schema.json#/$defs/mcpServers"
+    },
+    "workerHost": {
+      "$ref": "common.schema.json#/$defs/workerHost"
+    },
+    "computerUseModel": {
+      "$ref": "common.schema.json#/$defs/computerUseModel"
+    },
+    "idleTimeoutMinutes": {
+      "$ref": "common.schema.json#/$defs/idleTimeoutMinutes"
+    },
+    "required_repos": {
+      "$ref": "common.schema.json#/$defs/requiredRepos"
+    },
+    "hooks": {
+      "$ref": "common.schema.json#/$defs/hooks",
+      "description": "Agent hook directories this Agent's runs load, before the hooks in factory.yaml. Replaces hooks inherited from agentDefaults or workerDefaults; an explicit empty list clears those defaults. Hooks in factory.yaml are still added and cannot be removed. Hooks run only on the Warp Agent harness. Not yet available on every deployment."
+    }
+  },
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/modelXorHarnessOptional"
+    },
+    {
+      "not": {
+        "required": [
+          "agentType",
+          "workerRole"
+        ]
+      }
+    }
+  ]
+}

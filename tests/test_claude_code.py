@@ -183,9 +183,14 @@ def test_timeout_and_cancellation_stop_process(tmp_path):
 
 
 def config():
-    raw = tomllib.loads(Path("examples/factory-live.toml").read_text())
-    raw["runtime"] = {"worker_token": "test-worker", "operator_token": "test-operator"}
-    raw["sources"]["owner/repository"]["path"] = str(Path.cwd())
+    text = Path("examples/compose/factory-live.toml").read_text()
+    text = text.replace("REPLACE_WITH_SOURCE_REVISION", "a" * 40)
+    text = text.replace("REPLACE_WITH_DRIVER_SHA256", "b" * 64)
+    text = text.replace('path = "/source"', f'path = "{Path.cwd()}"')
+    raw = tomllib.loads(text)
+    raw["runtime"] = {"operator_token": "test-operator-token-long-enough-0123456789"}
+    raw["routes"]["primary"] = raw["routes"].pop("codex-planner")
+    raw["role_routes"]["planner"] = "primary"
     raw["routes"]["primary"].update(
         model=MODEL,
         harness="claude-code",
@@ -194,9 +199,10 @@ def config():
         endpoint="https://api.anthropic.com",
         region="US",
         geography_evidence="fixture operator evidence",
-        auth_env="FACTORY_CLAUDE_TOKEN",
+        auth_env="DARK_FACTORY_LIVE_CLAUDE_TOKEN",
         role="planner",
         effort="xhigh",
+        account_kind="subscription",
         api="",  # Native CLI routes must not inherit the Pi example's API protocol.
     )
     return raw

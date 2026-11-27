@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Rebuild deploy/seccomp/dark-factory-userns.json from Docker's default profile.
+
+The result is Docker's default seccomp profile plus one rule that allows the
+namespace and mount syscalls Bubblewrap needs (and nothing else). Review the
+diff against the previous profile before committing a regenerated one.
+"""
+
+import hashlib
+import json
+import sys
+import urllib.request
+from pathlib import Path
+
+MOBY_TAG = "v28.0.0"
+BASE_SHA256 = "9c1025c88ccaa517b648da571961838744ea2137f176bfe6a48b21294cae9c76"
+URL = f"https://raw.githubusercontent.com/moby/moby/{MOBY_TAG}/profiles/seccomp/default.json"
+ALLOW = [
+    "unshare", "setns", "mount", "umount2", "pivot_root", "sethostname",
+    "setdomainname", "clone", "clone3", "fsopen", "fsconfig", "fsmount",
+    "fspick", "move_mount", "open_tree", "mount_setattr",
+]  # fmt: skip
+
+
+def main() -> int:
+    with urllib.request.urlopen(URL, timeout=30) as response:  # noqa: S310
+        raw = response.read()
+    if hashlib.sha256(raw).hexdigest() != BASE_SHA256:
+        print("base profile changed; review it and update BASE_SHA256", file=sys.stderr)
+        return 1
+    profile = json.loads(raw)
+    profile["syscalls"].append({"names": ALLOW, "action": "SCMP_ACT_ALLOW"})
+    target = Path(__file__).resolve().parents[1] / "deploy/seccomp/dark-factory-userns.json"
+    target.write_text(json.dumps(profile, indent=1) + "\n")
+    print(f"wrote {target}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

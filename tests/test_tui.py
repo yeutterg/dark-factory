@@ -105,7 +105,6 @@ def test_projection_hides_terminal_progress_and_counts_done_today(tmp_path):
         assert detailed_item["plan"]["proposal"]["what"] == "detail on demand"
         assert "+ready = True" in detailed_item["diff_patch"]
         serialized = json.dumps(projection)
-        assert cfg.worker_token not in serialized
         assert cfg.operator_token not in serialized
     finally:
         store.close()
@@ -115,14 +114,14 @@ def test_operator_projection_requires_operator_credential(tmp_path):
     cfg = cfg_for(tmp_path)
     store = Store(cfg.state_dir)
     ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))
-    server = serve(ctrl, "127.0.0.1", 0, cfg.worker_token)
+    server = serve(ctrl, "127.0.0.1", 0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
         conn.request(
             "GET",
             "/operator/view",
-            headers={"Authorization": f"Bearer {cfg.worker_token}"},
+            headers={"Authorization": "Bearer not-the-operator-credential"},
         )
         unauthorized = conn.getresponse()
         assert unauthorized.status == 401

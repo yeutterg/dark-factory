@@ -56,3 +56,40 @@ def test_bwrap_driver_denies_network_by_default(tmp_path: Path) -> None:
     item = policy(tmp_path)
     item["network"] = False
     assert "--unshare-net" in sandbox_command(item, ["/bin/true"])
+
+
+def test_bwrap_driver_sizes_scratch_space_from_the_environment_limits(
+    tmp_path: Path,
+) -> None:
+    item = policy(tmp_path)
+    item["limits"] = {"memory_mb": 1024, "pids": 64, "cpu": 1}
+    argv = sandbox_command(item, ["/bin/true"])
+    at = argv.index("--size")
+    assert argv[at : at + 3] == ["--size", str(256 * 1024 * 1024), "--tmpfs"]
+
+
+def test_bwrap_driver_bounds_processes_before_it_executes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import resource
+
+    from dark_factory.adapters.env import linux_bwrap
+
+    item = policy(tmp_path)
+    item["limits"] = {"memory_mb": 512, "pids": 77, "cpu": 1}
+    seen = {}
+    monkeypatch.setattr(resource, "setrlimit", lambda r, v: seen.update({r: v}))
+    monkeypatch.setattr(linux_bwrap.os, "execvpe", lambda *a: seen.update(exec=a[0]))
+    linux_bwrap.main(
+        ["--factory-policy", __import__("json").dumps(item), "--", "/bin/true"]
+    )
+    assert seen[resource.RLIMIT_NPROC] == (77, 77)
+    assert seen[resource.RLIMIT_CORE] == (0, 0)
+    assert "exec" in seen
+
+
+def test_bwrap_driver_rejects_nonsense_limits(tmp_path: Path) -> None:
+    item = policy(tmp_path)
+    item["limits"] = {"pids": 0}
+    with pytest.raises(ValueError, match="positive"):
+        sandbox_command(item, ["/bin/true"])

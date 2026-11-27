@@ -40,13 +40,13 @@ token and the current task revision. The credential is not embedded in the page.
 dark-factory --config /path/to/private/factory.toml preflight
 ```
 
-Preflight loads the strict profile, verifies source revisions, command executable presence, pinned CLI versions and available role coverage, and checks that the selected workflow runtime can load. Live profiles also need named human identities, distinct private random worker/operator credentials of at least 32 characters, native isolation and live-evidence policy. It returns JSON and exits 2 on a failed check. It never opens/locks/migrates controller state, invokes project verification commands, extracts native logins or calls a model provider. It can therefore run while a controller owns its state directory. Credential diagnostics report environment presence only, not token validity; no credential values are printed.
+Preflight loads the strict profile, verifies source revisions, command executable presence, pinned CLI versions and available role coverage. Live profiles also need named human identities, distinct private random worker/operator credentials of at least 32 characters, native isolation and live-evidence policy. It returns JSON and exits 2 on a failed check. It never opens/locks/migrates controller state, invokes project verification commands, extracts native logins or calls a model provider. It can therefore run while a controller owns its state directory. Credential diagnostics report environment presence only, not token validity; no credential values are printed.
 
 A passing preflight is not live qualification, plan approval, acceptance or an installation decision. It does not validate the behavior of canonical commands, model quality, account processing policy or subscription overage controls. Read [operational readiness](../specs/operational-readiness.md) before treating a deployment as ready for real work.
 
 ## Run selected work with Pi
 
-If Pi is already logged into Together on this Mac (`pi auth check --provider together`), the worker reuses that login. See [Pi + Together](pi-together.md). Use [the annotated live profile](../examples/factory-live.toml) as a template. Supply an explicit source repository/revision, allowed paths, protected verification files, canonical commands, external credential references, exact Pi/model/provider/account/endpoint/region, and budgets. The template intentionally fails validation until those decisions are provided. Region labels are operator assertions backed by the required evidence reference; they are not inferred from model origin. Verify the provider's processing policy before approving a route.
+Credentials are named by explicit, project-namespaced references (an environment variable, or `<NAME>_FILE` for a mounted secret); no host login is reused. See [Pi + Together](pi-together.md). Use [the annotated live profile](../examples/compose/factory-live.toml) as a template. Supply an explicit source repository/revision, allowed paths, protected verification files, canonical commands, external credential references, exact Pi/model/provider/account/endpoint/region, and budgets. The template intentionally fails validation until those decisions are provided. Region labels are operator assertions backed by the required evidence reference; they are not inferred from model origin. Verify the provider's processing policy before approving a route.
 
 Live Pi requires an explicitly qualified isolated environment. The native `macos-sandbox` profile denies reads of user/private data, writes outside the owned workspace/runtime, protected-file changes, and model shell/extension execution. The local Compose live overlay uses the separately pinned `container-bwrap` command environment described in [Docker Compose](docker-compose.md#live-only-container-worker). Model roles get read tools; only the coder gets edit/write tools. Canonical check processes have no network access or controller/model credentials. These are native OS isolation boundaries, not VMs; a different host or image needs its own qualification.
 
@@ -85,7 +85,7 @@ Acceptance does not perform a merge or release. Projects that require merge befo
 
 ### Outside reviews as evidence
 
-A source can require outside reviewers or CI before acceptance with `external_acceptance`, for example `["Cursor Bugbot", "devin-ai-integration[bot]", "ci/build"]`. The list is frozen into the plan snapshot, so it is part of what you approve. Each name matches a PR check run, a commit status context or a reviewer login. Once the candidate is on a PR, read it:
+A source can require outside reviewers or CI before acceptance with `external_acceptance`, for example `["check:Cursor Bugbot", "review:devin-ai-integration[bot]", "status:ci/build"]`. The list is frozen into the plan snapshot, so it is part of what you approve. Each entry names its kind: `check:` matches a PR check run, `status:` a commit status context and `review:` a reviewer login; a bare name is rejected at config load. Once the candidate is on a PR, read it:
 
 ```bash
 dark-factory --config factory.toml pr-evidence <work-item-id> --number 42 --actor greg
@@ -98,6 +98,8 @@ dark-factory --config factory.toml pr-evidence <work-item-id> --number 42 --acto
 The [Claude Code subscription adapter](claude-subscription.md) supports planner, critic and reviewer assignments using a subscription OAuth token from `claude setup-token`. API-key fallback is prohibited. It does not enable child-graph execution or automatic plan comparisons.
 
 ## Operate one controller
+
+Operator names (`--actor`, the browser session's name) are asserted by whoever holds the operator credential. They are recorded in the audit log and checked against `operators.humans`, but they are not authenticated identities: anyone with the credential can use any listed name. Per-operator credentials are a later increment.
 
 Start the controller/supervisor independently of the terminal console:
 
@@ -191,9 +193,9 @@ Operator commands accept the same arguments and return the same JSON with or wit
 
 ### Interrupted steps
 
-A step that stops without a result is *interrupted*, not failed: the worker was lost, the durable engine or the provider failed, the agent's answer was malformed, or the step ran out of time. Failed checks, blocking review findings, scope or integrity violations, budget overruns and changed approvals still repair or fail as before.
+A step that stops without a result is *interrupted*, not failed: the worker was lost, the worker hit an unexpected error or the provider failed, the agent's answer was malformed, or the step ran out of time. Failed checks, blocking review findings, scope or integrity violations, budget overruns and changed approvals still repair or fail as before.
 
-Transient causes (lost worker, engine, provider, malformed answer) resume automatically, up to `[continuation] max_resumes` times per step (default 1, at most 3). Anything else, or a step that used its automatic resumes, waits for a person under **needs you**:
+Transient causes (lost worker, worker error, provider, malformed answer) resume automatically, up to `[continuation] max_resumes` times per step (default 1, at most 3). Anything else, or a step that used its automatic resumes, waits for a person under **needs you**:
 
 ```bash
 dark-factory --config factory.toml continue-work <work-item-id> --actor greg
@@ -202,7 +204,7 @@ dark-factory --config factory.toml stop-work <work-item-id> --reason "keeps timi
 
 A resumed attempt starts from the interrupted attempt's archived checkout, uncommitted work included, and its brief says it is continuing. Pi also continues the earlier conversation as a fork of the archived session; the archive is never modified. Each resume is a new attempt with the step's approved per-attempt budget and time limit. Nobody can resume past the root's approved ceiling or deadline, or after its approval changed. Stopping fails the work, which then needs a new plan. In the TUI, `y` resumes and `n` stops and asks why. The resume count is part of the approved plan.
 
-The durable engine reports why a dispatch failed (`storage`, `bridge`, `inputs_changed` or `engine`). Changed inputs are a policy failure and are never resumed.
+Changed approved inputs are a policy failure and are never resumed.
 
 #### Decision agents
 
@@ -225,6 +227,14 @@ entrypoint. Profile loading binds that command to the active Python installation
 so an older global script or a source-checkout-relative module path cannot be
 selected accidentally. Third-party adapters remain ordinary explicit command
 arrays speaking the same JSON contract.
+
+## Pipeline, outside agents and releases
+
+`dark-factory work-start|work-plan|work-checkout|work-submit|work-status` carry a change from any coding
+agent through the same stages; `release-start|release-run|release-approve|release-confirm|release-rollback|release-status|release-list`
+run the release loop; `pipeline-validate` and `init-repo` prepare a repository; `metrics`, `disk` and `gc`
+report and clean up. See [Pipeline](pipeline.md), [Self-improvement](self-improvement.md) and the
+[code-host contract](code-host-contract.md).
 
 ## Preserve and restore work
 
@@ -253,6 +263,6 @@ Implementation authority: [constitution](../.specify/memory/constitution.md), [b
 
 ## Development stop hook
 
-The repository includes a Codex `Stop` hook in `.codex/hooks.json`. It commits development changes and pushes the current branch to `yeutterg/dark-factory`, then verifies the remote commit. It excludes local profiles, credentials, state and generated artifacts; it refuses unfinished Git operations and never force-pushes. New source, tests and documentation are included. Run relevant tests before ending a turn.
+The repository includes a Codex `Stop` hook in `.codex/hooks.json`. It commits development changes and pushes the current branch to `yeutterg/dark-factory`, then verifies the remote commit. It excludes local profiles (any `.toml` outside `pyproject.toml` and `examples/`), credentials, state and generated artifacts; it refuses unfinished Git operations, never force-pushes and never pushes the default branch. It scans every commit the push would publish, not only the current edits, for credential shapes including this project's own tokens. New source, tests and documentation are included. Run relevant tests before ending a turn.
 
 On a new installation, review and trust the hook through Codex `/hooks`. This is the normal [Codex hook trust flow](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks). The hook checkpoints code; it does not merge, accept an outcome or upgrade a controller.

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+from dark_factory.models import ACTIVE_ATTEMPT
+
 
 def describe(root, jobs, coverage, dispatch_reason=""):
     succeeded = {j["logical_id"] for j in jobs if j["status"] == "succeeded"}
@@ -14,7 +16,7 @@ def describe(root, jobs, coverage, dispatch_reason=""):
             "verified"
             if job["status"] == "succeeded"
             else "running"
-            if job["status"] in {"leased", "running", "cancelling"}
+            if job["status"] in ACTIVE_ATTEMPT
             else "blocked"
             if missing or job["status"] != "ready"
             else "queued"

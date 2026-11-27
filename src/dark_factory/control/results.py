@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,7 +10,8 @@ from pathlib import Path
 from dark_factory import artifacts
 from dark_factory.control.base import ControllerCore, ControllerError, atomic
 from dark_factory.control.roles import parse_role
-from dark_factory.interruptions import is_interruption
+from dark_factory.models import ACTIVE_ATTEMPT
+from dark_factory.resume_policy import is_interruption
 from dark_factory.store import new_id, now_iso
 
 
@@ -39,7 +41,7 @@ class ResultsMixin(ControllerCore):
         attempt = self.store.one("SELECT * FROM attempts WHERE id=?", (attempt_id,))
         if not attempt:
             raise ControllerError("attempt not found")
-        if attempt["status"] not in {"leased", "running", "cancelling"}:
+        if attempt["status"] not in ACTIVE_ATTEMPT:
             raise ControllerError(
                 "attempt is no longer active; late or duplicate result rejected"
             )
@@ -49,6 +51,12 @@ class ResultsMixin(ControllerCore):
         root = self.store.one(
             "SELECT * FROM work_items WHERE id=?", (job["work_item_id"],)
         )
+        try:
+            self._policy()
+        except Exception as exc:
+            # An active attempt must always be settleable, even when the
+            # approved inputs cannot be evaluated right now.
+            return self._settle_policy_unavailable(attempt, job, root, cost_cents, exc)
         snapshot = json.loads(root["snapshot_json"])
         result = {}
         archive_digest = None
@@ -86,11 +94,9 @@ class ResultsMixin(ControllerCore):
                 and datetime.fromisoformat(job["lease_until"]) <= datetime.now(UTC)
             )
         )
-        cancelled = (
-            cancelled
-            or attempt["status"] == "cancelling"
-            or root["status"] == "cancelled"
-        )
+        # Only the controller's own record decides an operator cancel. A worker
+        # that stopped because its deadline passed reports that as a time limit.
+        cancelled = attempt["status"] == "cancelling" or root["status"] == "cancelled"
         ok = bool(ok and not timed_out and not cancelled and result.get("ok", False))
         if job["kind"] not in {"plan", "critique"} and not self._approval_current(root):
             ok = False
@@ -150,7 +156,7 @@ class ResultsMixin(ControllerCore):
             else "failed"
         )
         self.store.execute(
-            "UPDATE attempts SET status=?,ended_at=?,cost_cents=?,error=?,archive_path=?,result_json=? WHERE id=?",
+            "UPDATE attempts SET status=?,ended_at=?,cost_cents=?,error=?,archive_path=COALESCE(?,archive_path),result_json=? WHERE id=?",
             (
                 status,
                 now_iso(),
@@ -245,16 +251,19 @@ class ResultsMixin(ControllerCore):
                 )
             )
             reason = error or output or status
+            # Classification reads only the controller's or harness's own error,
+            # never the agent's answer.
+            cause = error or ""
             if correctness_failure:
                 if not self._activate_repair(root["id"], job, attempt_id):
                     self._fail_root(root["id"], reason)
             elif (
                 not cancelled
                 and not settled_by_policy
-                and is_interruption(reason, timed_out, result.get("failure_kind"))
+                and is_interruption(cause, timed_out, result.get("failure_kind"))
             ):
                 # Not judged, just stopped: continue or ask instead of failing the work.
-                self._record_interruption(root, job, attempt_id, reason, timed_out)
+                self._record_interruption(root, job, attempt_id, cause, timed_out)
             else:
                 self._fail_root(root["id"], reason)
             if cancelled:
@@ -272,7 +281,100 @@ class ResultsMixin(ControllerCore):
         ):
             self._refresh_task_document(root["id"], "controller")
 
+    def _verified_archive(self, attempt_id, archive_path):
+        """An archive is trusted only if it matches the digest recorded at settlement.
+
+        Self-consistency alone is not enough: a replaced archive with a
+        regenerated manifest would verify against itself.
+        """
+        path = self.store.resolve_path(archive_path)
+        artifacts.verify(path)
+        recorded = self.store.one(
+            "SELECT digest FROM evidence WHERE attempt_id=?", (attempt_id,)
+        )
+        if recorded and recorded["digest"]:
+            if artifacts.digest(path / "manifest.json") != recorded["digest"]:
+                raise ControllerError(
+                    "archive manifest differs from the digest recorded at settlement"
+                )
+        return path
+
+    def verify_candidate(self, root):
+        """The candidate's archive and diff match what was recorded for it."""
+        candidate = json.loads(root["candidate_commits"]).get(root["repo"])
+        if not candidate:
+            return
+        attempt = self.store.one(
+            "SELECT id FROM attempts WHERE archive_path=? ORDER BY started_at DESC LIMIT 1",
+            (candidate["archive"],),
+        )
+        if not attempt:
+            raise ControllerError("candidate archive has no recorded attempt")
+        path = self._verified_archive(attempt["id"], candidate["archive"])
+        diff = (path / "diff.patch").read_bytes()
+        if hashlib.sha256(diff).hexdigest() != candidate["diff_sha256"]:
+            raise ControllerError("candidate diff differs from the recorded digest")
+
+    def _settle_policy_unavailable(self, attempt, job, root, cost_cents, exc):
+        """Minimal settlement that needs no policy: fail the step and the root."""
+        reason = f"policy_unavailable: {str(exc)[:300]}"
+        self.store.execute(
+            "UPDATE attempts SET status='failed',ended_at=?,cost_cents=?,error=? WHERE id=?",
+            (now_iso(), cost_cents, reason, attempt["id"]),
+        )
+        self.store.execute(
+            "UPDATE jobs SET status='failed',worker_id=NULL,lease_until=NULL WHERE id=?",
+            (job["id"],),
+        )
+        reservation = json.loads(job["spec_json"])["budget_cents"]
+        self.store.execute(
+            "UPDATE work_items SET reserved_cents=MAX(reserved_cents-?,0),"
+            "spent_cents=spent_cents+?,status='failed',presentation_stage='Review' WHERE id=?",
+            (reservation, cost_cents, root["id"]),
+        )
+        route = json.loads(attempt["inputs_json"] or "{}").get("route")
+        self.store.execute(
+            "INSERT INTO costs(id,root_id,attempt_id,source,amount_cents,currency,status,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (
+                new_id("cost"),
+                root["id"],
+                attempt["id"],
+                route["billing_account"] if route else "local-check",
+                cost_cents,
+                "USD",
+                "unknown",
+                now_iso(),
+            ),
+        )
+        self.store.execute(
+            "UPDATE workers SET busy=0 WHERE id=?", (attempt["worker_id"],)
+        )
+        self.store.audit(
+            attempt["worker_id"],
+            "attempt.finish",
+            {"attempt_id": attempt["id"], "status": "failed", "error": reason},
+        )
+
     def _checks_authorize_repair(self, root, snapshot, result):
+        if result.get("failure_kind") == "pipeline-stage-failure":
+            # A failed pipeline stage is as repairable as a failed check, but only
+            # for commands the approved pipeline names, on the exact candidate.
+            pipeline = snapshot.get("pipeline") or {}
+            allowed = [
+                step
+                for stage in pipeline.get("change", {}).values()
+                for step in stage["steps"]
+            ]
+            candidate = (
+                json.loads(root["candidate_commits"])
+                .get(root["repo"], {})
+                .get("commit")
+            )
+            ran = [s for s in result.get("stages", []) if s.get("argv")]
+            return bool(ran) and all(
+                s["argv"] in allowed and s["candidate"] == candidate for s in ran
+            )
         if result.get("failure_kind") != "canonical-check-failure":
             return False
         checks = result.get("checks")

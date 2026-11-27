@@ -1,0 +1,11 @@
+description: >-
+  This default runner supports the foreman, triage, spec, and review
+  agents, which read code and write prose.
+instanceShape:
+  vcpus: 4
+  memoryGb: 8
+platform:
+  os: linux
+  arch: x86_64
+  linux:
+    dockerImage: ubuntu:24.04

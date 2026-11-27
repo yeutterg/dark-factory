@@ -113,6 +113,3 @@ class FakeHarness:
 
     def cancel(self):
         self._cancelled = True
-
-    def attach_command(self, session_id):
-        return ["echo", "fake sessions are not interactive"]

@@ -1,0 +1,12 @@
+schemaVersion: v1alpha1
+name: code-review-only
+description: >-
+  This factory uses one agent and one trigger to review pull requests
+  and post advisory findings.
+alias: Reviewer
+repositories:
+  - owner: acme
+    name: api-service
+agentDefaults:
+  model: auto
+  runner: linux-small

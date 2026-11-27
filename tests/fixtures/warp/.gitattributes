@@ -1,0 +1,2 @@
+# Preserve the pinned upstream triage prompt, including its trailing space.
+examples/00-warp-default-agents/agents/triage/agent.md whitespace=-blank-at-eol,blank-at-eof,space-before-tab

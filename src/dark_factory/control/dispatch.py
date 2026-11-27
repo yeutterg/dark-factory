@@ -39,11 +39,6 @@ class DispatchMixin(ControllerCore):
     def undrain(self, actor):
         self.store.set_op("drain", "off", actor)
 
-    def set_workflow_unavailable(self, reason, actor):
-        """Record why the workflow runtime cannot dispatch; empty clears it."""
-        if self.store.get_op("workflow_unavailable", "") != reason:
-            self.store.set_op("workflow_unavailable", reason, actor)
-
     def dispatch_allowed(self):
         if self.store.get_op("pause") == "on":
             return False, "paused"
@@ -51,11 +46,63 @@ class DispatchMixin(ControllerCore):
             return False, "draining"
         if not window_open(self.cfg):
             return False, "window_closed"
-        if self.store.one(
-            "SELECT id FROM pending_actions WHERE status IN ('pending','ambiguous')"
-        ):
-            return False, "external_action_needs_reconciliation"
+        blocker = self.disk_blocker()
+        if blocker:
+            return False, blocker
         return True, "ok"
+
+    def _budget_blocker(self, root, job, spec, route):
+        """The cap that stops this step from being dispatched, or None.
+
+        One rule for dispatch and for the operator's explanation of why work waits.
+        """
+        need = spec["budget_cents"]
+        if route and route.max_cents and need > route.max_cents:
+            return f"the step needs {need}¢ but its route allows {route.max_cents}¢"
+        if (
+            root["spent_cents"] + root["reserved_cents"] + need
+            > root["spending_ceiling_cents"]
+        ):
+            return "remaining root allowance cannot fund the next required task"
+        if root["origin"].startswith("improvement:"):
+            # A dedicated allowance, inside the account allowance checked below.
+            used = self.store.one(
+                "SELECT COALESCE(SUM(spent_cents+reserved_cents),0) n FROM work_items "
+                "WHERE origin LIKE 'improvement:%'"
+            )["n"]
+            if used + need > self.cfg.improvement["budget_cents"]:
+                return "the improvement allowance cannot fund the next step"
+        total = self.store.one(
+            "SELECT COALESCE(SUM(spent_cents+reserved_cents),0) n FROM work_items"
+        )["n"]
+        if total + need > self.cfg.budgets["account_cents"]:
+            return "the account allowance cannot fund the next required task"
+        if job["kind"] in {"plan", "critique"}:
+            spent = self.store.one(
+                "SELECT COALESCE(SUM(a.cost_cents),0) n FROM attempts a JOIN jobs j ON a.job_id=j.id WHERE j.work_item_id=? AND j.kind IN ('plan','critique')",
+                (root["id"],),
+            )["n"]
+            if spent + need > self.cfg.budgets["planning_cents"]:
+                return "the planning allowance cannot fund another planning step"
+        return None
+
+    def _local_runner_blocker(self, worker_id):
+        """A machine with no spare capacity does not take another stage."""
+        from dark_factory.runners import capacity_blocker
+
+        running = self.store.one(
+            f"SELECT COUNT(*) n FROM attempts WHERE worker_id=? AND status IN {sql_set(ACTIVE_ATTEMPT)}",
+            (worker_id,),
+        )["n"]
+        return capacity_blocker(self.cfg.runners["local"], running, self.cfg.state_dir)
+
+    def unresolved_action(self, wid):
+        """The pending or ambiguous external action that holds this root, if any."""
+        return self.store.one(
+            "SELECT id FROM pending_actions WHERE status IN ('pending','ambiguous') "
+            "AND json_extract(payload_json,'$.root')=?",
+            (wid,),
+        )
 
     def claim_job(self, worker_id, capabilities):
         """Lease the next eligible job.
@@ -77,12 +124,6 @@ class DispatchMixin(ControllerCore):
             or not isinstance(capabilities, list)
         ):
             raise ControllerError("invalid worker identity/capabilities")
-        if (
-            any(r.harness == "pi" for r in self.cfg.routes.values())
-            and self.cfg.execution.get("profile") != "macos-sandbox"
-            and not self.cfg.project_id
-        ):
-            raise ControllerError("live execution is not qualified")
         blocked: list[str] = []
         if not self.dispatch_allowed()[0]:
             return None, blocked
@@ -91,7 +132,7 @@ class DispatchMixin(ControllerCore):
         ):
             return None, blocked
         for root in self.store.query(
-            f"SELECT * FROM work_items WHERE status IN {sql_set(DISPATCHABLE_ROOT)} ORDER BY created_at,id"
+            f"SELECT * FROM work_items WHERE status IN {sql_set(DISPATCHABLE_ROOT)} ORDER BY created_at,rowid"
         ):
             try:
                 self._require_root_scope(root)
@@ -102,6 +143,17 @@ class DispatchMixin(ControllerCore):
             if datetime.fromisoformat(snapshot["deadline"]) <= datetime.now(UTC):
                 self._fail_root(root["id"], "root deadline expired")
                 continue
+            if self.unresolved_action(root["id"]):
+                # Held by its own unfinished external write; other roots run.
+                continue
+            if root["candidate_commits"] != "{}":
+                try:
+                    self.verify_candidate(root)
+                except (ControllerError, OSError, ValueError, KeyError) as exc:
+                    self._fail_root(
+                        root["id"], f"candidate evidence is not intact: {exc}"
+                    )
+                    continue
             jobs = self.jobs(root["id"])
             succeeded = {j["logical_id"] for j in jobs if j["status"] == "succeeded"}
             for job in jobs:
@@ -127,46 +179,36 @@ class DispatchMixin(ControllerCore):
                     route = selected_route(self.cfg, role)
                     if route is None:
                         continue
-                    if (
-                        route.harness != "fake"
-                        and self.cfg.execution.get("profile") != "macos-sandbox"
-                        and not self.cfg.project_id
-                    ):
-                        blocked.append("live execution is not qualified")
-                        continue
                     required = {"native", route.harness}
                 else:
                     required = {"native"}
-                if self.cfg.project_id:
-                    environment = (
-                        route.environment
-                        if route
-                        else self.cfg.routes[self.cfg.role_routes["coder"]].environment
-                    )
-                    required.add("environment:" + environment)
+                environment = (
+                    route.environment
+                    if route
+                    else self.cfg.routes[self.cfg.role_routes["coder"]].environment
+                )
+                required.add("environment:" + environment)
+                if job["kind"] == "check":
+                    pipeline = snapshot.get("pipeline") or {}
+                    wanted = {
+                        "label:" + label
+                        for stage in pipeline.get("change", {}).values()
+                        for label in stage["labels"]
+                    }
+                    required |= wanted
+                    if pipeline and self._local_runner_blocker(worker_id):
+                        continue
+                external = self._external_dispatch(root, job, spec)
+                if external == "wait":
+                    continue
+                if external:
+                    # The agent is outside; no harness binary is needed to run its work.
+                    required.discard(route.harness if route else "")
                 if not required.issubset(set(capabilities)):
                     continue
                 need = spec["budget_cents"]
-                if route and route.max_cents and need > route.max_cents:
+                if self._budget_blocker(root, job, spec, route):
                     continue
-                if (
-                    root["spent_cents"] + root["reserved_cents"] + need
-                    > root["spending_ceiling_cents"]
-                ):
-                    continue
-                account_limit = self.cfg.budgets["account_cents"]
-                total = self.store.one(
-                    "SELECT COALESCE(SUM(spent_cents+reserved_cents),0) n FROM work_items"
-                )["n"]
-                if total + need > account_limit:
-                    continue
-                if job["kind"] in {"plan", "critique"}:
-                    spent = self.store.one(
-                        "SELECT COALESCE(SUM(a.cost_cents),0) n FROM attempts a JOIN jobs j ON a.job_id=j.id WHERE j.work_item_id=? AND j.kind IN ('plan','critique')",
-                        (root["id"],),
-                    )["n"]
-                    if spent + need > self.cfg.budgets["planning_cents"]:
-                        continue
                 attempt = new_id("att")
                 deadline = min(
                     datetime.fromisoformat(snapshot["deadline"]),
@@ -182,10 +224,12 @@ class DispatchMixin(ControllerCore):
                     "role": role,
                     "project_id": self.cfg.project_id,
                     "lease_seconds": self.cfg.lease_seconds(worker_id),
-                    "environment": self.cfg.environments.get(environment)
-                    if self.cfg.project_id
-                    else None,
+                    "environment": self.cfg.environments.get(environment),
                 }
+                if external:
+                    inputs["external"] = external
+                if external:
+                    self._external_consume(root["id"], spec)
                 # A resumed step continues the interrupted attempt's saved work.
                 resume = self._resume_input(job["id"], attempt)
                 if resume:
@@ -291,13 +335,19 @@ class DispatchMixin(ControllerCore):
             (reservation, job["work_item_id"]),
         )
         self.store.execute("UPDATE workers SET busy=0 WHERE id=?", (worker_id,))
+        # An unstarted claim never used the saved work it was given; the next
+        # claim of this step must still find it.
+        self.store.execute(
+            "UPDATE interruptions SET resumed_by_attempt=NULL WHERE resumed_by_attempt=?",
+            (attempt_id,),
+        )
         self.store.execute(
             "INSERT INTO costs(id,root_id,attempt_id,source,amount_cents,currency,status,created_at) VALUES (?,?,?,?,0,'USD','not_started',?)",
             (
                 new_id("cost"),
                 job["work_item_id"],
                 attempt_id,
-                "workflow-startup",
+                "unstarted-claim",
                 now_iso(),
             ),
         )
@@ -321,7 +371,7 @@ class DispatchMixin(ControllerCore):
         inputs = json.loads(attempt["inputs_json"])
         snapshot = json.loads(root["snapshot_json"])
         spec = json.loads(job["spec_json"])
-        if attempt["status"] in {"leased", "running", "cancelling"}:
+        if attempt["status"] in ACTIVE_ATTEMPT:
             if attempt["status"] != "leased" or attempt["pid"] or attempt["workspace"]:
                 return None
             if not self.dispatch_allowed()[0] or root["status"] not in {
@@ -415,10 +465,19 @@ class DispatchMixin(ControllerCore):
             "UPDATE jobs SET status=? WHERE id=?",
             ("cancelling" if active else "cancelled", job_id),
         )
-        self.store.execute(
-            "UPDATE attempts SET status='cancelling' WHERE job_id=? AND status IN ('leased','running')",
-            (job_id,),
-        )
+        # Cancelling stops the whole root: every live attempt of it is signalled,
+        # not only the one the operator named.
+        for other in self.store.query(
+            "SELECT a.id,a.job_id FROM attempts a JOIN jobs j ON a.job_id=j.id "
+            "WHERE j.work_item_id=? AND a.status IN ('leased','running')",
+            (job["work_item_id"],),
+        ):
+            self.store.execute(
+                "UPDATE attempts SET status='cancelling' WHERE id=?", (other["id"],)
+            )
+            self.store.execute(
+                "UPDATE jobs SET status='cancelling' WHERE id=?", (other["job_id"],)
+            )
         self.store.execute(
             "UPDATE work_items SET status='cancelled' WHERE id=?",
             (job["work_item_id"],),
@@ -481,14 +540,84 @@ class DispatchMixin(ControllerCore):
         # Periodic service recovery runs every second; record only real fencing.
         if count or actor == "operator":
             self.store.audit(actor, "recover", {"fenced_attempts": count})
+        self.release_orphaned_supervisor_calls(actor)
+        try:
+            self.sweep_if_due()
+        except Exception as exc:  # Cleanup must never stop recovery.
+            self.store.audit("controller", "resources.error", {"error": str(exc)[:500]})
+        if not getattr(self, "_releases_recovered", False):
+            self._releases_recovered = True
+            self.recover_releases()
+        try:
+            self.release_tick()
+        except Exception as exc:  # A release must never stop recovery.
+            self.store.audit("controller", "release.error", {"error": str(exc)[:500]})
+        try:
+            self.gate_tick()
+        except Exception as exc:  # The gate must never stop recovery.
+            self.store.audit("controller", "gate.error", {"error": str(exc)[:500]})
+        try:
+            self.external_tick()
+        except Exception as exc:  # Publishing must never stop recovery.
+            self.store.audit("controller", "external.error", {"error": str(exc)[:500]})
+        try:
+            self.improvement_tick()
+        except Exception as exc:  # The loop must never stop recovery.
+            self.store.audit(
+                "controller", "improvement.error", {"error": str(exc)[:500]}
+            )
         self.scrub_retired_credentials()
         self.reconcile_continuations()
         return count
 
-    def scrub_retired_credentials(self):
-        """Only adapter-declared credential files in retired, owned attempt runtimes."""
+    def stop_active_processes(self, reason, grace_seconds=5.0):
+        """Stop the process groups of running attempts without cancelling their roots.
+
+        Used when the controller itself is stopping. The attempts are left active
+        in the records: after a restart, recovery fences them as interrupted and
+        they continue from their saved work within the approved limits.
+        """
+        import time
+
+        stopped = []
         for attempt in self.store.query(
-            "SELECT * FROM attempts WHERE status NOT IN ('leased','running','cancelling')"
+            "SELECT id,pid,pid_identity FROM attempts WHERE status IN ('leased','running') "
+            "AND pid IS NOT NULL AND pid_identity IS NOT NULL"
+        ):
+            if process_identity(attempt["pid"]) != attempt["pid_identity"]:
+                continue
+            try:
+                if os.getpgid(attempt["pid"]) == attempt["pid"]:
+                    os.killpg(attempt["pid"], signal.SIGTERM)
+                    stopped.append(attempt)
+            except ProcessLookupError:
+                pass
+        end = time.monotonic() + grace_seconds
+        while stopped and time.monotonic() < end:
+            stopped = [
+                a for a in stopped if process_identity(a["pid"]) == a["pid_identity"]
+            ]
+            time.sleep(0.05)
+        for attempt in stopped:
+            try:
+                os.killpg(attempt["pid"], signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        self.store.audit(
+            "controller",
+            "shutdown",
+            {"reason": reason, "stopped_attempts": [a["id"] for a in stopped]},
+        )
+
+    def scrub_retired_credentials(self):
+        """Only adapter-declared credential files in retired, owned attempt runtimes.
+
+        Incremental: an attempt is scrubbed once it has retired, then marked, so the
+        steady-state cost is one cheap query rather than a walk of every attempt.
+        """
+        for attempt in self.store.query(
+            "SELECT id,inputs_json FROM attempts WHERE credentials_scrubbed=0 "
+            "AND status NOT IN ('leased','running','cancelling') LIMIT 200"
         ):
             route = json.loads(attempt["inputs_json"] or "{}").get("route")
             if route:
@@ -501,6 +630,10 @@ class DispatchMixin(ControllerCore):
                         "credentials.scrub",
                         {"attempt": attempt["id"], "files": removed},
                     )
+            self.store.execute(
+                "UPDATE attempts SET credentials_scrubbed=1 WHERE id=?",
+                (attempt["id"],),
+            )
 
     def cleanup(self, actor="operator") -> int:
 

@@ -22,13 +22,12 @@ class AttemptRecords:
     def record_process(self, attempt_id, pid):
         from dark_factory.runner import process_identity
 
+        # Pid and identity change together: a check runs several commands in
+        # turn, and recovery must only ever signal the process that is recorded.
         self.store.execute(
-            "UPDATE attempts SET pid_identity=? WHERE id=?",
-            (process_identity(pid), attempt_id),
-        )
-        self.store.execute(
-            "UPDATE attempts SET pid=?,status='running' WHERE id=? AND status='leased'",
-            (pid, attempt_id),
+            "UPDATE attempts SET pid=?,pid_identity=?,status='running' "
+            "WHERE id=? AND status IN ('leased','running')",
+            (pid, process_identity(pid), attempt_id),
         )
 
     def mark_running(self, attempt_id):

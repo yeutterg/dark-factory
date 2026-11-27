@@ -6,11 +6,12 @@ import hashlib
 import json
 import os
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from dark_factory.control.base import ControllerCore, ControllerError, atomic
-from dark_factory.models import TERMINAL_ROOT
+from dark_factory.models import ACTIVE_ATTEMPT, OPEN_JOB, TERMINAL_ROOT
 from dark_factory.store import new_id, now_iso
 
 TASK_STATES = frozenset(
@@ -113,6 +114,18 @@ class TaskMixin(ControllerCore):
         )
         if existing:
             return self.task_revision(wid)
+        # A replan replaces the earlier plan's tasks; they must not block acceptance.
+        self.store.execute(
+            """UPDATE tasks SET superseded_by=?,updated_at=?
+               WHERE root_id=? AND plan_version<? AND origin='plan'
+               AND superseded_by IS NULL""",
+            (
+                f"plan_version:{root['plan_version']}",
+                now_iso(),
+                wid,
+                root["plan_version"],
+            ),
+        )
         jobs = self.jobs(wid)
         by_kind = {
             job["kind"]: job
@@ -274,7 +287,7 @@ class TaskMixin(ControllerCore):
                 job = replacement
         if job:
             status = job["status"]
-            if status in {"leased", "running", "cancelling"}:
+            if status in ACTIVE_ATTEMPT:
                 task["state"] = "active"
                 latest_attempt = self.store.one(
                     """SELECT id FROM attempts WHERE job_id=?
@@ -729,6 +742,8 @@ class TaskMixin(ControllerCore):
         ):
             raise ControllerError("invalid task supervisor event reconciliation")
         base = response.get("base_revision")
+        if type(base) is not int:
+            raise ControllerError("task supervisor response needs a base revision")
         self._expect_task_revision(wid, base)
         operations = response.get("operations")
         if not isinstance(operations, list) or len(operations) > 50:
@@ -772,12 +787,16 @@ class TaskMixin(ControllerCore):
                         for job in self.jobs(wid)
                         if job["kind"] == "implement"
                         and not json.loads(job["spec_json"]).get("repair")
+                        and job["status"] in OPEN_JOB
                     ),
                     None,
                 )
                 if not implement:
+                    # A finished step cannot do new work; binding a task to it
+                    # would block acceptance forever.
                     raise ControllerError(
-                        "no approved implementation job can own the task"
+                        "no open implementation step can own the task; "
+                        "the approved implementation has already finished"
                     )
                 self.store.execute(
                     """UPDATE tasks SET state='queued',required=1,job_id=?,criterion_ids=?,updated_at=?
@@ -847,6 +866,61 @@ class TaskMixin(ControllerCore):
             self._refresh_task_document(wid, actor)
         return {"revision": revision, "applied": applied}
 
+    def _fail_supervisor_call(self, wid, call_id, reservation, error, actor):
+        """Charge the whole reservation for a failed call and release it."""
+        with self.store.transaction():
+            self.store.execute(
+                """UPDATE work_items SET reserved_cents=MAX(reserved_cents-?,0),
+                spent_cents=spent_cents+? WHERE id=?""",
+                (reservation, reservation, wid),
+            )
+            self.store.execute(
+                "UPDATE supervisor_calls SET status='failed',"
+                "cost_cents=cost_cents+?,reserved_cents=0 WHERE id=?",
+                (reservation, call_id),
+            )
+            self.store.execute(
+                """INSERT INTO costs(id,root_id,source,amount_cents,currency,status,created_at)
+                VALUES (?,?,?,?,?,?,?)""",
+                (
+                    new_id("cost"),
+                    wid,
+                    "task-supervisor:" + self.cfg.task_supervisor["command"],
+                    reservation,
+                    "USD",
+                    "unknown",
+                    now_iso(),
+                ),
+            )
+            self.store.audit(
+                actor,
+                "task_supervisor.failed",
+                {"root": wid, "error": error[:500]},
+            )
+
+    def release_orphaned_supervisor_calls(self, actor="controller") -> int:
+        """Settle calls left pending by a crash, once their time bound has passed."""
+        settings = self.cfg.task_supervisor
+        if not settings:
+            return 0
+        bound = self.cfg.commands[settings["command"]].timeout_seconds + 60
+        cutoff = (datetime.now(UTC) - timedelta(seconds=bound)).isoformat()
+        released = 0
+        for call in self.store.query(
+            "SELECT id,root_id,reserved_cents FROM supervisor_calls "
+            "WHERE status='pending' AND created_at<?",
+            (cutoff,),
+        ):
+            self._fail_supervisor_call(
+                call["root_id"],
+                call["id"],
+                call["reserved_cents"],
+                "interrupted before the call settled",
+                actor,
+            )
+            released += 1
+        return released
+
     def reconcile_task_events(self, wid: str, actor="controller") -> dict[str, Any]:
         """Run one bounded structured reconciliation call for pending free text."""
         root = self._task_root(wid)
@@ -855,7 +929,7 @@ class TaskMixin(ControllerCore):
             dict(row)
             for row in self.store.query(
                 """SELECT * FROM task_events WHERE root_id=? AND processed_at IS NULL
-                ORDER BY created_at,id LIMIT 50""",
+                ORDER BY created_at,rowid LIMIT 50""",
                 (wid,),
             )
         ]
@@ -864,7 +938,7 @@ class TaskMixin(ControllerCore):
         if not settings:
             return {"status": "unconfigured", "pending": len(pending)}
         calls = self.store.one(
-            "SELECT COUNT(*) n,COALESCE(SUM(cost_cents),0) cost FROM supervisor_calls WHERE root_id=?",
+            "SELECT COALESCE(SUM(requests),0) n,COALESCE(SUM(cost_cents),0) cost FROM supervisor_calls WHERE root_id=?",
             (wid,),
         )
         assert calls is not None
@@ -922,12 +996,24 @@ class TaskMixin(ControllerCore):
                 "UPDATE work_items SET reserved_cents=reserved_cents+? WHERE id=?",
                 (reservation, wid),
             )
+            # A retry of the same request is another request and another
+            # reservation: the cap and the cost counters only ever grow.
             self.store.execute(
                 """INSERT INTO supervisor_calls
-                (id,root_id,input_digest,request_json,status,cost_cents,created_at)
-                VALUES (?,?,?,?,?,0,?) ON CONFLICT(root_id,input_digest) DO UPDATE SET
-                status='pending'""",
-                (call_id, wid, input_digest, serialized, "pending", now_iso()),
+                (id,root_id,input_digest,request_json,status,cost_cents,created_at,
+                 requests,reserved_cents)
+                VALUES (?,?,?,?,?,0,?,1,?) ON CONFLICT(root_id,input_digest) DO UPDATE SET
+                status='pending',requests=requests+1,reserved_cents=excluded.reserved_cents,
+                created_at=excluded.created_at""",
+                (
+                    call_id,
+                    wid,
+                    input_digest,
+                    serialized,
+                    "pending",
+                    now_iso(),
+                    reservation,
+                ),
             )
         command = self.cfg.commands[settings["command"]]
         try:
@@ -951,34 +1037,7 @@ class TaskMixin(ControllerCore):
                 raise ControllerError("task supervisor cost exceeds its reservation")
             applied = self.apply_supervisor_response(wid, proposal, "task-supervisor")
         except Exception as exc:
-            with self.store.transaction():
-                self.store.execute(
-                    """UPDATE work_items SET reserved_cents=MAX(reserved_cents-?,0),
-                    spent_cents=spent_cents+? WHERE id=?""",
-                    (reservation, reservation, wid),
-                )
-                self.store.execute(
-                    "UPDATE supervisor_calls SET status='failed',cost_cents=? WHERE id=?",
-                    (reservation, call_id),
-                )
-                self.store.execute(
-                    """INSERT INTO costs(id,root_id,source,amount_cents,currency,status,created_at)
-                    VALUES (?,?,?,?,?,?,?)""",
-                    (
-                        new_id("cost"),
-                        wid,
-                        "task-supervisor:" + settings["command"],
-                        reservation,
-                        "USD",
-                        "unknown",
-                        now_iso(),
-                    ),
-                )
-                self.store.audit(
-                    actor,
-                    "task_supervisor.failed",
-                    {"root": wid, "error": str(exc)[:500]},
-                )
+            self._fail_supervisor_call(wid, call_id, reservation, str(exc), actor)
             return {"status": "failed", "pending": len(pending), "error": str(exc)}
         with self.store.transaction():
             self.store.execute(
@@ -987,7 +1046,8 @@ class TaskMixin(ControllerCore):
                 (reservation, cost, wid),
             )
             self.store.execute(
-                "UPDATE supervisor_calls SET response_json=?,status='applied',cost_cents=? WHERE id=?",
+                "UPDATE supervisor_calls SET response_json=?,status='applied',"
+                "cost_cents=cost_cents+?,reserved_cents=0 WHERE id=?",
                 (json.dumps(result), cost, call_id),
             )
             for event in pending:
@@ -1035,7 +1095,7 @@ class TaskMixin(ControllerCore):
             WHERE a.id=?""",
             (attempt_id,),
         )
-        if not attempt or attempt["status"] not in {"leased", "running", "cancelling"}:
+        if not attempt or attempt["status"] not in ACTIVE_ATTEMPT:
             raise ControllerError("task progress attempt is no longer active")
         task = self.store.one(
             "SELECT * FROM tasks WHERE id=? AND root_id=?",
@@ -1047,6 +1107,8 @@ class TaskMixin(ControllerCore):
             or task["job_id"] != attempt["job_id"]
         ):
             raise ControllerError("task progress is not bound to this attempt")
+        # A model chooses its own event ids; they only deduplicate within its attempt.
+        idempotency_key = f"{attempt_id}:{idempotency_key}"[:300]
         prior = self.store.one(
             "SELECT id FROM task_events WHERE idempotency_key=?", (idempotency_key,)
         )
@@ -1116,7 +1178,7 @@ class TaskMixin(ControllerCore):
             raise ControllerError("attempt is not active for this worker")
         rows = self.store.query(
             """SELECT * FROM task_instructions WHERE attempt_id=? AND state='queued'
-            ORDER BY created_at,id""",
+            ORDER BY created_at,rowid""",
             (attempt_id,),
         )
         at = now_iso()
@@ -1230,10 +1292,15 @@ class TaskMixin(ControllerCore):
         )
         return {"path": str(path), "written": True, "revision": self.task_revision(wid)}
 
+    @atomic
     def import_tasks(
         self, wid: str, actor: str, expected_revision: int | None = None
     ) -> dict[str, Any]:
-        """Import the small documented Markdown subset as attributed proposals."""
+        """Import the small documented Markdown subset as attributed proposals.
+
+        The whole file is applied in one transaction: a line that fails leaves
+        no earlier line applied.
+        """
         self._task_root(wid)
         self._expect_task_revision(wid, expected_revision)
         path = self.tasks_path(wid)

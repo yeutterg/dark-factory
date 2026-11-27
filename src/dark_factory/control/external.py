@@ -13,8 +13,10 @@ class ExternalMixin(ControllerCore):
 
     def external_action(self, wid, operation, payload, actor):
         """Record intent before a write; reconcile the same identity before retry."""
-        if operation != "create_pr":
-            raise ControllerError("bootstrap only supports draft PR creation")
+        if operation not in {"create_pr", "push_branch"}:
+            raise ControllerError(
+                "bootstrap supports only draft PR creation and the branch it needs"
+            )
         root = self.store.one("SELECT * FROM work_items WHERE id=?", (wid,))
         if not root or root["status"] != "awaiting_review":
             raise ControllerError("a checked and reviewed candidate is required")
@@ -34,9 +36,14 @@ class ExternalMixin(ControllerCore):
         if action and action["status"] == "succeeded":
             return json.loads(action["payload_json"])["result"]
         if action:
+            if action["status"] == "abandoned":
+                self.store.execute(
+                    "UPDATE pending_actions SET status='ambiguous' WHERE id=?",
+                    (identity,),
+                )
             observed = self.runner.run_json(
                 cmd.command,
-                "reconcile_create_pr",
+                "reconcile_" + operation,
                 payload,
                 identity,
                 cmd.timeout_seconds,
@@ -92,6 +99,30 @@ class ExternalMixin(ControllerCore):
             {"id": identity, "evidence": result["evidence"]},
         )
         return result
+
+    def abandon_action(self, wid, reason, actor):
+        """Operator exit for a pending or ambiguous external write on one root.
+
+        The action is closed, never deleted. A later identical request finds
+        it and reconciles with the code host before any retry, so abandoning
+        cannot cause a duplicate write.
+        """
+        if not isinstance(reason, str) or not reason.strip():
+            raise ControllerError("a reason is required")
+        with self.store.transaction(), self.decision():
+            action = self.unresolved_action(wid)
+            if not action:
+                raise ControllerError("no unresolved external action for this root")
+            self.store.execute(
+                "UPDATE pending_actions SET status='abandoned' WHERE id=?",
+                (action["id"],),
+            )
+            self.store.audit(
+                actor,
+                "external.abandoned",
+                {"id": action["id"], "root": wid, "reason": reason.strip()},
+            )
+        return {"abandoned": action["id"]}
 
     def _created_pr(self, wid, repo):
         """The draft PR this factory opened for the root, if any."""

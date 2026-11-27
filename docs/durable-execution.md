@@ -1,26 +1,12 @@
 # Durable execution with interchangeable CLI agents
 
-The controller owns approved intent and acceptance. The workflow runtime checkpoints dispatch. A task route selects its CLI harness independently. Pi Durable does not run its own model loop for Codex, Claude Code or Pi CLI assignments.
+The controller owns approved intent and acceptance. A task route selects its CLI harness independently.
 
-## Enable the optional runtime
+## Configure continuation
 
-Requires Python 3.11+ and Node 22.19+. Install the pinned dependencies in the package containing your candidate controller:
-
-```bash
-cd src/dark_factory/adapters/workflow/pi_engine
-npm ci --ignore-scripts
-npm run check
-```
-
-For a wheel installation, find the adapter directory with `python -c 'from dark_factory.adapters.workflow.pi_durable import ENGINE_DIR; print(ENGINE_DIR)'`, then run the same commands there. The wheel includes the engine source and lock file, not downloaded dependencies. Run this only for the separately selected candidate installation.
-
-Add to a private profile with a new state directory:
+Requires Python 3.11+. Add to a private profile with a new state directory:
 
 ```toml
-[workflow]
-engine = "pi-durable"
-node_binary = "node"
-
 [continuation]
 max_repairs = 1
 
@@ -28,13 +14,9 @@ max_repairs = 1
 humans = ["reviewer-name"]
 ```
 
-Native execution is the default when `workflow` is absent. Repairs default to zero; setting `max_repairs = 1` adds an explicit conditional repair/check/review branch to the proposal before approval. Runtime selection does not select a model, discover an account or authorize billing. Changing the engine, code, dependency lock, human identity list or repair policy invalidates prior approval.
+Repairs default to zero; setting `max_repairs = 1` adds an explicit conditional repair/check/review branch to the proposal before approval. Changing the human identity list or repair policy invalidates prior approval. Run `dark-factory --config /path/to/private/factory.toml preflight` before starting.
 
-Run `dark-factory --config /path/to/private/factory.toml preflight` after installation. The worker checks the pinned packages, Node minimum and actual engine import before claiming any attempt. An installation failure leaves eligible work unleased with no attempt cost or reservation; install the selected dependencies and retry, without switching engines or opening a different state directory. The scheduler's probes inherit no credentials or Node hooks.
-
-The probe runs the exact dispatch entry point in `--preflight` mode, including all imported subpaths, registry/models construction and SQLite startup against an in-memory database. No controller checkpoint or agent is started. Validation is reused only within that one runtime/claim cycle; idle/paused/drained workers with no pending reconciliation do not start Node. If startup fails after a lease but before the local execution callback, the controller may fence it as `not_started`, release its reservation unbilled and leave the same authorized assignment queued under its original root limits. It requires matching ownership, leased status and no workspace/PID; started/uncertain work cannot use this path, and late results are rejected. A persisted workflow-unavailable reason keeps unfinished roots explicitly blocked until validation succeeds; completed candidates retain their human gate. This is prerequisite recovery, not a new paid attempt, fallback route or permission expansion.
-
-`run-worker`, `demo` and `serve --worker` use the selected runtime. No model calls occur inside the durable runtime itself. It receives only dispatch identity and observed status over bounded local pipes, with no model or operator credentials. SQLite uses FULL synchronization and a single owner lock; each attempt has a separate database so opening one cannot resume unrelated work.
+`run-worker`, `demo` and `serve --worker` use the one native dispatch path. After a restart the worker re-acquires its own unstarted claims (leased, no workspace, no process) once the controller revalidates owner, policy, approval, lease and deadline.
 
 ## Continue to a concrete human gate
 
@@ -76,10 +58,10 @@ max_cents = 200
 
 ## Recovery and remaining capabilities
 
-Reopening a recorded dispatch observes the same attempt. Completed native work is not run twice. An unstarted leased dispatch may continue only after controller revalidation, within its original lease and authority. An interrupted active CLI is not replayed: lease recovery fences its process, preserves work and records conservative cost. The step may then continue in a new bounded attempt from the archived work, and Pi forks the archived session; see [interrupted steps](usage.md#interrupted-steps). The engine reports a typed reason for a failed dispatch. Bootstrap can still stop on failures outside its preapproved repair branch.
+Completed native work is not run twice. An unstarted leased dispatch may continue only after controller revalidation, within its original lease and authority. An interrupted active CLI is not replayed: lease recovery fences its process, preserves work and records conservative cost. The step may then continue in a new bounded attempt from the archived work, and Pi forks the archived session; see [interrupted steps](usage.md#interrupted-steps). Bootstrap can still stop on failures outside its preapproved repair branch.
 
-Dispatch discovery includes controller leases created before the engine checkpoint exists. The same worker identity, original unexpired lease, exact policy and absence of workspace/PID remain mandatory for resumption. A completed candidate's human review is not blocked solely by execution budget/deadline limits or a dispatch pause; missing evidence and changed approval still block readiness. Rejecting a result refreshes its stored packet immediately, before replanning.
+Dispatch discovery reads the controller's own lease table. The same worker identity, original unexpired lease, exact policy and absence of workspace/PID remain mandatory for resumption. A completed candidate's human review is not blocked solely by execution budget/deadline limits or a dispatch pause; missing evidence and changed approval still block readiness. Rejecting a result refreshes its stored packet immediately, before replanning.
 
 Only a classified ordinary canonical-check failure with the complete approved command set, bindings and exact candidate can activate check repair. Source-integrity violations, interrupted/incomplete verification, invalid archives and changed approval stop the root. A nonzero exit by itself is not repair authority.
 
-Drain both jobs and the workflow runtime before backup. Backup includes workflow checkpoints; restore uses a new directory and the pinned controller. There is no controller upgrade or live-state cutover in this change. Required child graphs, cross-repository integration, provider fallback, publishing/hosted-CI continuation and UI remain separate increments. Configured build commands run as canonical checks; the runtime does not invent missing project checks or delivery gates.
+Drain active jobs before backup. Restore uses a new directory and the pinned controller. There is no controller upgrade or live-state cutover in this change. Required child graphs, cross-repository integration, provider fallback, publishing/hosted-CI continuation and UI remain separate increments. Configured build commands run as canonical checks; the runtime does not invent missing project checks or delivery gates.

@@ -5,9 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import resource
 import shutil
 import stat
 from pathlib import Path
+
+from dark_factory.protected import protected_paths
 
 
 def _owned_path(value: object, name: str) -> Path:
@@ -29,6 +32,32 @@ def _relative_path(root: Path, value: object, name: str) -> Path:
     if not path.is_relative_to(root):
         raise ValueError(f"{name} escapes the workspace")
     return path
+
+
+def _limits(policy: dict) -> dict[str, int]:
+    limits = policy.get("limits", {})
+    values = {"cpu": 1, "memory_mb": 512, "pids": 128}
+    if not isinstance(limits, dict):
+        raise ValueError("limits must be an object")
+    for name in values:
+        value = limits.get(name, values[name])
+        if type(value) is not int or value < 1:
+            raise ValueError("resource limits must be positive integers")
+        values[name] = value
+    return values
+
+
+def apply_limits(policy: dict) -> None:
+    """Process limits for everything the sandbox starts.
+
+    The process count bounds a fork bomb; core dumps are off so a crash cannot
+    write the sandbox's memory to disk. Memory and CPU are bounded by the
+    container that hosts this driver (see compose.live.yaml): a per-process
+    address-space cap would break the V8 and Go runtimes these CLIs use.
+    """
+    limits = _limits(policy)
+    resource.setrlimit(resource.RLIMIT_NPROC, (limits["pids"], limits["pids"]))
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 
 def sandbox_command(policy: dict, command: list[str]) -> list[str]:
@@ -99,11 +128,15 @@ def sandbox_command(policy: dict, command: list[str]) -> list[str]:
         ("/lib64", "usr/lib64"),
     ):
         argv += ["--symlink", source, link_target]
+    # A sized scratch space: a runaway write fills its own tmpfs, not the host.
+    scratch = max(64, min(1024, _limits(policy)["memory_mb"] // 4)) * 1024 * 1024
     argv += [
         "--proc",
         "/proc",
         "--dev",
         "/dev",
+        "--size",
+        str(scratch),
         "--tmpfs",
         "/tmp",
         "--dir",
@@ -122,9 +155,7 @@ def sandbox_command(policy: dict, command: list[str]) -> list[str]:
         if not item_path.exists():
             raise ValueError("writable path must exist")
         argv += ["--bind", str(item_path), str(item_path)]
-    for value in dict.fromkeys(
-        [*protected, ".git", ".pi", ".claude", ".mcp.json", ".agents", ".github"]
-    ):
+    for value in protected_paths(protected):
         item_path = _relative_path(workspace, value, "protected path")
         if item_path.exists():
             argv += ["--ro-bind", str(item_path), str(item_path)]
@@ -154,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     if command[:1] == ["--"]:
         command = command[1:]
     invocation = sandbox_command(policy, command)
+    apply_limits(policy)
     os.execvpe(invocation[0], invocation, os.environ)
     return 2
 

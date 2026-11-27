@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77", "wheel"]
+requires = ["setuptools>=80"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -13,7 +13,7 @@ license = "MIT"
 dependencies = ["PyYAML>=6.0,<7", "textual>=8.2,<9"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-xdist==3.8.0", "ruff==0.17.1", "mypy==2.4.0"]
+dev = ["pytest>=9.1", "pytest-xdist==3.8.0", "ruff==0.17.5", "mypy==2.4.1", "jsonschema>=4.23"]
 
 [project.scripts]
 dark-factory = "dark_factory.cli:main"
@@ -25,8 +25,6 @@ where = ["src"]
 dark_factory = [
   "agents/prompts/*.md",
   "agents/skills/*/SKILL.md",
-  "adapters/workflow/pi_engine/*.ts",
-  "adapters/workflow/pi_engine/package*.json",
   "ui/*.tcss",
 ]
 

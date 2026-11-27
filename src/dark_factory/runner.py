@@ -65,26 +65,6 @@ class CommandRunner:
             raise ContractError("invalid JSON on stdout") from exc
         return validate_result(data, operation, request_id)
 
-    def run_plain(
-        self,
-        argv: list[str],
-        timeout_seconds: int,
-        cwd: Path | None = None,
-        env: dict[str, str] | None = None,
-    ) -> tuple[int, str, str]:
-        code, stdout, stderr = self.supervise(
-            argv,
-            b"",
-            timeout_seconds,
-            cwd or self.workdir,
-            {**os.environ, **(env or {})},
-        )
-        return (
-            code,
-            stdout.decode("utf-8", errors="replace"),
-            stderr.decode("utf-8", errors="replace"),
-        )
-
     def supervise(
         self,
         argv,

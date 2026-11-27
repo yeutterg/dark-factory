@@ -1,0 +1,22 @@
+schemaVersion: v1alpha1
+name: sdlc-issue-to-pr
+description: >-
+  This factory uses the default agents to handle requests from Slack,
+  Linear, and GitHub through triage, optional specification, implementation,
+  and adversarial review. A human merges the changes. A custom agent builds
+  the iOS app on macOS.
+alias: Acme
+credentialStrategy: EXECUTOR
+repositories:
+  - owner: acme
+    name: api-service
+  - owner: acme
+    name: webapp
+  - owner: acme
+    name: ios-app
+integrations:
+  - type: slack
+  - type: linear
+agentDefaults:
+  model: auto
+  runner: linux-standard

@@ -14,7 +14,7 @@ The controller enforces scheduling, budgets, leases, and approvals. Everything s
 - **Trackers and code hosts:** Work comes in and goes out through small JSON command adapters. GitHub adapters are included; another tracker or code host needs a script that speaks the same commands.
 - **Checks and CI/CD:** Acceptance is tied to the canonical commands you already run, such as tests, linters, and builds. Manual gates cover anything else. Results bind to the exact commit, so a passing exit code alone never counts as acceptance.
 - **Execution environments:** Workers can run locally or on [remote machines over verified TLS](docs/distributed-execution.md), under native macOS isolation. OCI and VM sandbox drivers plug into the same interface and are qualified separately.
-- **Durable runs:** Attempts are leased, budgeted, and checkpointed. An optional [durable workflow runtime](docs/durable-execution.md) checkpoints dispatch. Every workspace is archived and verified before it's removed. A step interrupted by a lost worker, a provider hiccup, or a malformed answer [resumes from its saved work](docs/usage.md#interrupted-steps); anything less trivial waits for you.
+- **Durable runs:** Attempts are leased, budgeted, and checkpointed. Restart [re-acquires unstarted claims](docs/durable-execution.md). Every workspace is archived and verified before it's removed. A step interrupted by a lost worker, a provider hiccup, or a malformed answer [resumes from its saved work](docs/usage.md#interrupted-steps); anything less trivial waits for you.
 - **Decision agents:** An optional decider, such as TypeSafe's Jev, can weigh in on whether an interrupted step should resume. It only advises; code keeps the approved limits.
 - **Task supervisor:** Each root has a durable task list, current state and next actions. A low-cost structured-output model can reconcile free text into approved tasks, while code keeps scope, budgets, evidence and execution authority.
 - **Prompts and skills:** Packaged defaults can be overridden per project in `factory.toml`.
@@ -39,7 +39,7 @@ This is just one example, and it's totally customizable. Each stage is a route o
 | Planning | GPT Astra via Codex CLI | Planner route |
 | Critique | Claude Opus via Claude Code | Critic route, on a different model from the planner |
 | Approval | You, in the TUI | Recorded human decision with a spending limit |
-| Implementation | DeepSeek Flash via Pi, on the Pi Durable runtime | Coder route through a provider Pi supports, such as Together |
+| Implementation | DeepSeek Flash via Pi | Coder route through a provider Pi supports, such as Together |
 | Checks | Your test, lint, and build commands; GitHub Actions | Canonical commands run in the sandbox; CI results on the PR can be required too |
 | Interruptions | Jev as the decision agent | Rules resume trivial interruptions; Jev can confirm or hold them for you, within approved limits |
 | Review | Devin and Bugbot on the PR, plus the factory's reviewer | Reviewer route, plus required outside reviews read from the PR; they count only on the exact candidate commit |
@@ -102,7 +102,7 @@ Run tests with `python -m pytest -n auto`; lint and type-check with `ruff check 
 
 This is early. The control plane, adapters, task dashboard, and isolation are tested with simulated and loopback providers. The pinned local Codex container route has also passed a bounded authenticated isolation probe; a complete factory outcome, live task-supervisor/steering qualification, and independent-model review remain unqualified. Multi-repository work and previews come later.
 
-[Usage guide](docs/usage.md) · [Docker Compose](docs/docker-compose.md) · [Live configuration](examples/factory-live.toml) · [Qualification status](specs/qualification.md) · [Roadmap](specs/tasks.md)
+[Pipeline](docs/pipeline.md) · [Usage guide](docs/usage.md) · [Docker Compose](docs/docker-compose.md) · [Live configuration](examples/compose/factory-live.toml) · [Qualification status](specs/qualification.md) · [Roadmap](specs/tasks.md)
 
 [Warp-shaped definitions](docs/warp-compatibility.md) documents the deliberately
 small compatibility surface and proposal-only improvement loop.

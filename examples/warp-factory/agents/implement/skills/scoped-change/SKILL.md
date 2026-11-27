@@ -1,3 +1,8 @@
+---
+name: scoped-change
+description: Scoped change. Use when working on a selected outcome.
+---
+
 # Scoped change
 
 Read the approved criteria before editing. Keep the diff within the allowed

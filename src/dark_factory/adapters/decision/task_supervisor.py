@@ -5,15 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
-import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
+from dark_factory.adapters.decision.http import post_json as _post
 from dark_factory.contracts import ContractError, validate_request
+from dark_factory.secrets import secret
 
 RETRYABLE = {429, 502, 503, 529}
 
@@ -97,29 +95,14 @@ When uncertain, leave the event unresolved in needs_decision."""
 
 
 def post_json(url: str, body: dict[str, Any], key: str, timeout=30.0, retries=1):
-    data = json.dumps(body).encode()
-    error = ""
-    for attempt in range(retries + 1):
-        if attempt:
-            time.sleep(0.5 * attempt)
-        request = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            },
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                return json.loads(response.read())
-        except urllib.error.HTTPError as exc:
-            error = f"HTTP {exc.code}"
-            if exc.code not in RETRYABLE:
-                break
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            error = str(exc)
-    raise ContractError(f"task supervisor request failed: {error}")
+    return _post(
+        url,
+        body,
+        key,
+        timeout=timeout,
+        retries=retries,
+        label="task supervisor request",
+    )
 
 
 def handle(
@@ -207,7 +190,7 @@ def main(argv=None):
         raise SystemExit("task supervisor endpoint requires HTTPS or loopback HTTP")
     if args.input_price_per_million <= 0 or args.output_price_per_million <= 0:
         raise SystemExit("task supervisor prices must be positive")
-    key = os.environ.get(args.api_key_env, "")
+    key = secret(args.api_key_env)
     if not key:
         raise SystemExit(f"{args.api_key_env} is not set")
     try:

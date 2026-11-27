@@ -11,13 +11,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-import time
-import urllib.error
-import urllib.request
 
+from dark_factory.adapters.decision.http import post_json
 from dark_factory.contracts import ContractError, validate_request
+from dark_factory.secrets import secret
 
 ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 DEFAULT_MODEL = "jev-latest"
@@ -27,29 +25,9 @@ MAX_STATE_CHARS = 60_000
 
 
 def post(body, key, timeout=20.0, retries=3):
-    data = json.dumps(body).encode()
-    error = ""
-    for attempt in range(retries + 1):
-        if attempt:
-            time.sleep(0.5 * 2 ** (attempt - 1))
-        request = urllib.request.Request(
-            ENDPOINT,
-            data=data,
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            },
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                return json.loads(response.read())
-        except urllib.error.HTTPError as exc:
-            error = f"HTTP {exc.code}"
-            if exc.code not in RETRYABLE:
-                break
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            error = str(exc)
-    raise ContractError(f"jev request failed: {error}")
+    return post_json(
+        ENDPOINT, body, key, timeout=timeout, retries=retries, label="jev request"
+    )
 
 
 def handle(request, key, model=DEFAULT_MODEL, send=post):
@@ -112,7 +90,7 @@ def main(argv=None):
     parser.add_argument("--model", default=DEFAULT_MODEL)
     args = parser.parse_args(argv)
     try:
-        key = os.environ.get(args.api_key_env, "")
+        key = secret(args.api_key_env)
         if not key:
             raise ContractError(f"{args.api_key_env} is not set")
         print(json.dumps(handle(json.load(sys.stdin), key, args.model)))

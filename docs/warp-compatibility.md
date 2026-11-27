@@ -14,12 +14,18 @@ version-controlled definition tree:
 format = "warp-v1alpha1"
 path = "./factory"
 strict = true
+
+# Only needed when several agents share a type; one candidate maps automatically.
+[definition.roles]
+coder = "implement-fast"
 ```
 
 The repositories in `factory.yaml` must exactly match `repositories` in the
-operator profile. A mapped agent's explicit model must match the route already
-approved locally. Warp's `model: auto` means "use the approved Dark Factory role
-route"; it does not enable unbounded routing.
+operator profile. A mapped agent's model must match the route already approved
+locally, unless it names no model of its own: `auto`, `auto-*`, `custom:*` and a
+router name all mean "use the approved Dark Factory role route". They do not
+enable routing. A `harness` request is compared with the route's harness and any
+difference is reported, never acted on.
 
 Validate a tree without opening controller state:
 
@@ -27,50 +33,59 @@ Validate a tree without opening controller state:
 dark-factory definition-validate ./factory
 ```
 
-The JSON result distinguishes mapped roles from recognized resources that are
-not executed. Unknown fields fail in strict mode. Known but unsupported
-resources remain visible in the compatibility report rather than being treated
-as active.
+The reader is checked against Warp's published JSON Schemas and the sixteen trees
+in `warpdotdev/warp-factory-examples` (vendored under `tests/fixtures/warp/`, with
+provenance). Every tree the schemas accept loads here in strict mode.
 
-## Supported execution surface
+## What is read, and what runs
 
-- `factory.yaml`: identity, repositories, agent defaults and requested models.
-- `agents/*/agent.md`: `SPEC`, `IMPLEMENT`, and `REVIEW` map to the existing
-  planner, coder, and reviewer roles.
-- `skills/*/SKILL.md`: shared skills.
-- `agents/<name>/skills/*/SKILL.md`: skills scoped to the mapped role.
-- `scorers/*/scorer.md`: parsed and pinned, but not executed as LLM judges in
-  this increment.
-- `runners/*.yaml`: validated and reported; the operator-approved local
-  execution profile remains authoritative.
+The JSON report lists every resource with one of three statuses: *mapped or
+executed* (used by the fixed workflow), *preserved* (read, pinned, not scheduled)
+or *recognized-not-executed*.
 
-Foreman, triage, and custom agents are preserved in the report but do not alter
-the fixed `plan → critique → approve → implement → check → review` graph.
-Automations, routers, benchmarks and webhooks are pinned and reported but not
-executed. Secrets, MCP servers, hooks and network policies in YAML never grant
-access.
+- `factory.yaml`: identity, repositories (required), agent defaults and requested
+  models. `schemaVersion` must be `v1alpha1`. `v1alpha2` and a `workers/`
+  directory produce one clear "not supported" error.
+- `agents/*/agent.md`: `agentType` must be uppercase; null or omitted means
+  `CUSTOM`. `SPEC`, `IMPLEMENT` and `REVIEW` map to the planner, coder and
+  reviewer roles. `VERIFY`, `TRIAGE`, `CUSTOM` and the foreman are read and
+  reported but do not change the fixed `plan → critique → approve → implement →
+  check → review` graph. Exactly one agent must be `FOREMAN` or `MAIN`.
+- **Prompts are layered.** A mapped agent's body (frontmatter removed) replaces the
+  role's guidance. The factory's output contract is always appended and cannot be
+  removed by any file. An empty body keeps the packaged guidance. The body is
+  read once when the definition loads, so what is digested is what is delivered.
+- `skills/*/SKILL.md` and `agents/<name>/skills/*/SKILL.md`: shared and
+  role-scoped skills, snapshotted at load.
+- `self-improvement/agent.md` and `selfImprovement.failedRunThreshold`: guidance
+  and threshold for Dark Factory's own improvement loop.
+- `scorers/*/scorer.md` (requires `labels` and `passingScore`), `runners/*.yaml`
+  (references must resolve), `automations`, `routers`, `benchmarks` and
+  `webhooks`: validated and pinned, not executed. The operator-approved
+  execution profile remains authoritative. Secrets, MCP servers, hooks and
+  network policies in YAML never grant access.
 
-The definition digest, resource hashes, mapped prompts, and skill contents are
-part of the policy snapshot. Changing one invalidates affected pending approval
-or dispatch evidence under the same rules as other configuration inputs.
+Strict mode rejects unknown fields, agent types and directories. A tree may hold
+at most 256 files, 256 KiB per file and 2 MiB in total.
 
-## Proposal-only improvement
+The definition digest covers every file in the tree, including agents nothing
+maps. The digest, the mapped prompts and the skill contents are part of the policy
+snapshot, so changing one invalidates affected pending approval or dispatch
+evidence under the same rules as other configuration inputs.
 
-Recurring outcome analysis is deterministic and appears in the authenticated
-status projection by default. The dedicated command prints the same detailed
-proposal view:
+## Self-improvement
+
+Dark Factory's own improvement loop is on by default. See
+[Self-improvement](self-improvement.md). The read-only report is unchanged:
 
 ```bash
 dark-factory --config factory.toml improve
 ```
 
-The command groups failed checks, blocking reviews, failed stages,
-interruptions, timeouts, and human rejections across distinct root outcomes.
-Three distinct roots are required by default; use `--minimum-occurrences` to
-raise or lower the threshold, with a minimum of two.
-
-The output suggests the smallest prompt, skill, runner, or route target and
-contains a tracker-ready work-item description. It performs no inference and
-does not create a work item, branch, pull request, application change, external
-action, or configuration reload. A human chooses whether to select the
-recommendation as ordinary work.
+It groups failed checks, blocking reviews, failed stages, interruptions, timeouts
+and human rejections across distinct root outcomes and prints the smallest
+prompt, skill, runner or route target, plus a tracker-ready description. It
+performs no inference and creates nothing. The threshold is
+`selfImprovement.failedRunThreshold` from the definition when set, otherwise
+`[improvement] threshold`, otherwise three distinct roots; `--minimum-occurrences`
+overrides it for one report (minimum two).

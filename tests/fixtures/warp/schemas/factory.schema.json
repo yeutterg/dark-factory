@@ -1,0 +1,914 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory.schema.json",
+  "$comment": "Generated from the Factory file parser and the catalogues its apply path validates against. Edit logic/factoryfile/schema, then regenerate; a hand edit is reverted by the drift test.",
+  "title": "factory.yaml (v1alpha1)",
+  "description": "The Factory root document. Exactly one factory.yaml must exist at the registered Factory root.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "name",
+    "repositories"
+  ],
+  "oneOf": [
+    {
+      "required": [
+        "workerDefaults"
+      ]
+    },
+    {
+      "required": [
+        "agentDefaults"
+      ]
+    }
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "networkPolicy": {
+      "$ref": "common.schema.json#/$defs/networkPolicy"
+    },
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1alpha1",
+      "description": "Tree schema version. This document describes v1alpha1 only; fetch the document for another version rather than validating against this one."
+    },
+    "benchmarkRepoSubstitutions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": [
+          "source",
+          "target"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "object",
+            "required": [
+              "codeForge",
+              "name",
+              "owner"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "codeForge": {
+                "type": "string",
+                "const": "GITHUB"
+              },
+              "name": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString"
+              },
+              "owner": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString"
+              }
+            }
+          },
+          "target": {
+            "type": "object",
+            "required": [
+              "codeForge",
+              "name",
+              "owner"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "codeForge": {
+                "type": "string",
+                "const": "GITHUB"
+              },
+              "name": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString"
+              },
+              "owner": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString"
+              }
+            }
+          }
+        }
+      }
+    },
+    "name": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString",
+      "description": "Factory name."
+    },
+    "description": {
+      "$ref": "common.schema.json#/$defs/optionalText"
+    },
+    "github": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GitHub-specific Factory settings.",
+      "properties": {
+        "mcpEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use managed GitHub MCP for new Warp-hosted Factory runs while the managed_github_mcp rollout is enabled. Omitted defaults to false."
+        },
+        "factoryConfigChecks": {
+          "type": "string",
+          "enum": [
+            "all",
+            "main"
+          ],
+          "default": "main",
+          "description": "main validates only PRs targeting the registered production branch, regardless of its name; all validates PRs targeting any base branch. Omitted defaults to main. Validation uses this PR's changed paths and the full head snapshot; deployment remains production-only. Base-only edits and base or production branch advances do not refresh unchanged PRs."
+        }
+      }
+    },
+    "experimental": {
+      "type": "object",
+      "description": "Internal per-Factory experiments. Values are JSON primitives; unknown keys are preserved.",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "alias": {
+      "$ref": "common.schema.json#/$defs/alias"
+    },
+    "credentialStrategy": {
+      "$ref": "common.schema.json#/$defs/credentialStrategy"
+    },
+    "compactOnCacheTTLExpiry": {
+      "type": "boolean",
+      "default": false,
+      "description": "Compact conversations above 40% PRIMARY context window usage when their expected prompt cache TTL has expired. Applies to new Factory runs on staging only."
+    },
+    "restrictFollowupsToStarter": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, only the Warp user who started a run may send it follow-ups. Senders on Slack, GitHub, Linear and other integrations are matched by their linked Warp account."
+    },
+    "allowServiceAccountFollowups": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, follow-ups sent with a service account's API key are accepted even when restrictFollowupsToStarter is true. Has no effect otherwise."
+    },
+    "automations": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Factory-wide automation settings.",
+      "properties": {
+        "githubOnboardingNotices": {
+          "type": "boolean",
+          "description": "Defaults to true. False suppresses future GitHub account-connection and team-membership notices from this Factory, without changing access requirements."
+        }
+      }
+    },
+    "codeForges": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "Configured code forges for the Factory. Omit the field to keep the stored set. An empty list is a Factory with no enabled forge. A mixed list requires every repository to declare its own codeForge.",
+      "items": {
+        "type": "string",
+        "enum": [
+          "GITHUB",
+          "GITLAB",
+          "AZURE_DEVOPS"
+        ]
+      }
+    },
+    "repositories": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "Repositories in the Factory's scope. Each repository's code forge must be in codeForges. An entry that names no code forge uses the only forge in codeForges. The list may be empty, and a forge in codeForges may have no repositories.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "owner"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          },
+          "owner": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          },
+          "codeForge": {
+            "type": "string",
+            "enum": [
+              "GITHUB",
+              "GITLAB",
+              "AZURE_DEVOPS"
+            ],
+            "description": "Code forge hosting this repository. Omit it only when codeForges names exactly one forge; declare it on every entry otherwise."
+          },
+          "deferred": {
+            "type": "boolean",
+            "description": "Defaults to false. True attaches the repository to the Factory without eagerly preparing it for a run, unless an Agent or Automation required_repos entry, or a task-level additional repository, makes it eager for that run."
+          }
+        }
+      }
+    },
+    "secrets": {
+      "$ref": "common.schema.json#/$defs/uniqueSecrets"
+    },
+    "mcpServers": {
+      "$ref": "common.schema.json#/$defs/mcpServers"
+    },
+    "hooks": {
+      "$ref": "common.schema.json#/$defs/hooks",
+      "description": "Agent hook directories every Agent's runs load, after the Agent's own hooks. An Agent cannot remove these. Hooks run only on the Warp Agent harness. Not yet available on every deployment."
+    },
+    "cloudProviders": {
+      "$ref": "#/$defs/cloudProviders",
+      "description": "Cloud-provider identity federation used by agent runs."
+    },
+    "providers": {
+      "$ref": "#/$defs/cloudProviders",
+      "description": "Legacy read-only alias for cloudProviders, recognized so a file written before the rename keeps parsing. Author cloudProviders in new files; a rewrite emits cloudProviders."
+    },
+    "integrations": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "Integration providers attached to the Factory. An empty list explicitly detaches every provider. github is not declarable here: repository access comes from repositories.",
+      "items": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString",
+            "description": "Provider slug. The parser accepts any non-empty slug; the catalogue is checked when the plan is applied."
+          },
+          "slack": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Persisted Slack settings. Valid only when type is slack. Omitted fields keep their default-on behavior.",
+            "properties": {
+              "autoRespondToThreadReplies": {
+                "type": "boolean",
+                "description": "When true or omitted, eligible plain channel thread replies still reach the reply-intent classifier. When false, those replies are ignored unless they @-mention the Factory. DMs are unchanged."
+              }
+            }
+          },
+          "microsoft-teams": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Persisted Teams reply settings. Valid only when type is microsoft-teams. Omitted fields keep their default-on behavior.",
+            "properties": {
+              "autoRespondToThreadReplies": {
+                "type": "boolean",
+                "description": "When the shared per-Factory reply-setting rollout is enabled, true or omitted lets eligible plain channel-thread replies reach the reply-intent classifier; false requires an app mention."
+              }
+            }
+          },
+          "linear": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Legacy Linear settings. Valid only when type is linear. teamIds is accepted on read but ignored for issue discovery and omitted on rewrite.",
+            "properties": {
+              "teamIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "common.schema.json#/$defs/nonEmptyString"
+                },
+                "description": "Legacy team IDs; issue discovery reads enabled agent-session automation filters instead."
+              }
+            }
+          },
+          "jira": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Legacy Jira settings. Valid only when type is jira. projectKeys is accepted on read but ignored for issue discovery and omitted on rewrite.",
+            "properties": {
+              "projectKeys": {
+                "type": "array",
+                "items": {
+                  "$ref": "common.schema.json#/$defs/nonEmptyString"
+                },
+                "description": "Legacy project keys; issue discovery reads enabled agent-session automation filters instead."
+              }
+            }
+          }
+        }
+      }
+    },
+    "workerDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Execution defaults every worker inherits. Exactly one of model or harness is required.",
+      "properties": {
+        "prewarmedPool": {
+          "$ref": "common.schema.json#/$defs/prewarmedPool"
+        },
+        "model": {
+          "$ref": "common.schema.json#/$defs/ozModelDefault"
+        },
+        "harness": {
+          "$ref": "common.schema.json#/$defs/harnessDefault"
+        },
+        "runner": {
+          "$ref": "common.schema.json#/$defs/runnerRef"
+        },
+        "environmentId": {
+          "$ref": "common.schema.json#/$defs/environmentId"
+        },
+        "secrets": {
+          "$ref": "common.schema.json#/$defs/secrets"
+        },
+        "mcpServers": {
+          "$ref": "common.schema.json#/$defs/mcpServers"
+        },
+        "workerHost": {
+          "$ref": "common.schema.json#/$defs/workerHost"
+        },
+        "computerUseModel": {
+          "$ref": "common.schema.json#/$defs/computerUseModel"
+        },
+        "hooks": {
+          "$ref": "common.schema.json#/$defs/hooks",
+          "description": "Agent hook directories inherited by workers that omit hooks. A worker's hooks field replaces this list; an explicit empty list clears it. Hooks in factory.yaml are still added afterward and cannot be removed. Hooks run only on the Warp Agent harness. Not yet available on every deployment."
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "common.schema.json#/$defs/modelXorHarnessRequired"
+        }
+      ]
+    },
+    "agentDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prewarmedPool": {
+          "$ref": "common.schema.json#/$defs/prewarmedPool"
+        },
+        "model": {
+          "$ref": "common.schema.json#/$defs/ozModelDefault"
+        },
+        "harness": {
+          "$ref": "common.schema.json#/$defs/harnessDefault"
+        },
+        "runner": {
+          "$ref": "common.schema.json#/$defs/runnerRef"
+        },
+        "environmentId": {
+          "$ref": "common.schema.json#/$defs/environmentId"
+        },
+        "secrets": {
+          "$ref": "common.schema.json#/$defs/secrets"
+        },
+        "mcpServers": {
+          "$ref": "common.schema.json#/$defs/mcpServers"
+        },
+        "workerHost": {
+          "$ref": "common.schema.json#/$defs/workerHost"
+        },
+        "computerUseModel": {
+          "$ref": "common.schema.json#/$defs/computerUseModel"
+        },
+        "hooks": {
+          "$ref": "common.schema.json#/$defs/hooks",
+          "description": "Agent hook directories inherited by workers that omit hooks. A worker's hooks field replaces this list; an explicit empty list clears it. Hooks in factory.yaml are still added afterward and cannot be removed. Hooks run only on the Warp Agent harness. Not yet available on every deployment."
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "common.schema.json#/$defs/modelXorHarnessRequired"
+        }
+      ],
+      "deprecated": true,
+      "description": "Deprecated alias of workerDefaults. Set only one of the two."
+    },
+    "scorerDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Execution defaults for scorers. Models inherit only from scorerDefaults, not workerDefaults.",
+      "properties": {
+        "model": {
+          "$ref": "common.schema.json#/$defs/nonEmptyString"
+        },
+        "runner": {
+          "$ref": "common.schema.json#/$defs/runnerRef"
+        },
+        "secrets": {
+          "$ref": "common.schema.json#/$defs/secrets"
+        },
+        "mcpServers": {
+          "$ref": "common.schema.json#/$defs/mcpServers"
+        }
+      }
+    },
+    "selfImprovement": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Factory self-improvement settings.",
+      "properties": {
+        "failedRunThreshold": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Distinct scored-failing source runs per Agent required for scheduled self-improvement. Omit to use the server default. Must be between 1 and 50: one self-improvement run can triage at most that many failure findings. The age-based flush and manual dispatch are unchanged."
+        },
+        "model": {
+          "$ref": "common.schema.json#/$defs/nonEmptyString",
+          "description": "Migration-only Oz model ID or custom:<slug> for a unique team endpoint model. Put model in self-improvement/agent.md instead; canonical rewrites remove this key.",
+          "deprecated": true
+        },
+        "reviewerType": {
+          "type": "string",
+          "enum": [
+            "none",
+            "admins",
+            "team",
+            "custom"
+          ],
+          "description": "Pool from which one reviewer is randomly selected for self-improvement pull requests and Factory reviews in GitHub-managed or Warp-managed Factories. admins is team admins and owners, team is any team member, custom uses reviewerEmails, and none requests no one. Omit to use the server default."
+        },
+        "reviewerEmails": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          },
+          "description": "Emails of owning-team members. Required when reviewerType is custom and not allowed otherwise."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "reviewerType"
+            ],
+            "properties": {
+              "reviewerType": {
+                "const": "custom"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reviewerEmails"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "reviewerEmails"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "blueprint": {
+      "type": "object",
+      "if": {
+        "required": [
+          "extends"
+        ]
+      },
+      "then": {
+        "properties": {
+          "worker": false,
+          "start": false,
+          "stages": false
+        }
+      },
+      "else": {
+        "required": [
+          "worker",
+          "start",
+          "stages"
+        ],
+        "properties": {
+          "stages": {
+            "type": "object",
+            "minProperties": 1,
+            "propertyNames": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^/]*[^\\s/][^/]*$",
+              "not": {
+                "enum": [
+                  "start",
+                  "end",
+                  "foreman"
+                ]
+              }
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/blueprintStage"
+            },
+            "description": "Stages of this scope keyed by name, in workflow order. Names must be unique across the entire blueprint, including nested scopes, and must not contain /; start, end and foreman are reserved. End must be reachable from start. Stages may be disconnected and entered explicitly, including by stage-targeted automations."
+          },
+          "params": false,
+          "staffing": false,
+          "workers": false
+        }
+      },
+      "additionalProperties": false,
+      "description": "Explicit workflow for the Factory. A stage is a leaf with a prompt, or a nested scope with its own start and stages; the agent named by a scope's worker drives that scope, executing same-worker stages inline and dispatching other workers as child runs. When present, the foreman executes this graph instead of the workflow in its own prompt, and every Agent's spawnableBy is derived from it. Not yet available on every deployment.",
+      "properties": {
+        "extends": {
+          "$ref": "common.schema.json#/$defs/blueprintRef"
+        },
+        "params": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^/]*[^\\s/][^/]*$",
+            "not": {
+              "enum": [
+                "start",
+                "end",
+                "foreman"
+              ]
+            }
+          },
+          "additionalProperties": {
+            "$ref": "common.schema.json#/$defs/promptParams"
+          }
+        },
+        "staffing": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          },
+          "additionalProperties": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          }
+        },
+        "workers": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^warp/[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*$"
+          },
+          "additionalProperties": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString",
+            "pattern": "^[^/@\\\\]+$",
+            "description": "Agent directory name of the local Agent that replaces this hosted worker everywhere the base blueprint staffs it. To customize a hosted worker, declare a local Agent that extends it and name it here."
+          },
+          "description": "Replaces hosted workers of the extended blueprint with local Agents, keyed by the hosted worker (warp/<roster>/<name>). Only valid with extends."
+        },
+        "worker": {
+          "$ref": "common.schema.json#/$defs/nonEmptyString",
+          "description": "Directory name of the worker that runs the root scope. Must name the worker that declares workerRole FOREMAN."
+        },
+        "start": {
+          "$ref": "#/$defs/blueprintStart"
+        },
+        "stages": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^/]*[^\\s/][^/]*$",
+            "not": {
+              "enum": [
+                "start",
+                "end",
+                "foreman"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "cloudProviders": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gcp": {
+          "type": "object",
+          "required": [
+            "projectNumber",
+            "workloadIdentityFederationPoolId",
+            "workloadIdentityFederationProviderId"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "projectNumber": {
+              "$ref": "common.schema.json#/$defs/nonEmptyString",
+              "description": "Quote the value so YAML keeps it a string rather than an integer."
+            },
+            "serviceAccountEmail": {
+              "$ref": "common.schema.json#/$defs/nonEmptyString"
+            },
+            "workloadIdentityFederationPoolId": {
+              "$ref": "common.schema.json#/$defs/nonEmptyString"
+            },
+            "workloadIdentityFederationProviderId": {
+              "$ref": "common.schema.json#/$defs/nonEmptyString"
+            }
+          }
+        },
+        "aws": {
+          "type": "object",
+          "required": [
+            "roleArn"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "roleArn": {
+              "$ref": "common.schema.json#/$defs/nonEmptyString"
+            }
+          }
+        }
+      }
+    },
+    "blueprintEdges": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/nonEmptyString",
+          "description": "A single unconditional edge to the named stage."
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "stage",
+              "when"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "stage": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "description": "Name of the target stage, or end."
+              },
+              "when": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "description": "Prose condition the scope's agent evaluates to decide whether to take this edge."
+              }
+            }
+          }
+        }
+      ]
+    },
+    "blueprintStart": {
+      "type": "object",
+      "required": [
+        "to"
+      ],
+      "additionalProperties": false,
+      "description": "Where a task enters the scope.",
+      "properties": {
+        "to": {
+          "$ref": "#/$defs/blueprintEdges",
+          "description": "Entry edges, evaluated in order. Targets are stages of this scope; end is not valid here."
+        }
+      }
+    },
+    "blueprintStage": {
+      "type": "object",
+      "required": [
+        "to"
+      ],
+      "if": {
+        "required": [
+          "extends"
+        ]
+      },
+      "then": {
+        "properties": {
+          "worker": false,
+          "prompt": false,
+          "start": false,
+          "stages": false,
+          "params": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^/]*[^\\s/][^/]*$",
+              "not": {
+                "enum": [
+                  "start",
+                  "end",
+                  "foreman"
+                ]
+              }
+            },
+            "additionalProperties": {
+              "$ref": "common.schema.json#/$defs/promptParams"
+            }
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "worker"
+        ],
+        "properties": {
+          "staffing": false,
+          "workers": false,
+          "params": {
+            "$ref": "common.schema.json#/$defs/promptParams"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "description": "One stage of a scope. Declare exactly one of prompt (a leaf), stages (an inline scope, which also requires start), or extends (an imported scope).",
+      "properties": {
+        "extends": {
+          "$ref": "common.schema.json#/$defs/blueprintRef"
+        },
+        "staffing": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          },
+          "additionalProperties": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          }
+        },
+        "workers": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^warp/[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*$"
+          },
+          "additionalProperties": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString",
+            "pattern": "^[^/@\\\\]+$",
+            "description": "Agent directory name of the local Agent that replaces this hosted worker everywhere the base blueprint staffs it. To customize a hosted worker, declare a local Agent that extends it and name it here."
+          },
+          "description": "Replaces hosted workers of the extended blueprint with local Agents, keyed by the hosted worker (warp/<roster>/<name>). Only valid with extends."
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional human-readable summary of the stage, shown in the Blueprint details panel. Null clears it."
+        },
+        "displayName": {
+          "$ref": "common.schema.json#/$defs/nullableNonEmptyString",
+          "description": "Optional display label. Null clears it; the stage's identity for references and scope paths still comes from its mapping key."
+        },
+        "worker": {
+          "$ref": "common.schema.json#/$defs/nonEmptyString",
+          "description": "Agent directory name of the agent that executes this stage. When it matches the enclosing scope's worker the stage runs inline in that agent's conversation; otherwise the scope's agent dispatches it as a child run. Containment must be acyclic: a worker may not, directly or through other scopes, contain a scope that contains it, and the root worker cannot be staffed inside a nested scope."
+        },
+        "inputs": {
+          "type": "string",
+          "description": "Prose describing what the stage needs from the task so far. The scope's agent binds it from context when it runs the stage."
+        },
+        "outputs": {
+          "type": "string",
+          "description": "Prose describing what the stage must report back. The scope's agent reads it from the stage's result and uses it to evaluate the stage's edges."
+        },
+        "prompt": {
+          "description": "The procedure of a leaf stage: inline text or a file relative to the registered Factory directory. File contents use the same params grammar. Not valid together with stages.",
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/nonEmptyString"
+            },
+            {
+              "type": "object",
+              "required": [
+                "file"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "file": {
+                  "$ref": "common.schema.json#/$defs/nonEmptyString"
+                }
+              }
+            }
+          ]
+        },
+        "params": {
+          "type": "object"
+        },
+        "gates": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/blueprintGate"
+          },
+          "description": "Points at which the stage pauses to put a matter in front of a person, keyed by name in the order they are checked. Valid on leaf and scope stages. The stage's edges may read each gate's answer by name. Each gate's when, prompt, and outputs are shown with the stage definition to the agent that checks it (the dispatcher for a dispatched scope), so keep the gate's policy in the gate itself rather than restating it in a stage prompt."
+        },
+        "loopIn": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/blueprintGate"
+          },
+          "description": "Legacy read-only alias for gates, recognized so a file written before the rename keeps parsing. Author gates in new files; a rewrite emits gates."
+        },
+        "to": {
+          "$ref": "#/$defs/blueprintEdges",
+          "description": "Outgoing edges, evaluated in order once the stage finishes. Targets are sibling stages in the same scope or end, which completes the scope."
+        },
+        "start": {
+          "$ref": "#/$defs/blueprintStart",
+          "description": "Entry edges of a nested scope. Required with stages and not valid otherwise."
+        },
+        "stages": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^/]*[^\\s/][^/]*$",
+            "not": {
+              "enum": [
+                "start",
+                "end",
+                "foreman"
+              ]
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/blueprintStage"
+          },
+          "description": "Stages of this scope keyed by name, in workflow order. Names must be unique across the entire blueprint, including nested scopes, and must not contain /; start, end and foreman are reserved. End must be reachable from start. Stages may be disconnected and entered explicitly, including by stage-targeted automations."
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "extends"
+          ]
+        },
+        {
+          "required": [
+            "prompt"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "stages"
+                ]
+              },
+              {
+                "required": [
+                  "start"
+                ]
+              },
+              {
+                "required": [
+                  "extends"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "start",
+            "stages"
+          ],
+          "properties": {
+            "prompt": false,
+            "extends": false,
+            "params": false
+          }
+        }
+      ]
+    },
+    "blueprintGate": {
+      "type": "object",
+      "required": [
+        "prompt",
+        "outputs"
+      ],
+      "additionalProperties": false,
+      "description": "One gate: a pause for human input that the stage's agent opens when the condition holds, or the dispatching agent opens for a dispatched scope. The stage does not finish, and no edge is taken, until the person's reply fills outputs.",
+      "properties": {
+        "when": {
+          "$ref": "common.schema.json#/$defs/nonEmptyString",
+          "description": "Prose condition on the stage's work, evaluated as the work proceeds and once more when it is done. Omitted means the gate opens when the stage's work is done."
+        },
+        "prompt": {
+          "$ref": "common.schema.json#/$defs/nonEmptyString",
+          "description": "How to put the matter in front of the person: what they are deciding and what to prepare so they can decide it."
+        },
+        "outputs": {
+          "$ref": "common.schema.json#/$defs/nonEmptyString",
+          "description": "The set of acceptable answers. A reply that does not fill it leaves the gate open; the stage's edges use this vocabulary."
+        }
+      }
+    }
+  }
+}

@@ -65,13 +65,12 @@ class StreamingCliHarness:
     def _stream(
         self,
         run: Callable[[Callable[[HarnessEvent], None]], None],
-        *,
-        stop_on_exit: bool = False,
     ) -> Iterator[HarnessEvent]:
         """Yield events emitted by run(emit), with heartbeats while it is quiet.
 
-        run must set self._result before returning. With stop_on_exit, closing
-        the generator early also cancels the CLI and bounds the join.
+        run must set self._result before returning. Closing the generator early
+        always cancels the CLI and bounds the join, so a CLI never outlives its
+        consumer.
         """
         events: queue.Queue = queue.Queue()
 
@@ -93,9 +92,6 @@ class StreamingCliHarness:
                 if event is None:
                     break
                 yield event
-            if not stop_on_exit:
-                thread.join()
         finally:
-            if stop_on_exit:
-                self._cancel.set()
-                thread.join(timeout=5)
+            self._cancel.set()
+            thread.join(timeout=5)

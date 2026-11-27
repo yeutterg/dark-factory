@@ -10,6 +10,8 @@ from pathlib import Path
 from dark_factory.adapters.harness.base import HarnessEvent, HarnessResult
 from dark_factory.adapters.harness.credential_file import credential_file
 from dark_factory.adapters.harness.streaming import JsonLines, StreamingCliHarness
+from dark_factory.protected import protected_paths
+from dark_factory.redaction import redact
 from dark_factory.runner import CommandRunner
 
 
@@ -45,8 +47,7 @@ def redacted_cli_error(code: int, stderr: bytes, auth: dict) -> str:
     api_key = auth.get("OPENAI_API_KEY")
     if isinstance(api_key, str) and api_key:
         secrets.append(api_key)
-    for secret in secrets:
-        detail = detail.replace(secret, "[REDACTED]")
+    detail = redact(detail, secrets)
     return f"Codex CLI exited {code}" + (f": {detail}" if detail else "")
 
 
@@ -128,15 +129,7 @@ class CodexHarness(StreamingCliHarness):
             if not path.is_relative_to(workspace.resolve()):
                 raise ValueError("Codex writable path escapes workspace")
             filesystem[str(path)] = "write"
-        for value in [
-            *extra.get("protected", []),
-            ".git",
-            ".pi",
-            ".claude",
-            ".mcp.json",
-            ".agents",
-            ".github",
-        ]:
+        for value in protected_paths(extra.get("protected", [])):
             path = (workspace / value).resolve()
             if not path.is_relative_to(workspace.resolve()):
                 raise ValueError("Codex protected path escapes workspace")
@@ -274,7 +267,4 @@ class CodexHarness(StreamingCliHarness):
                 )
 
         # Leaving the generator early stops Codex before credentials are erased.
-        yield from self._stream(run, stop_on_exit=True)
-
-    def attach_command(self, session_id):
-        return [self.binary, "resume", session_id]
+        yield from self._stream(run)

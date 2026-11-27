@@ -11,6 +11,7 @@ from pathlib import Path
 from dark_factory.adapters.harness.base import HarnessEvent, HarnessResult
 from dark_factory.adapters.harness.streaming import JsonLines, StreamingCliHarness
 from dark_factory.runner import CommandRunner
+from dark_factory.secrets import secret
 
 
 def validate_pricing(pricing, evidence, required=False):
@@ -301,37 +302,11 @@ class PiHarness(StreamingCliHarness):
 
         yield from self._stream(run)
 
-    def attach_command(self, session_id: str) -> list[str]:
-        return [self.binary, "--session", session_id]
-
 
 def resolve_credential(route: dict, binary: str = "pi") -> str:
-    """Only Pi routes may discover Pi's native provider authentication."""
-    import os
-    import subprocess
+    """The route's credential from its named environment or secret file.
 
-    name = route.get("auth_env") or ""
-    if not name:
-        return ""
-    secret = os.environ.get(name, "")
-    if secret:
-        return secret
-    if route.get("project_id"):
-        return ""
-    if route.get("provider") == "together" and name == "TOGETHER_API_KEY":
-        proc = subprocess.run(
-            [
-                shutil.which(binary) or binary,
-                "auth",
-                "print-api-key",
-                "--provider",
-                "together",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
-        if proc.returncode == 0:
-            return proc.stdout.strip()
-    return ""
+    Pi's own stored login is never read: a route names its credential
+    explicitly, so no host login can stand in for it.
+    """
+    return secret(route.get("auth_env") or "")

@@ -169,5 +169,10 @@ def test_prompt_override(tmp_path: Path) -> None:
     from dark_factory.config import load_prompt
 
     body, digest = load_prompt(cfg, "planner", Path("src/dark_factory/agents/prompts"))
-    assert body == "custom planner prompt"
+    packaged = Path("src/dark_factory/agents/prompts")
+    assert body.startswith("custom planner prompt")
+    # An override replaces the guidance only; the output contract is always appended.
+    assert body.rstrip().endswith(
+        (packaged / "planner.contract.md").read_text().rstrip()
+    )
     assert digest

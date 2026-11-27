@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
 import shutil
 import sqlite3
 import subprocess
-from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -233,14 +231,7 @@ def backup(store, destination: Path) -> None:
     destination = destination.resolve()
     if destination.exists() or destination.is_relative_to(store.state_dir.resolve()):
         raise ValueError("backup needs a new directory outside controller state")
-    with store.transaction(), ExitStack() as owned:
-        owner_path = store.state_dir / "workflow" / "owner.lock"
-        if owner_path.exists():
-            owner = owned.enter_context(owner_path.open("a+"))
-            try:
-                fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                raise ValueError("drain the workflow runtime before backup") from None
+    with store.transaction():
         if store.one(
             "SELECT id FROM attempts WHERE status IN ('leased','running','cancelling')"
         ):
@@ -260,7 +251,6 @@ def backup(store, destination: Path) -> None:
             "workspaces",
             "inputs",
             "runtime",
-            "workflow",
             "dispatch",
             "work-items",
         ):
@@ -278,7 +268,7 @@ def backup(store, destination: Path) -> None:
             destination,
             {
                 "kind": "controller-backup",
-                "schema_version": 2,
+                "schema_version": 3,
                 "origin": str(store.state_dir.resolve()),
             },
         )
@@ -290,12 +280,20 @@ def restore(source: Path, destination: Path) -> None:
             "restore destination must not exist; never overwrite live state"
         )
     metadata = verify(source)
-    if (
-        metadata.get("kind") != "controller-backup"
-        or metadata.get("schema_version") != 2
-    ):
+    if metadata.get("kind") != "controller-backup" or metadata.get(
+        "schema_version"
+    ) not in {2, 3}:
         raise ValueError("incompatible backup")
     shutil.copytree(source, destination, symlinks=True)
+    try:
+        _record_restore(destination, metadata)
+    except BaseException:
+        # A failed restore leaves nothing behind that could be mistaken for state.
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
+
+
+def _record_restore(destination: Path, metadata: dict) -> None:
     conn = sqlite3.connect(destination / "factory.sqlite")
     try:
         previous = conn.execute(
@@ -321,3 +319,8 @@ def restore(source: Path, destination: Path) -> None:
             raise ValueError("restored SQLite foreign key check failed")
     finally:
         conn.close()
+    # Recording the restore changed the database; seal again so the manifest
+    # describes what is actually on disk and the restored tree still verifies.
+    for sidecar in ("factory.sqlite-wal", "factory.sqlite-shm"):
+        (destination / sidecar).unlink(missing_ok=True)
+    seal(destination, {k: v for k, v in metadata.items() if k != "files"})

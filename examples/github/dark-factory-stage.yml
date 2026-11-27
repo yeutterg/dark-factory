@@ -1,0 +1,47 @@
+# Reusable stage workflow for Dark Factory's hosted runners (GitHub Actions or Blacksmith).
+# Copy it into the repository's .github/workflows/. Dark Factory dispatches it with the
+# stage, the exact commit and the steps; every runner runs the same argv, so local and
+# hosted evidence have the same shape. The run-name carries the request id and the
+# commit so the factory finds exactly this run and no other.
+name: dark-factory-stage
+run-name: dark-factory ${{ inputs.request_id }} ${{ inputs.commit }} ${{ inputs.kind }}/${{ inputs.stage }}
+on:
+  workflow_dispatch:
+    inputs:
+      request_id: {required: true, type: string}
+      stage: {required: true, type: string}
+      kind: {required: true, type: string}
+      commit: {required: true, type: string}
+      steps_json: {required: true, type: string}
+      runs_on: {required: true, type: string}
+permissions:
+  contents: read
+jobs:
+  stage:
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.commit }}
+      - name: Run the stage's steps
+        env:
+          FACTORY_STAGE: ${{ inputs.stage }}
+          FACTORY_KIND: ${{ inputs.kind }}
+          FACTORY_COMMIT: ${{ inputs.commit }}
+          STEPS_JSON: ${{ inputs.steps_json }}
+        run: |
+          export FACTORY_OUT="$RUNNER_TEMP/factory-out"
+          mkdir -p "$FACTORY_OUT"
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          for argv in json.loads(os.environ["STEPS_JSON"]):
+              if subprocess.run(argv).returncode:
+                  sys.exit(1)
+          PY
+          echo "FACTORY_OUT=$FACTORY_OUT" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: stage-${{ inputs.kind }}-${{ inputs.stage }}
+          path: ${{ env.FACTORY_OUT }}
+          if-no-files-found: ignore

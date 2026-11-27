@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "router.schema.json",
+  "$comment": "Generated from the Factory file parser and the catalogues its apply path validates against. Edit logic/factoryfile/schema, then regenerate; a hand edit is reverted by the drift test.",
+  "title": "routers/<slug>.yaml (v1alpha1)",
+  "description": "Factory-owned model router. Named routers use routers/<slug>.yaml. name is a display label.",
+  "type": "object",
+  "required": [
+    "type",
+    "default"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "complexity",
+        "prompt"
+      ]
+    },
+    "default": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString"
+    },
+    "routing": {}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "complexity"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "routing": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "easy": {
+                    "oneOf": [
+                      {
+                        "$ref": "common.schema.json#/$defs/nonEmptyString"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "medium": {
+                    "oneOf": [
+                      {
+                        "$ref": "common.schema.json#/$defs/nonEmptyString"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "hard": {
+                    "oneOf": [
+                      {
+                        "$ref": "common.schema.json#/$defs/nonEmptyString"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "prompt"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "routing": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "description",
+                    "model"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "$ref": "common.schema.json#/$defs/nonEmptyString"
+                    },
+                    "model": {
+                      "$ref": "common.schema.json#/$defs/nonEmptyString"
+                    }
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

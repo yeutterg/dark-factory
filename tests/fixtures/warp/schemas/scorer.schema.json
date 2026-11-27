@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "scorer.schema.json",
+  "$comment": "Generated from the Factory file parser and the catalogues its apply path validates against. Edit logic/factoryfile/schema, then regenerate; a hand edit is reverted by the drift test.",
+  "title": "scorers/<slug>/scorer.md frontmatter (v1alpha1)",
+  "description": "YAML frontmatter of a Scorer file. The directory segment is a stable filesystem slug only; the Scorer's identity is the required name field, so renaming it is a content edit rather than a directory move. The Markdown body is its required rubric.",
+  "type": "object",
+  "required": [
+    "name",
+    "labels",
+    "passingScore"
+  ],
+  "oneOf": [
+    {
+      "required": [
+        "workers"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "agents"
+            ]
+          },
+          {
+            "required": [
+              "stages"
+            ]
+          },
+          {
+            "required": [
+              "scope_mode"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "required": [
+        "agents"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "workers"
+            ]
+          },
+          {
+            "required": [
+              "stages"
+            ]
+          },
+          {
+            "required": [
+              "scope_mode"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "required": [
+        "stages"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "workers"
+            ]
+          },
+          {
+            "required": [
+              "agents"
+            ]
+          },
+          {
+            "required": [
+              "scope_mode"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "required": [
+        "scope_mode"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "workers"
+            ]
+          },
+          {
+            "required": [
+              "agents"
+            ]
+          },
+          {
+            "required": [
+              "stages"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "scope_mode": {
+      "type": "string",
+      "const": "task",
+      "description": "Evaluate the complete logical task tree. Mutually exclusive with individual worker or stage selection."
+    },
+    "name": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString",
+      "description": "Scorer name. This is the Scorer's identity; the directory segment is only a stable filesystem slug."
+    },
+    "description": {
+      "$ref": "common.schema.json#/$defs/optionalText"
+    },
+    "runner": {
+      "$ref": "common.schema.json#/$defs/runnerRef"
+    },
+    "secrets": {
+      "$ref": "common.schema.json#/$defs/secrets"
+    },
+    "mcpServers": {
+      "$ref": "common.schema.json#/$defs/mcpServers"
+    },
+    "workers": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          },
+          {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString"
+              }
+            }
+          }
+        ]
+      },
+      "description": "Workers scored by this definition. Each invocation includes its connected ad-hoc work, stopping at named-agent boundaries. Older runs without recorded agent identity use anchor-only evidence."
+    },
+    "agents": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          },
+          {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString"
+              }
+            }
+          }
+        ]
+      },
+      "deprecated": true,
+      "description": "Deprecated alias of workers. Set only one of the two."
+    },
+    "output": {
+      "type": "string",
+      "enum": [
+        "classification"
+      ],
+      "description": "Scorer output form."
+    },
+    "labels": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "description": "Classifications this Scorer may return. Values must be unique, and the set must contain at least one label scoring at or above passingScore and at least one below it; neither rule is expressible here, so both are reported by the parser.",
+      "items": {
+        "type": "object",
+        "required": [
+          "score",
+          "value"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "value": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          },
+          "description": {
+            "$ref": "common.schema.json#/$defs/optionalText"
+          },
+          "score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "passingScore": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "samplingRate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Percentage of eligible runs to score. Defaults to 10. The value is rounded to two decimal places before it is range-checked, and 0 stops automatic scoring."
+    },
+    "model": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString"
+    },
+    "selfImprovement": {
+      "type": "boolean",
+      "description": "Defaults to false."
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "common.schema.json#/$defs/nonEmptyString"
+      },
+      "description": "Globally unique blueprint stage names. Requires a blueprint. Mutually exclusive with workers."
+    }
+  }
+}

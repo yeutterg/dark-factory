@@ -1,0 +1,426 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "runner.schema.json",
+  "$comment": "Generated from the Factory file parser and the catalogues its apply path validates against. Edit logic/factoryfile/schema, then regenerate; a hand edit is reverted by the drift test.",
+  "title": "runners/<name>.yaml (v1alpha1)",
+  "description": "A Runner document. The Runner's name comes from the file name, never from a field.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "prewarmedPool": {
+      "$ref": "common.schema.json#/$defs/prewarmedPool",
+      "description": "Standbys run setup commands before any repository clone; setup commands must not require the repositories."
+    },
+    "workerHost": {
+      "$ref": "common.schema.json#/$defs/workerHost"
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Linux-only sandbox tools; every extra sidecar adds an image pull on each boot, while Direct-backend hosts must install harnesses and Xvfb themselves.",
+      "properties": {
+        "harnesses": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "claude-code",
+              "codex",
+              "gemini",
+              "pi"
+            ]
+          },
+          "description": "Additional harness sidecars; aliases of the same harness cannot be repeated and Oz is always available."
+        },
+        "computerUse": {
+          "type": "boolean"
+        }
+      }
+    },
+    "description": {
+      "$ref": "common.schema.json#/$defs/optionalText"
+    },
+    "setupCommands": {
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "description": "Shell commands run while preparing the sandbox."
+    },
+    "instanceShape": {
+      "type": "object",
+      "required": [
+        "memoryGb",
+        "vcpus"
+      ],
+      "additionalProperties": false,
+      "description": "Compute size for the sandbox. Omit it to take the workspace default.",
+      "properties": {
+        "memoryGb": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "vcpus": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "failureSessionRetentionMinutes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 60,
+      "description": "When set (1-60 minutes), a failed run using this runner keeps its session open for this many minutes so it can be inspected. Omit to defer to the environment's own setting."
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "os": {
+          "type": "string",
+          "enum": [
+            "linux",
+            "macos",
+            "windows"
+          ],
+          "description": "Defaults to linux when omitted."
+        },
+        "arch": {
+          "type": "string",
+          "enum": [
+            "aarch64",
+            "x86_64"
+          ],
+          "description": "Defaults to x86_64 on linux. Supported pairs: linux/aarch64, linux/x86_64, macos/aarch64, windows/x86_64."
+        },
+        "linux": {
+          "type": "object",
+          "required": [
+            "dockerImage"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dockerImage": {
+              "$ref": "common.schema.json#/$defs/nonEmptyString",
+              "description": "Container image the Linux sandbox boots."
+            },
+            "registryCredentialSecretName": {
+              "$ref": "common.schema.json#/$defs/secretName",
+              "description": "Name of a managed docker_registry secret to authenticate the image pull. Its registry host must match dockerImage's."
+            }
+          }
+        },
+        "mac": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "type": "string",
+              "enum": [
+                "14",
+                "15",
+                "26",
+                "27"
+              ],
+              "description": "Quote the value so YAML keeps it a string. Defaults to 26 when the mac section is omitted."
+            }
+          }
+        },
+        "strict": {
+          "type": "boolean",
+          "description": "When true, the runner's effective OS and architecture (defaults included) are a hard scheduling requirement on self-hosted Kubernetes workers. Defaults to false, where only explicitly set axes are forwarded as a preference."
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "$ref": "#/$defs/declaresLinuxOrDefault"
+      },
+      "then": {
+        "required": [
+          "platform"
+        ],
+        "properties": {
+          "platform": {
+            "required": [
+              "linux"
+            ],
+            "not": {
+              "required": [
+                "mac"
+              ]
+            },
+            "properties": {
+              "arch": {
+                "enum": [
+                  "aarch64",
+                  "x86_64"
+                ]
+              }
+            }
+          },
+          "instanceShape": {
+            "properties": {
+              "memoryGb": {
+                "type": "integer",
+                "minimum": 1,
+                "x-warp-power-of-two": true
+              },
+              "vcpus": {
+                "type": "integer",
+                "minimum": 1,
+                "x-warp-power-of-two": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "$ref": "#/$defs/declaresMacOS"
+      },
+      "then": {
+        "not": {
+          "required": [
+            "capabilities"
+          ]
+        },
+        "properties": {
+          "platform": {
+            "not": {
+              "required": [
+                "linux"
+              ]
+            },
+            "properties": {
+              "arch": {
+                "enum": [
+                  "aarch64"
+                ]
+              }
+            }
+          },
+          "instanceShape": {
+            "oneOf": [
+              {
+                "required": [
+                  "memoryGb",
+                  "vcpus"
+                ],
+                "properties": {
+                  "memoryGb": {
+                    "const": 7
+                  },
+                  "vcpus": {
+                    "const": 4
+                  }
+                }
+              },
+              {
+                "required": [
+                  "memoryGb",
+                  "vcpus"
+                ],
+                "properties": {
+                  "memoryGb": {
+                    "const": 14
+                  },
+                  "vcpus": {
+                    "const": 6
+                  }
+                }
+              },
+              {
+                "required": [
+                  "memoryGb",
+                  "vcpus"
+                ],
+                "properties": {
+                  "memoryGb": {
+                    "const": 14
+                  },
+                  "vcpus": {
+                    "const": 8
+                  }
+                }
+              },
+              {
+                "required": [
+                  "memoryGb",
+                  "vcpus"
+                ],
+                "properties": {
+                  "memoryGb": {
+                    "const": 28
+                  },
+                  "vcpus": {
+                    "const": 12
+                  }
+                }
+              },
+              {
+                "required": [
+                  "memoryGb",
+                  "vcpus"
+                ],
+                "properties": {
+                  "memoryGb": {
+                    "const": 56
+                  },
+                  "vcpus": {
+                    "const": 12
+                  }
+                }
+              }
+            ],
+            "description": "macOS sandboxes run on a fixed set of shapes."
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "$ref": "#/$defs/declaresWindows"
+      },
+      "then": {
+        "not": {
+          "required": [
+            "capabilities"
+          ]
+        },
+        "properties": {
+          "platform": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "linux"
+                  ]
+                },
+                {
+                  "required": [
+                    "mac"
+                  ]
+                }
+              ]
+            },
+            "properties": {
+              "arch": {
+                "enum": [
+                  "x86_64"
+                ]
+              }
+            }
+          },
+          "instanceShape": {
+            "properties": {
+              "memoryGb": {
+                "type": "integer",
+                "minimum": 1,
+                "x-warp-power-of-two": true
+              },
+              "vcpus": {
+                "type": "integer",
+                "minimum": 1,
+                "x-warp-power-of-two": true
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "declaresMacOS": {
+      "type": "object",
+      "required": [
+        "platform"
+      ],
+      "properties": {
+        "platform": {
+          "type": "object",
+          "required": [
+            "os"
+          ],
+          "properties": {
+            "os": {
+              "const": "macos"
+            }
+          }
+        }
+      }
+    },
+    "declaresWindows": {
+      "type": "object",
+      "required": [
+        "platform"
+      ],
+      "properties": {
+        "platform": {
+          "type": "object",
+          "required": [
+            "os"
+          ],
+          "properties": {
+            "os": {
+              "const": "windows"
+            }
+          }
+        }
+      }
+    },
+    "declaresLinuxOrDefault": {
+      "anyOf": [
+        {
+          "not": {
+            "required": [
+              "platform"
+            ]
+          }
+        },
+        {
+          "required": [
+            "platform"
+          ],
+          "properties": {
+            "platform": {
+              "not": {
+                "required": [
+                  "os"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "platform"
+          ],
+          "properties": {
+            "platform": {
+              "required": [
+                "os"
+              ],
+              "properties": {
+                "os": {
+                  "const": "linux"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

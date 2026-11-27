@@ -1,0 +1,12 @@
+description: >-
+  This runner supports work routed to the self-hosted worker's Docker
+  backend. Its platform must match the Docker daemon, which runs
+  Linux amd64 or arm64 containers.
+instanceShape:
+  vcpus: 4
+  memoryGb: 8
+platform:
+  os: linux
+  arch: x86_64
+  linux:
+    dockerImage: ubuntu:24.04

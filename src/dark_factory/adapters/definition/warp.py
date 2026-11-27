@@ -15,8 +15,9 @@ from typing import Any
 import yaml
 
 FORMAT = "warp-v1alpha1"
-MAX_FILES = 500
-MAX_FILE_BYTES = 1_000_000
+MAX_FILES = 256
+MAX_FILE_BYTES = 256 * 1024
+MAX_TOTAL_BYTES = 2 * 1024 * 1024
 
 FACTORY_FIELDS = {
     "schemaVersion",
@@ -46,6 +47,7 @@ FACTORY_FIELDS = {
 }
 AGENT_FIELDS = {
     "agentType",
+    "workerRole",
     "computerUseModel",
     "credentialStrategy",
     "description",
@@ -91,6 +93,26 @@ RUNNER_FIELDS = {
     "workerHost",
 }
 ROLE_TYPES = {"SPEC": "planner", "IMPLEMENT": "coder", "REVIEW": "reviewer"}
+AGENT_TYPES = {
+    "CUSTOM",
+    "FOREMAN",
+    "IMPLEMENT",
+    "MAIN",
+    "REVIEW",
+    "SPEC",
+    "TRIAGE",
+    "VERIFY",
+}
+# Harness names a Warp agent may request, and the local adapter each corresponds to.
+HARNESS_ADAPTERS = {
+    "claude": "claude-code",
+    "claude-code": "claude-code",
+    "codex": "codex",
+    "pi": "pi",
+}
+HARNESS_TYPES = {"claude", "claude-code", "codex", "gemini", "oz", "pi"}
+RUNNER_OS = {"linux", "macos", "windows"}
+IMPROVEMENT_DIR = "self-improvement"
 KNOWN_RESOURCE_DIRS = {
     "agents",
     "automations",
@@ -100,6 +122,7 @@ KNOWN_RESOURCE_DIRS = {
     "scorers",
     "skills",
     "webhooks",
+    IMPROVEMENT_DIR,
 }
 
 
@@ -128,6 +151,82 @@ _UniqueKeyLoader.add_constructor(
 )
 
 
+class _Tree:
+    """One read of the whole tree.
+
+    Every file is read, size-checked and hashed exactly once, here. Everything
+    the reader later parses comes from these bytes, so what is digested and what
+    is used cannot diverge.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.blobs: dict[str, bytes] = {}
+        self.files: dict[str, str] = {}
+        total = 0
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(root)
+            if ".git" in relative.parts:
+                continue
+            if path.is_symlink():
+                raise WarpDefinitionError(
+                    f"definition resources cannot be symlinks: {relative}"
+                )
+            if not path.is_file():
+                continue
+            if len(self.blobs) >= MAX_FILES:
+                raise WarpDefinitionError(
+                    f"definition contains more than {MAX_FILES} files"
+                )
+            data = path.read_bytes()
+            if len(data) > MAX_FILE_BYTES:
+                raise WarpDefinitionError(
+                    f"definition resource is larger than {MAX_FILE_BYTES // 1024} KiB: "
+                    f"{relative}"
+                )
+            total += len(data)
+            if total > MAX_TOTAL_BYTES:
+                raise WarpDefinitionError(
+                    f"definition is larger than {MAX_TOTAL_BYTES // (1024 * 1024)} MiB"
+                )
+            name = relative.as_posix()
+            self.blobs[name] = data
+            self.files[name] = hashlib.sha256(data).hexdigest()
+
+    def exists(self, relative: str) -> bool:
+        return relative in self.blobs
+
+    def text(self, relative: str) -> str:
+        if relative not in self.blobs:
+            raise WarpDefinitionError(f"definition resource is missing: {relative}")
+        try:
+            text = self.blobs[relative].decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise WarpDefinitionError(
+                f"definition resource is not UTF-8: {relative}"
+            ) from exc
+        return text.removeprefix("﻿")
+
+    def directories(self, parent: str) -> list[str]:
+        prefix = parent + "/" if parent else ""
+        names = {
+            name[len(prefix) :].split("/", 1)[0]
+            for name in self.blobs
+            if name.startswith(prefix) and "/" in name[len(prefix) :]
+        }
+        return sorted(names)
+
+    def children(self, parent: str, suffixes: tuple[str, ...]) -> list[str]:
+        prefix = parent + "/" if parent else ""
+        return sorted(
+            name
+            for name in self.blobs
+            if name.startswith(prefix)
+            and "/" not in name[len(prefix) :]
+            and name.endswith(suffixes)
+        )
+
+
 def _unknown(
     value: dict[str, Any],
     allowed: set[str],
@@ -144,31 +243,6 @@ def _unknown(
     warnings.append(message)
 
 
-def _read(root: Path, path: Path, files: dict[str, str]) -> str:
-    try:
-        relative = path.relative_to(root)
-    except ValueError as exc:
-        raise WarpDefinitionError("definition resource escapes its root") from exc
-    if path.is_symlink():
-        raise WarpDefinitionError(
-            f"definition resources cannot be symlinks: {relative}"
-        )
-    if not path.is_file():
-        raise WarpDefinitionError(f"definition resource is missing: {relative}")
-    data = path.read_bytes()
-    if len(data) > MAX_FILE_BYTES:
-        raise WarpDefinitionError(f"definition resource is too large: {relative}")
-    if len(files) >= MAX_FILES and relative.as_posix() not in files:
-        raise WarpDefinitionError("definition contains too many resource files")
-    files[relative.as_posix()] = hashlib.sha256(data).hexdigest()
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise WarpDefinitionError(
-            f"definition resource is not UTF-8: {relative}"
-        ) from exc
-
-
 def _yaml(text: str, label: str) -> dict[str, Any]:
     try:
         if any(
@@ -177,68 +251,125 @@ def _yaml(text: str, label: str) -> dict[str, Any]:
         ):
             raise WarpDefinitionError(f"YAML aliases are not allowed in {label}")
         value = yaml.load(text, Loader=_UniqueKeyLoader)
-    except (yaml.YAMLError, WarpDefinitionError) as exc:
-        if isinstance(exc, WarpDefinitionError):
-            raise
+    except WarpDefinitionError:
+        raise
+    except (yaml.YAMLError, TypeError, RecursionError, ValueError) as exc:
         raise WarpDefinitionError(f"invalid YAML in {label}: {exc}") from exc
+    if value is None:
+        value = {}
     if not isinstance(value, dict):
         raise WarpDefinitionError(f"{label} must contain a YAML object")
-    if not all(isinstance(key, str) for key in value):
-        raise WarpDefinitionError(f"{label} keys must be strings")
+    bad = [key for key in value if not isinstance(key, str)]
+    if bad:
+        raise WarpDefinitionError(
+            f"{label} keys must be strings (found {bad[0]!r}; quote YAML 1.1 words "
+            "such as on, off, yes and no)"
+        )
     return value
 
 
 def _frontmatter(text: str, label: str) -> tuple[dict[str, Any], str]:
     lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
+    if not lines or lines[0].rstrip() != "---":
         raise WarpDefinitionError(f"{label} needs YAML frontmatter")
     try:
-        end = next(i for i, line in enumerate(lines[1:], 1) if line.strip() == "---")
+        end = next(i for i, line in enumerate(lines[1:], 1) if line.rstrip() == "---")
     except StopIteration as exc:
         raise WarpDefinitionError(f"{label} has unterminated YAML frontmatter") from exc
-    frontmatter = _yaml("\n".join(lines[1:end]) or "{}", label)
+    frontmatter = _yaml("\n".join(lines[1:end]), label)
     body = "\n".join(lines[end + 1 :]).strip()
     return frontmatter, body
 
 
-def _resource_files(root: Path, directory: Path, files: dict[str, str]) -> None:
-    for path in sorted(directory.rglob("*")):
-        if path.is_symlink():
-            raise WarpDefinitionError(
-                f"definition resources cannot be symlinks: {path.relative_to(root)}"
-            )
-        if path.is_file():
-            _read(root, path, files)
+def strip_frontmatter(text: str) -> str:
+    """The Markdown body of a file that may begin with YAML frontmatter."""
+    text = text.removeprefix("﻿")
+    lines = text.splitlines()
+    if lines and lines[0].rstrip() == "---":
+        for i, line in enumerate(lines[1:], 1):
+            if line.rstrip() == "---":
+                return "\n".join(lines[i + 1 :]).strip()
+    return text.strip()
+
+
+def _agent_type(frontmatter: dict[str, Any], label: str) -> str:
+    if "agentType" in frontmatter and "workerRole" in frontmatter:
+        raise WarpDefinitionError(f"{label} sets both agentType and workerRole")
+    value = frontmatter.get("agentType", frontmatter.get("workerRole"))
+    if value is None:
+        return "CUSTOM"  # An omitted or null type resolves to CUSTOM.
+    if value not in AGENT_TYPES:
+        raise WarpDefinitionError(
+            f"{label} agentType must be one of {', '.join(sorted(AGENT_TYPES))} "
+            f"(uppercase), not {value!r}"
+        )
+    return str(value)
+
+
+def _model_and_harness(
+    frontmatter: dict[str, Any], defaults: dict[str, Any], label: str
+) -> tuple[str | None, str | None]:
+    """(requested model, requested harness type); model and harness are exclusive."""
+    model, harness = frontmatter.get("model"), frontmatter.get("harness")
+    if model and harness:
+        raise WarpDefinitionError(f"{label} sets both model and harness")
+    if harness is not None:
+        if not isinstance(harness, dict):
+            raise WarpDefinitionError(f"{label} harness must be an object")
+        kind = harness.get("type")
+        if kind is not None and kind not in HARNESS_TYPES:
+            raise WarpDefinitionError(f"{label} harness type {kind!r} is not known")
+        chosen = harness.get("model")
+        return (chosen if isinstance(chosen, str) and chosen else None), kind
+    if model:
+        return (model if isinstance(model, str) else None), None
+    inherited = defaults.get("harness")
+    if isinstance(inherited, dict):
+        return None, inherited.get("type")
+    return (
+        defaults.get("model") if isinstance(defaults.get("model"), str) else None
+    ), None
+
+
+def _is_route_alias(model: str, routers: set[str]) -> bool:
+    """A model name that means 'use the approved local route', not a model id."""
+    return (
+        model == "auto"
+        or model.startswith("auto-")
+        or model.startswith("custom:")
+        or model in routers
+    )
+
+
+def _skill_snapshot(tree: _Tree, directory: str) -> dict[str, Any]:
+    prefix = directory + "/"
+    files = {
+        name[len(prefix) :]: digest
+        for name, digest in tree.files.items()
+        if name.startswith(prefix)
+    }
+    return {"body": tree.text(directory + "/SKILL.md"), "files": files}
 
 
 def _load_skills(
-    root: Path,
-    directory: Path,
-    files: dict[str, str],
+    tree: _Tree,
+    parent: str,
+    snapshots: dict[str, dict[str, Any]],
     warnings: list[str],
 ) -> list[str]:
-    if not directory.exists():
-        return []
-    if directory.is_symlink() or not directory.is_dir():
-        raise WarpDefinitionError(
-            f"invalid skills directory: {directory.relative_to(root)}"
-        )
     result: list[str] = []
-    for child in sorted(directory.iterdir()):
-        if child.is_symlink():
-            raise WarpDefinitionError(
-                f"definition resources cannot be symlinks: {child.relative_to(root)}"
-            )
-        if child.is_dir() and (child / "SKILL.md").is_file():
-            _resource_files(root, child, files)
-            result.append(str(child.resolve()))
-        elif child.is_file() and child.suffix in {".yaml", ".yml"}:
-            _read(root, child, files)
-            warnings.append(
-                f"external skill reference is recognized but not executed: {child.relative_to(root)}"
-            )
-        elif child.name not in {"README.md"}:
-            warnings.append(f"unrecognized skill resource: {child.relative_to(root)}")
+    for name in tree.directories(parent):
+        directory = f"{parent}/{name}"
+        if tree.exists(directory + "/SKILL.md"):
+            key = str((tree.root / directory).resolve())
+            snapshots[key] = _skill_snapshot(tree, directory)
+            result.append(key)
+        else:
+            warnings.append(f"unrecognized skill resource: {directory}")
+    for name in tree.children(parent, (".yaml", ".yml")):
+        warnings.append(
+            f"external skill reference is recognized but not executed: {name}"
+        )
     return result
 
 
@@ -246,31 +377,53 @@ def _digest(files: dict[str, str]) -> str:
     return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
 
 
-def load_definition(path: str | Path, *, strict: bool = True) -> dict[str, Any]:
-    """Load a Warp definition tree without granting any of its requested access."""
+def load_definition(
+    path: str | Path,
+    *,
+    strict: bool = True,
+    roles: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Load a Warp definition tree without granting any of its requested access.
+
+    ``roles`` names, for each mapped role (planner, coder, reviewer), the agent
+    to use when several agents share a type. A single candidate needs no entry.
+    """
 
     requested_path = Path(path)
     if requested_path.is_symlink():
         raise WarpDefinitionError("definition root cannot be a symlink")
     supplied = requested_path.resolve()
     root = supplied.parent if supplied.name == "factory.yaml" else supplied
-    factory_path = (
-        supplied if supplied.name == "factory.yaml" else root / "factory.yaml"
-    )
     if not root.is_dir() or root.is_symlink():
         raise WarpDefinitionError(f"definition root does not exist: {root}")
-
-    files: dict[str, str] = {}
+    tree = _Tree(root)
     warnings: list[str] = []
-    factory = _yaml(_read(root, factory_path, files), "factory.yaml")
-    _unknown(factory, FACTORY_FIELDS, "factory.yaml", strict, warnings)
-    if factory.get("schemaVersion") != "v1alpha1":
+    resources: list[dict[str, str]] = []
+    roles = dict(roles or {})
+    if set(roles) - set(ROLE_TYPES.values()):
+        raise WarpDefinitionError(
+            "definition.roles may only name planner, coder or reviewer"
+        )
+
+    if not tree.exists("factory.yaml"):
+        raise WarpDefinitionError("factory.yaml is missing")
+    factory = _yaml(tree.text("factory.yaml"), "factory.yaml")
+    version = factory.get("schemaVersion")
+    if version == "v1alpha2" or (root / "workers").is_dir():
+        raise WarpDefinitionError(
+            "Warp v1alpha2 (blueprints and the workers/ directory) is not supported; "
+            "this reader implements v1alpha1"
+        )
+    if version != "v1alpha1":
         raise WarpDefinitionError("factory.yaml schemaVersion must be v1alpha1")
+    _unknown(factory, FACTORY_FIELDS, "factory.yaml", strict, warnings)
     if not isinstance(factory.get("name"), str) or not factory["name"].strip():
         raise WarpDefinitionError("factory.yaml name is required")
+    if "repositories" not in factory:
+        raise WarpDefinitionError("factory.yaml repositories is required")
 
     repositories: list[str] = []
-    raw_repositories = factory.get("repositories", [])
+    raw_repositories = factory["repositories"]
     if not isinstance(raw_repositories, list):
         raise WarpDefinitionError("factory.yaml repositories must be a list")
     for item in raw_repositories:
@@ -335,171 +488,249 @@ def load_definition(path: str | Path, *, strict: bool = True) -> dict[str, Any]:
             + ", ".join(default_access)
             + "; local policy does not grant them"
         )
-    if defaults.get("harness"):
+
+    # Runners and routers first, so references from agents and scorers can resolve.
+    runners: list[str] = []
+    for name in tree.children("runners", (".yaml", ".yml")):
+        stem = Path(name).stem
+        value = _yaml(tree.text(name), name)
+        _unknown(value, RUNNER_FIELDS, f"runner {stem}", strict, warnings)
+        platform = value.get("platform")
+        if platform is not None:
+            if not isinstance(platform, dict):
+                raise WarpDefinitionError(f"{name} platform must be an object")
+            if platform.get("os", "linux") not in RUNNER_OS:
+                raise WarpDefinitionError(
+                    f"{name} platform.os must be one of {', '.join(sorted(RUNNER_OS))}"
+                )
+        runners.append(stem)
+        resources.append(
+            {"kind": "runner", "name": stem, "status": "recognized-not-executed"}
+        )
+    if runners:
         warnings.append(
-            "the requested Warp harness is preserved, but approved local routes remain authoritative"
+            "runner files are validated, but the local execution profile remains authoritative"
+        )
+    routers = {Path(n).stem for n in tree.children("routers", (".yaml", ".yml"))}
+    for name in sorted(routers):
+        resources.append(
+            {"kind": "router", "name": name, "status": "recognized-not-executed"}
         )
 
+    def runner_exists(reference: Any, label: str) -> None:
+        if reference is not None and reference not in runners:
+            raise WarpDefinitionError(
+                f"{label} names runner {reference!r}, which is not declared under runners/"
+            )
+
+    runner_exists(defaults.get("runner"), "agentDefaults")
+
+    # Agents.
     agents: list[dict[str, Any]] = []
-    role_prompts: dict[str, str] = {}
+    candidates: dict[str, list[dict[str, Any]]] = {}
+    for name in tree.directories("agents"):
+        document = f"agents/{name}/agent.md"
+        if not tree.exists(document):
+            warnings.append(f"agent directory has no agent.md: {name}")
+            continue
+        frontmatter, body = _frontmatter(tree.text(document), document)
+        _unknown(frontmatter, AGENT_FIELDS, f"agent {name}", strict, warnings)
+        agent_type = _agent_type(frontmatter, document)
+        model, harness = _model_and_harness(frontmatter, defaults, document)
+        runner = frontmatter.get("runner", defaults.get("runner"))
+        runner_exists(runner, f"agent {name}")
+        role = ROLE_TYPES.get(agent_type)
+        record = {
+            "name": name,
+            "agent_type": agent_type,
+            "role": role,
+            "model": model,
+            "model_is_route_alias": bool(model and _is_route_alias(model, routers)),
+            "harness": harness,
+            "runner": runner,
+            "prompt": document,
+            "empty_prompt": not body,
+            "_body": body,
+        }
+        agents.append(record)
+        if role:
+            candidates.setdefault(role, []).append(record)
+        elif agent_type == "VERIFY":
+            warnings.append(
+                f"agent {name} (VERIFY) is recognized but not scheduled by the fixed workflow"
+            )
+        else:
+            warnings.append(
+                f"agent {name} ({agent_type}) is preserved but not scheduled by the fixed workflow"
+            )
+        requested_access = sorted(
+            key
+            for key in (
+                "secrets",
+                "mcpServers",
+                "networkPolicy",
+                "hooks",
+                "workerHost",
+                "environmentId",
+            )
+            if frontmatter.get(key)
+        )
+        if requested_access:
+            warnings.append(
+                f"agent {name} requests {', '.join(requested_access)}; local policy does not grant them"
+            )
+    if agents:
+        leaders = [a["name"] for a in agents if a["agent_type"] in {"FOREMAN", "MAIN"}]
+        if len(leaders) != 1:
+            message = (
+                f"exactly one agent must declare FOREMAN or MAIN (found {len(leaders)})"
+            )
+            if strict:
+                raise WarpDefinitionError(message)
+            warnings.append(message)
+
+    role_guidance: dict[str, str] = {}
     role_skills: dict[str, list[str]] = {}
     requested_models: dict[str, str] = {}
-    agents_dir = root / "agents"
-    if agents_dir.exists():
-        if agents_dir.is_symlink() or not agents_dir.is_dir():
-            raise WarpDefinitionError("agents must be a directory")
-        for child in agents_dir.iterdir():
-            if child.is_symlink():
+    requested_harness: dict[str, str] = {}
+    skill_snapshots: dict[str, dict[str, Any]] = {}
+    selected: dict[str, dict[str, Any]] = {}
+    for role, options in sorted(candidates.items()):
+        chosen_name = roles.get(role)
+        if chosen_name:
+            match = [a for a in options if a["name"] == chosen_name]
+            if not match:
                 raise WarpDefinitionError(
-                    f"definition resources cannot be symlinks: {child.relative_to(root)}"
+                    f"definition.roles.{role} names {chosen_name!r}, which is not a "
+                    f"{role} agent ({', '.join(a['name'] for a in options)})"
                 )
-        for directory in sorted(p for p in agents_dir.iterdir() if p.is_dir()):
-            document = directory / "agent.md"
-            if not document.is_file():
-                warnings.append(f"agent directory has no agent.md: {directory.name}")
-                continue
-            frontmatter, body = _frontmatter(
-                _read(root, document, files), document.relative_to(root).as_posix()
+            pick = match[0]
+        elif len(options) == 1:
+            pick = options[0]
+        else:
+            raise WarpDefinitionError(
+                f"more than one agent maps to role {role} "
+                f"({', '.join(a['name'] for a in options)}); choose one with "
+                f'[definition.roles] {role} = "<agent>"'
             )
-            _unknown(
-                frontmatter, AGENT_FIELDS, f"agent {directory.name}", strict, warnings
+        selected[role] = pick
+        if pick["_body"]:
+            role_guidance[role] = pick["_body"]
+        else:
+            warnings.append(
+                f"agent {pick['name']} has an empty prompt; the packaged {role} guidance is used"
             )
-            agent_type = str(frontmatter.get("agentType", "CUSTOM")).upper()
-            role = ROLE_TYPES.get(agent_type)
-            requested_model = frontmatter.get("model", defaults.get("model"))
-            if role:
-                if role in role_prompts:
-                    raise WarpDefinitionError(
-                        f"more than one agent maps to role {role}"
-                    )
-                if not body:
-                    raise WarpDefinitionError(
-                        f"mapped agent {directory.name} has an empty prompt"
-                    )
-                role_prompts[role] = str(document.resolve())
-                if isinstance(requested_model, str):
-                    requested_models[role] = requested_model
-                role_skills[role] = _load_skills(
-                    root, directory / "skills", files, warnings
-                )
-            elif agent_type in {"FOREMAN", "MAIN", "TRIAGE", "CUSTOM"}:
-                warnings.append(
-                    f"agent {directory.name} ({agent_type}) is preserved but not scheduled by the fixed workflow"
-                )
-            else:
-                warnings.append(
-                    f"agent {directory.name} has unrecognized type {agent_type}"
-                )
-            requested_access = sorted(
-                key
-                for key in (
-                    "secrets",
-                    "mcpServers",
-                    "networkPolicy",
-                    "hooks",
-                    "harness",
-                    "workerHost",
-                    "environmentId",
-                )
-                if frontmatter.get(key)
-            )
-            if requested_access:
-                warnings.append(
-                    f"agent {directory.name} requests {', '.join(requested_access)}; local policy does not grant them"
-                )
-            agents.append(
-                {
-                    "name": directory.name,
-                    "agent_type": agent_type,
-                    "role": role,
-                    "model": requested_model
-                    if isinstance(requested_model, str)
-                    else None,
-                    "runner": frontmatter.get("runner", defaults.get("runner")),
-                    "prompt": document.relative_to(root).as_posix(),
-                }
-            )
+        if pick["model"] and not pick["model_is_route_alias"]:
+            requested_models[role] = pick["model"]
+        if pick["harness"]:
+            requested_harness[role] = pick["harness"]
+        role_skills[role] = _load_skills(
+            tree, f"agents/{pick['name']}/skills", skill_snapshots, warnings
+        )
+    for agent in agents:
+        agent["selected"] = selected.get(agent["role"] or "") is agent
+        agent.pop("_body", None)
+        status = (
+            "mapped"
+            if agent["selected"]
+            else "preserved"
+            if agent["role"] is None
+            else "not-selected"
+        )
+        resources.append({"kind": "agent", "name": agent["name"], "status": status})
 
-    shared_skills = _load_skills(root, root / "skills", files, warnings)
+    shared_skills = _load_skills(tree, "skills", skill_snapshots, warnings)
+    for key in [*shared_skills, *(p for paths in role_skills.values() for p in paths)]:
+        resources.append(
+            {"kind": "skill", "name": Path(key).name, "status": "executed"}
+        )
 
+    # Scorers.
     scorers: list[dict[str, Any]] = []
-    scorers_dir = root / "scorers"
-    if scorers_dir.exists():
-        if scorers_dir.is_symlink() or not scorers_dir.is_dir():
-            raise WarpDefinitionError("scorers must be a directory")
-        for child in scorers_dir.iterdir():
-            if child.is_symlink():
-                raise WarpDefinitionError(
-                    f"definition resources cannot be symlinks: {child.relative_to(root)}"
-                )
-        for directory in sorted(p for p in scorers_dir.iterdir() if p.is_dir()):
-            document = directory / "scorer.md"
-            if not document.is_file():
-                warnings.append(f"scorer directory has no scorer.md: {directory.name}")
-                continue
-            frontmatter, body = _frontmatter(
-                _read(root, document, files), document.relative_to(root).as_posix()
-            )
-            _unknown(
-                frontmatter, SCORER_FIELDS, f"scorer {directory.name}", strict, warnings
-            )
-            if not body:
-                raise WarpDefinitionError(
-                    f"scorer {directory.name} has empty instructions"
-                )
-            scorers.append(
-                {
-                    "name": frontmatter.get("name", directory.name),
-                    "agents": frontmatter.get("agents", []),
-                    "self_improvement": bool(frontmatter.get("selfImprovement", False)),
-                    "path": document.relative_to(root).as_posix(),
-                    "status": "recognized-not-executed",
-                }
-            )
-        if scorers:
-            warnings.append(
-                "scorers are pinned for compatibility but are not executed as LLM judges"
-            )
+    for name in tree.directories("scorers"):
+        document = f"scorers/{name}/scorer.md"
+        if not tree.exists(document):
+            warnings.append(f"scorer directory has no scorer.md: {name}")
+            continue
+        frontmatter, body = _frontmatter(tree.text(document), document)
+        _unknown(frontmatter, SCORER_FIELDS, f"scorer {name}", strict, warnings)
+        if not body:
+            raise WarpDefinitionError(f"scorer {name} has empty instructions")
+        for required in ("labels", "passingScore"):
+            if required not in frontmatter:
+                raise WarpDefinitionError(f"{document} requires {required}")
+        runner_exists(frontmatter.get("runner"), f"scorer {name}")
+        scorers.append(
+            {
+                "name": frontmatter.get("name", name),
+                "agents": frontmatter.get("agents", []),
+                "self_improvement": bool(frontmatter.get("selfImprovement", False)),
+                "path": document,
+                "status": "recognized-not-executed",
+            }
+        )
+        resources.append(
+            {"kind": "scorer", "name": name, "status": "recognized-not-executed"}
+        )
+    if scorers:
+        warnings.append(
+            "scorers are pinned for compatibility but are not executed as LLM judges"
+        )
 
-    runners: list[str] = []
-    runners_dir = root / "runners"
-    if runners_dir.exists():
-        if runners_dir.is_symlink() or not runners_dir.is_dir():
-            raise WarpDefinitionError("runners must be a directory")
-        for document in sorted(
-            [*runners_dir.glob("*.yaml"), *runners_dir.glob("*.yml")]
-        ):
-            value = _yaml(
-                _read(root, document, files), document.relative_to(root).as_posix()
-            )
-            _unknown(value, RUNNER_FIELDS, f"runner {document.stem}", strict, warnings)
-            runners.append(document.stem)
-        if runners:
-            warnings.append(
-                "runner files are validated, but the local execution profile remains authoritative"
-            )
-
+    # Automations and other recognized, unexecuted resources.
     unsupported: dict[str, int] = {}
-    for name in ("automations", "routers", "benchmarks", "webhooks"):
-        directory = root / name
-        if directory.exists():
-            if directory.is_symlink() or not directory.is_dir():
-                raise WarpDefinitionError(f"{name} must be a directory")
-            _resource_files(root, directory, files)
-            count = sum(1 for path in directory.rglob("*") if path.is_file())
-            if count:
-                unsupported[name] = count
-                warnings.append(f"{name} resources are preserved but not executed")
+    for name in tree.directories("automations"):
+        document = f"automations/{name}/automation.md"
+        if tree.exists(document):
+            frontmatter, _ = _frontmatter(tree.text(document), document)
+            if "triggers" not in frontmatter:
+                raise WarpDefinitionError(f"{document} requires triggers")
+    for kind in ("automations", "routers", "benchmarks", "webhooks"):
+        count = sum(1 for n in tree.blobs if n.startswith(kind + "/"))
+        if count:
+            unsupported[kind] = count
+            warnings.append(f"{kind} resources are preserved but not executed")
+            if kind != "routers":
+                resources.append(
+                    {"kind": kind, "name": kind, "status": "recognized-not-executed"}
+                )
 
-    for child in root.iterdir():
-        if (
-            child.is_dir()
-            and child.name not in KNOWN_RESOURCE_DIRS
-            and not child.name.startswith(".")
-        ):
-            warnings.append(
-                f"unrecognized definition directory is ignored: {child.name}"
-            )
+    # Self-improvement: the agent's instructions feed Dark Factory's own loop.
+    improvement: dict[str, Any] = {}
+    settings = factory.get("selfImprovement") or {}
+    if not isinstance(settings, dict):
+        raise WarpDefinitionError("factory.yaml selfImprovement must be an object")
+    threshold = settings.get("failedRunThreshold")
+    if threshold is not None and (
+        type(threshold) is not int or not 1 <= threshold <= 50
+    ):
+        raise WarpDefinitionError(
+            "selfImprovement.failedRunThreshold must be an integer from 1 to 50"
+        )
+    document = f"{IMPROVEMENT_DIR}/agent.md"
+    if tree.exists(document):
+        frontmatter, body = _frontmatter(tree.text(document), document)
+        _unknown(frontmatter, AGENT_FIELDS, "self-improvement agent", strict, warnings)
+        improvement["guidance"] = body
+        resources.append(
+            {"kind": "self-improvement", "name": "agent", "status": "mapped"}
+        )
+    if threshold is not None:
+        improvement["failed_run_threshold"] = threshold
+    if settings or improvement:
+        warnings.append(
+            "Warp's scheduled self-improvement is not run; Dark Factory's own "
+            "improvement loop reads this agent's guidance and threshold"
+        )
+
+    # Directories nobody recognizes.
+    for name in tree.directories(""):
+        if name in KNOWN_RESOURCE_DIRS or name.startswith("."):
+            continue
+        message = f"unrecognized definition directory: {name}"
+        if strict:
+            raise WarpDefinitionError(message)
+        warnings.append(message)
 
     unsupported_factory_fields = sorted(
         field
@@ -520,41 +751,40 @@ def load_definition(path: str | Path, *, strict: bool = True) -> dict[str, Any]:
             "factory requests preserved but not granted: "
             + ", ".join(unsupported_factory_fields)
         )
-    if factory.get("selfImprovement"):
-        warnings.append(
-            "Warp scheduled self-improvement is not executed; Dark Factory exposes deterministic proposal-only analysis"
-        )
 
     return {
         "format": FORMAT,
         "schema_version": "v1alpha1",
         "name": factory["name"],
         "root": str(root),
-        "digest": _digest(files),
-        "files": files,
+        "digest": _digest(tree.files),
+        "files": tree.files,
         "repositories": repositories,
         "agents": agents,
-        "role_prompts": role_prompts,
+        "role_guidance": role_guidance,
         "requested_models": requested_models,
+        "requested_harness": requested_harness,
         "shared_skills": shared_skills,
         "role_skills": role_skills,
+        "skill_snapshots": skill_snapshots,
         "scorers": scorers,
         "runners": runners,
+        "self_improvement": improvement,
         "compatibility": {
-            "syntax": "compatible",
             "execution": "fixed-dark-factory-workflow",
-            "mapped_roles": sorted(role_prompts),
+            "mapped_roles": sorted(role_guidance),
+            "resources": resources,
             "unsupported_resources": unsupported,
             "warnings": warnings,
         },
     }
 
 
-def public_report(definition: dict[str, Any]) -> dict[str, Any]:
-    """Remove local absolute paths while retaining compatibility evidence."""
+# Local detail the report omits; the digest and per-resource status remain.
+_PRIVATE = {"root", "role_guidance", "shared_skills", "role_skills", "skill_snapshots"}
 
-    return {
-        key: value
-        for key, value in definition.items()
-        if key not in {"root", "role_prompts", "shared_skills", "role_skills"}
-    }
+
+def public_report(definition: dict[str, Any]) -> dict[str, Any]:
+    """Remove local absolute paths and prompt text; keep compatibility evidence."""
+
+    return {key: value for key, value in definition.items() if key not in _PRIVATE}

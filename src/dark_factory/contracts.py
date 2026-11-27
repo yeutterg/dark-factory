@@ -8,6 +8,24 @@ CONTRACT_VERSION = 1
 REQUIRED_RESULT_FIELDS = ("ok", "operation", "evidence")
 
 
+# What core asks of a code host, and nothing else. A new host (GitLab, say) is a
+# second implementation of exactly these operations; see docs/code-host-contract.md
+# and tests/test_code_host_contract.py, which every adapter must pass.
+CODE_HOST_OPERATIONS = (
+    "inspect_pr",
+    "list_open_prs",
+    "push_branch",
+    "reconcile_push_branch",
+    "create_pr",
+    "reconcile_create_pr",
+    "set_status",
+    "dispatch_workflow",
+    "find_run",
+    "get_run",
+    "list_run_artifacts",
+)
+
+
 class ContractError(ValueError):
     pass
 

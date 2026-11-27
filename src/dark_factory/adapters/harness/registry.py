@@ -11,10 +11,11 @@ from dark_factory.adapters.harness.codex import CodexHarness
 from dark_factory.adapters.harness.fake import FakeHarness
 from dark_factory.adapters.harness.pi import PiHarness, resolve_credential
 from dark_factory.runner import CommandRunner
+from dark_factory.secrets import secret
 
 
 def explicit_credential(route, binary=None):
-    return os.environ.get(route.get("auth_env", ""), "")
+    return secret(route.get("auth_env", ""))
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,8 @@ def capabilities(cfg):
             if recipe["kind"] in {"native", "macos-sandbox"}
         ),
         *(name for name, adapter in ADAPTERS.items() if adapter.available(cfg)),
+        # What this machine offers to stages that ask for it (toolchains, devices).
+        *("label:" + label for label in cfg.runners["local"]["labels"]),
     ]
 
 
