@@ -94,3 +94,12 @@ Implementation authority remains the [specification](spec.md) and [constitution]
 - [x] #22 recovery, gate, publication and the claim path do their code-host and decision-agent I/O outside write transactions; remote actions reconcile through pending actions after a restart.
 - [x] #23 the target branch is pinned in the approved snapshot.
 - [x] #24 `publish.skipped` records root, origin and reason.
+
+## Long-running distributed completion
+
+- [x] #28 terminal fenced-result acknowledgements retire worker journals while preserving bounded inspection copies; valid lost acknowledgements remain idempotent.
+- [x] #29 verified milestone checkpoints restore both implementation and repair work across workers within the original plan, candidate, deadline, budget and resume allowance.
+- [x] #30 remote packages contain only required candidate, resume and command inputs; historical attempt archives remain controller-side.
+- [x] #31 progress, checkpoints, checks, time and budget are projected independently of heartbeat; unattended quiet-work and repeated-interruption soak outcomes are bounded.
+- [x] #32 optional model-pinned Jev-compatible criterion completeness runs in non-blocking shadow mode with evidence digests, cost accounting and comparison reporting.
+- [x] #33 the distributed qualification moves unique work from worker A to worker B, reaches independent review once and fences A's late result without changing the candidate.

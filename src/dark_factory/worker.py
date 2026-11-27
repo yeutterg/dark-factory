@@ -208,6 +208,7 @@ class Worker:
 
     def run_once(self):
         self.controller.settle_interruptions(self.worker_id)
+        self.controller.completeness_tick()
         self.controller.reconcile_continuations()
         pending = self._unstarted_claims()
         if not pending and (
@@ -297,6 +298,7 @@ class Worker:
         cost = 0
         result = {"ok": False, "inputs": claimed["inputs"], "usage": {}, "checks": []}
         events = []
+        last_checkpoint_digest = None
         redactions: list[str] = []
         archived = False
         cleaned = False
@@ -347,7 +349,6 @@ class Worker:
             restored = False
             if (
                 job["kind"] == "implement"
-                and not spec.get("repair")
                 and resume_archive
                 and (resume_archive / "workspace").is_dir()
             ):
@@ -356,6 +357,8 @@ class Worker:
                 restored = True
             prepared = self.env.prepare(attempt_id, source)
             self.controller.record_workspace(attempt_id, prepared.workspace)
+            if job["kind"] == "implement":
+                last_checkpoint_digest = artifacts.git_fingerprint(prepared.workspace)
             if job["kind"] in {"plan", "critique", "review"}:
                 baseline = (
                     source["commit"],
@@ -467,6 +470,31 @@ class Worker:
                                 "data": event.data,
                             }
                         )
+                        if job["kind"] == "implement":
+                            current_digest = artifacts.git_fingerprint(
+                                prepared.workspace
+                            )
+                            if current_digest != last_checkpoint_digest:
+                                try:
+                                    saved = self.controller.record_checkpoint(
+                                        attempt_id,
+                                        prepared.workspace,
+                                        {
+                                            "kind": event.type,
+                                            "summary": redact(event.text, redactions),
+                                            "task_id": event.data.get("task_id", ""),
+                                        },
+                                    )
+                                    if saved:
+                                        last_checkpoint_digest = current_digest
+                                except Exception as exc:
+                                    events.append(
+                                        {
+                                            "type": "checkpoint_rejected",
+                                            "text": str(exc)[:500],
+                                            "data": {},
+                                        }
+                                    )
                         if (
                             event.type
                             in {

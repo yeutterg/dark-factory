@@ -222,6 +222,21 @@ timeout_seconds = 30
 
 Jev reads `TYPESAFE_API_KEY` from the controller environment (`--api-key-env` names another variable). It receives the step kind, the cause, the error, timings, costs and the last 2,000 characters of the step's output, never credentials. Confident `resume` resumes a non-trivial interruption; confident `ask` or `stop` holds a trivial one for a person. Neither can lift the limits above, and a missing, failing or unconfident decider falls back to the rules. The decider settings are part of the approved plan. Any command that answers `decide` can replace Jev.
 
+The same decision command can run a criterion-level completeness experiment after canonical checks and before independent review:
+
+```toml
+[decider]
+command = "decider"
+region = "US"
+completeness_shadow = true
+completeness_budget_cents = 10
+completeness_model = "jev-model-version-pinned-by-the-operator"
+```
+
+Each evidence-bound assessment classifies approved criteria as `supported`, `gap`, or `insufficient_evidence`. Input is bounded to the candidate SHA, relevant diff excerpt, canonical result tails, assertions and command binding. The model identity must match the configured pin, retries deduplicate, and cost is charged to the root. `completeness-report` compares advice with later independent-review failures and human rejections. This is deliberately shadow-only: failure, budget exhaustion or inconclusive advice never delays review, triggers repair, changes manual gates or accepts work.
+
+Implementation and repair workers write at most five verified milestone checkpoints per attempt after actual workspace changes. Remote workers upload them while the lease remains active. A replacement worker receives only the latest checkpoint whose root, approved plan, job and starting candidate still match; corrupt or stale checkpoints are ignored. Heartbeat remains a liveness signal. The operator projection separately shows the current task, last durable checkpoint, last completed check and remaining approved time and budget.
+
 Bundled adapters run through the installed `dark-factory adapter ...`
 entrypoint. Profile loading binds that command to the active Python installation,
 so an older global script or a source-checkout-relative module path cannot be

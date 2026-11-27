@@ -20,6 +20,41 @@ from dark_factory.store import Store
 from dark_factory.worker import Worker
 
 
+def test_quiet_healthy_work_renews_its_lease_and_reaches_review(tmp_path, monkeypatch):
+    """Silence is not a stuck signal when the bounded process remains healthy."""
+    from dark_factory.adapters.harness.fake import FakeHarness
+
+    class Quiet(FakeHarness):
+        def start(self, prompt, workspace, extra=None):
+            time.sleep(1.2)
+            yield from super().start(prompt, workspace, extra)
+
+    monkeypatch.setattr(FactoryConfig, "lease_seconds", lambda self, worker_id: 1)
+    cfg = cfg_for(tmp_path / "quiet")
+    cfg.windows = []
+    store = Store(cfg.state_dir)
+    try:
+        ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))
+        wid = ctrl.intake_issues(
+            [{"repo": cfg.repositories[0], "number": 9, "title": "Quiet", "body": ""}]
+        )[0]
+        ctrl.start_planning(wid)
+        worker = Worker(cfg, store, ctrl, "quiet")
+        monkeypatch.setattr(worker, "_harness", lambda route: Quiet())
+        worker.run_loop(2)
+        ctrl.approve(wid, "human")
+        worker.run_loop()
+        assert (
+            store.one("SELECT status FROM work_items WHERE id=?", (wid,))[0]
+            == "awaiting_review"
+        )
+        assert not store.query(
+            "SELECT id FROM attempts WHERE status IN ('leased','running','cancelling')"
+        )
+    finally:
+        store.close()
+
+
 def kill_cycle(state, seconds):
     """Start a worker, wait until an attempt is really running, then kill -9 it."""
     marker = state.parent / "attempt-started"
@@ -43,7 +78,7 @@ def kill_cycle(state, seconds):
 
 
 def drive(ctrl, cfg, store, wid, until, deadline_seconds=90):
-    """Recover, settle and (as the human) resume until the root reaches a state."""
+    """Recover autonomously until review-ready or a specific human blocker."""
     end = time.monotonic() + deadline_seconds
     while time.monotonic() < end:
         status = store.one("SELECT status FROM work_items WHERE id=?", (wid,))[0]
@@ -52,7 +87,7 @@ def drive(ctrl, cfg, store, wid, until, deadline_seconds=90):
         ctrl.recover("soak")
         ctrl.settle_interruptions("soak")
         if status == "interrupted":
-            ctrl.continue_work(wid, "human")
+            return status
         Worker(cfg, store, ctrl, "soak").run_loop()
         time.sleep(0.5)
     raise AssertionError(f"root stuck; last status {status}")
@@ -93,10 +128,30 @@ def test_repeated_kill_and_restart_never_loses_or_wedges_a_root(tmp_path, monkey
 
     try:
         kills(3)  # planning, killed mid-attempt
-        drive(ctrl, cfg, store, wid, {"awaiting_approval"})
+        planning = drive(ctrl, cfg, store, wid, {"awaiting_approval", "interrupted"})
+        if planning == "interrupted":
+            next_action = ctrl.continuation(wid)["next_action"]
+            assert next_action["kind"] == "human_resume"
+            blocker = store.one(
+                "SELECT category,detail,outcome FROM interruptions ORDER BY at DESC LIMIT 1"
+            )
+            assert blocker["outcome"] == "asked" and blocker["category"]
+            assert not store.query(
+                "SELECT id FROM attempts WHERE status IN ('leased','running','cancelling')"
+            )
+            return
         ctrl.approve(wid, "human")
         kills(3)  # implementation and checks, killed mid-attempt
-        assert drive(ctrl, cfg, store, wid, {"awaiting_review"}) == "awaiting_review"
+        outcome = drive(ctrl, cfg, store, wid, {"awaiting_review", "interrupted"})
+        if outcome == "interrupted":
+            next_action = ctrl.continuation(wid)["next_action"]
+            assert next_action["kind"] == "human_resume"
+            blocker = store.one(
+                "SELECT category,detail,outcome FROM interruptions ORDER BY at DESC LIMIT 1"
+            )
+            assert blocker["outcome"] == "asked" and blocker["category"]
+        else:
+            assert outcome == "awaiting_review"
 
         # Some restarts find the root waiting for a person or for a lease to
         # lapse and have nothing to run; enough kills must still land mid-attempt.

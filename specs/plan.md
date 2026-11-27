@@ -18,6 +18,7 @@ The package remains under `src/dark_factory/`. One controller owns one state dir
 | `control/review.py`, `control/external.py` | Coverage, packets, continuations, human acceptance and external intentions |
 | `control/tasks.py` | Task revisions, structured reconciliation, progress, instruction delivery and Markdown projection |
 | `attempts.py` | Attempt facts a worker reports through the controller or a remote replica |
+| `control/completeness.py` | Deduplicated advisory criterion assessments between canonical checks and independent review |
 | `worker.py` | Prepare, execute, capture, archive, cleanup |
 | `artifacts.py` | Hash manifests, filesystem synchronization, backup/restore |
 | `operator_commands.py`, `api.py`, `cli.py`, `ui/` | One operator command table for CLI/API/TUI/browser surfaces; separate operator and worker credentials |
@@ -26,7 +27,7 @@ Two application-owned lifecycle protocols remain: Harness and Environment. The c
 
 Roots retain selected intent, versioned proposals, approved scope/budgets/assets/command bindings, the pinned base and candidate commits. Each attempt has fresh Git state and harness context, immutable inputs, an enforced deadline, a renewable lease, usage and durable evidence. Checks reconstruct the candidate from its verified archive. Review receives approved requirements, exact diff and canonical evidence, with implementer narration omitted. Canonical checks cannot be waived by model output.
 
-The local worker can run synchronously through CLI or within the controller service. Outbound execution workers claim project-scoped packages over authenticated TLS and own only their disposable execution directories; no shared filesystem is required. Operator CLI, TUI and browser calls use the service API while the state directory is owned. Task records describe work and decisions; they never create an execution job or grant a route.
+The local worker can run synchronously through CLI or within the controller service. Outbound execution workers claim project-scoped packages over authenticated TLS and own only their disposable execution directories; no shared filesystem is required. Assignments carry the current candidate, the selected verified resume checkpoint, and job-specific evidence—not every historical workspace. Operator CLI, TUI and browser calls use the service API while the state directory is owned. Task records describe work and decisions; they never create an execution job or grant a route.
 
 Backup includes SQLite, workflow checkpoints, pinned source snapshots, evidence and retained workspaces; authentication files are excluded. Restore uses a new directory, verifies data and resolves historical state-owned paths without changing evidence or approval digests. Profiles may preapprove one targeted correctness repair followed by fresh canonical checks and independent review. Failures outside that branch stop with durable evidence. No automatic provider fallback, merge or installation upgrade.
 

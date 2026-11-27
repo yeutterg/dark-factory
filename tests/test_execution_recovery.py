@@ -213,3 +213,52 @@ def test_transport_failure_retries_saved_result_without_rerunning_agent(
         server.shutdown()
         server.server_close()
         store.close()
+
+
+def test_fenced_late_result_is_retained_and_worker_claims_fresh_work(
+    tmp_path, monkeypatch
+):
+    cfg, store, ctrl, _, _ = prepared(tmp_path, monkeypatch)
+    server = serve(ctrl, "127.0.0.1", 0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    client = WorkerClient(
+        f"http://127.0.0.1:{server.server_port}",
+        cfg.project_id,
+        "worker1",
+        "first-worker-token-" + "a" * 32,
+        tmp_path / "worker",
+    )
+    real = client.request
+    fenced = []
+
+    def expire_before_finish(operation, payload):
+        if operation == "finish" and not fenced:
+            aid = payload["attempt_id"]
+            fenced.append(aid)
+            store.execute(
+                "UPDATE jobs SET lease_until='2000-01-01T00:00:00+00:00' "
+                "WHERE id=(SELECT job_id FROM attempts WHERE id=?)",
+                (aid,),
+            )
+            assert ctrl.recover("test") == 1
+        return real(operation, payload)
+
+    monkeypatch.setattr(client, "request", expire_before_finish)
+    try:
+        assert client.run_once()
+        aid = fenced[0]
+        assert not (client.state / "dispatch.json").exists()
+        assert (client.state / "retired" / aid / "result.json").is_file()
+        assert (client.state / "receipts" / f"{aid}.fenced.json").is_file()
+        assert (
+            store.one("SELECT COUNT(*) FROM costs WHERE attempt_id=?", (aid,))[0] == 1
+        )
+
+        assert client.run_once()
+        attempts = store.query("SELECT id FROM attempts ORDER BY started_at,rowid")
+        assert len(attempts) == 2 and attempts[1]["id"] != aid
+        assert not (client.state / "dispatch.json").exists()
+    finally:
+        server.shutdown()
+        server.server_close()
+        store.close()

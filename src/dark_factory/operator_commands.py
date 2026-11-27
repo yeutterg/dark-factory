@@ -294,6 +294,11 @@ COMMANDS: dict[str, OperatorCommand] = {
             "release-list", lambda c, p, a: c.release_list(), render=_pretty
         ),
         OperatorCommand("metrics", lambda c, p, a: _metrics(c), render=_pretty),
+        OperatorCommand(
+            "completeness-report",
+            lambda c, p, a: c.completeness_report(),
+            render=_pretty,
+        ),
         OperatorCommand("disk", lambda c, p, a: c.disk_usage(), render=_pretty),
         OperatorCommand("gc", lambda c, p, a: c.sweep_resources(a), render=_pretty),
         OperatorCommand(

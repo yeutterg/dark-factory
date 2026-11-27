@@ -174,6 +174,9 @@ class FactoryConfig:
             "command": table.get("command", "decider"),
             "region": table["region"],
             "min_confidence": table.get("min_confidence", DEFAULT_DECIDER_CONFIDENCE),
+            "completeness_shadow": table.get("completeness_shadow", False),
+            "completeness_budget_cents": table.get("completeness_budget_cents", 0),
+            "completeness_model": table.get("completeness_model", ""),
         }
 
     @property
@@ -417,7 +420,18 @@ def _parse_routes(
     decider = raw.get("decider", {})
     if not isinstance(decider, dict):
         raise ConfigError("decider must be a table")
-    _fields(decider, {"command", "region", "min_confidence"}, "decider")
+    _fields(
+        decider,
+        {
+            "command",
+            "region",
+            "min_confidence",
+            "completeness_shadow",
+            "completeness_budget_cents",
+            "completeness_model",
+        },
+        "decider",
+    )
     if decider:
         # A decision agent is inference: its processing region is declared and checked.
         region = decider.get("region")
@@ -428,6 +442,17 @@ def _parse_routes(
         confidence = decider.get("min_confidence", DEFAULT_DECIDER_CONFIDENCE)
         if type(confidence) not in {int, float} or not 0.5 <= confidence <= 1:
             raise ConfigError("decider.min_confidence must be between 0.5 and 1")
+        shadow = decider.get("completeness_shadow", False)
+        if type(shadow) is not bool:
+            raise ConfigError("decider.completeness_shadow must be a boolean")
+        budget = _integer(decider, "completeness_budget_cents", 0)
+        if shadow and budget <= 0:
+            raise ConfigError(
+                "decider.completeness_budget_cents must be positive in shadow mode"
+            )
+        model = decider.get("completeness_model", "")
+        if shadow and (not isinstance(model, str) or not model.strip()):
+            raise ConfigError("decider.completeness_model is required in shadow mode")
     task_supervisor = raw.get("task_supervisor", {})
     if not isinstance(task_supervisor, dict):
         raise ConfigError("task_supervisor must be a table")

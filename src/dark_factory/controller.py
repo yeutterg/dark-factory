@@ -13,6 +13,7 @@ from pathlib import Path
 from dark_factory.attempts import AttemptRecords
 from dark_factory.config import FactoryConfig
 from dark_factory.control.base import ControllerError, _digest, atomic, decided
+from dark_factory.control.completeness import CompletenessMixin
 from dark_factory.control.dispatch import DispatchMixin
 from dark_factory.control.external import ExternalMixin
 from dark_factory.control.external_work import ExternalWorkMixin
@@ -49,6 +50,7 @@ __all__ = [
 class Controller(
     PolicyMixin,
     PlanningMixin,
+    CompletenessMixin,
     DispatchMixin,
     ResultsMixin,
     ReviewMixin,
@@ -95,6 +97,7 @@ class Controller(
         self.runner = CommandRunner(cfg.source_path.parent, cfg.max_output_bytes)
         self._save_config()
         self.scrub_retired_credentials()
+        self.recover_completeness()
 
     def jobs(self, wid):
         return [

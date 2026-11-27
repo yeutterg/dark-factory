@@ -267,8 +267,10 @@ def make_handler(controller: Controller) -> type[BaseHTTPRequestHandler]:
                     result = service.task_instructions(worker, data["attempt_id"])
                 elif operation == "task-ack":
                     result = service.task_ack(worker, data)
+                elif operation == "checkpoint":
+                    result = service.checkpoint(worker, data)
                 elif operation == "finish":
-                    result = service.finish(worker, data)
+                    result = service.finish_remote(worker, data)
                 elif operation == "cleanup":
                     result = service.cleanup(
                         worker, data["attempt_id"], data["result_digest"]
