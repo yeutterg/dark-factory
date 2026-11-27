@@ -1,9 +1,9 @@
 # Digest-pinned, multi-architecture build inputs. Override only with reviewed digests.
 ARG PYTHON_IMAGE=python:3.11.18-slim-trixie@sha256:61e01f72680f86a5279ad510818ab7b2ee9f049822589d4e34e33e044360356c
 ARG NODE_IMAGE=node:24.22.3-trixie-slim@sha256:4d00acb4bcc42c454c4eb801526f7ad7f772ea3bd4fd168c5cc2e384abcbb9d4
-ARG CLAUDE_CODE_VERSION=2.1.310
-ARG CODEX_VERSION=0.164.0
-ARG PI_CODING_AGENT_VERSION=1.4.0
+ARG CLAUDE_CODE_VERSION=2.1.332
+ARG CODEX_VERSION=0.172.0
+ARG PI_CODING_AGENT_VERSION=1.6.1
 ARG GH_VERSION=2.105.0
 
 FROM ${NODE_IMAGE} AS node-runtime
@@ -18,7 +18,8 @@ RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       "@earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION}" \
     && test "$(claude --version)" = "${CLAUDE_CODE_VERSION} (Claude Code)" \
     && test "$(codex --version)" = "codex-cli ${CODEX_VERSION}" \
-    && test "$(pi --version)" = "${PI_CODING_AGENT_VERSION}"
+    && test "$(pi --version)" = "${PI_CODING_AGENT_VERSION}" \
+    && rm -rf /usr/local/lib/node_modules/npm
 
 FROM ${PYTHON_IMAGE} AS gh-cli
 ARG TARGETARCH
@@ -54,12 +55,13 @@ FROM ${PYTHON_IMAGE} AS runtime
 ARG GH_VERSION
 ARG LOCKFILE=requirements.lock
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bubblewrap git procps \
+    && apt-get install -y --no-install-recommends bubblewrap git procps libzstd1 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=wheel-builder /wheels /tmp/wheels
 COPY --from=wheel-builder /source/${LOCKFILE} /tmp/dependencies.lock
 RUN python -m pip install --no-index --find-links=/tmp/wheels --require-hashes -r /tmp/dependencies.lock \
     && python -m pip install --no-index --no-deps --find-links=/tmp/wheels dark-factory \
+    && python -m pip uninstall --yes wheel setuptools \
     && rm -rf /tmp/wheels /tmp/dependencies.lock
 COPY --from=gh-cli /tmp/gh/bin/gh /usr/local/bin/gh
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
