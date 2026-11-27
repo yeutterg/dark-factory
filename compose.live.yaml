@@ -21,8 +21,6 @@ services:
     pids_limit: 512
     cpus: 2.0
     user: "0:0"
-    cap_drop:
-      - ALL
     cap_add:
       - SYS_ADMIN
       - NET_ADMIN
@@ -30,7 +28,6 @@ services:
       - SETGID
       - SETFCAP
     security_opt:
-      - no-new-privileges:true
       - seccomp=unconfined
     environment:
       COMPOSE_WORKER_TOKEN: ${COMPOSE_WORKER_TOKEN:?Run ./scripts/compose-init}
