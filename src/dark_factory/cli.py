@@ -168,6 +168,34 @@ def build_parser() -> argparse.ArgumentParser:
         p_w = sub.add_parser(name, help=text)
         p_w.add_argument("work_item_id")
         p_w.add_argument("--actor", default="contributor")
+    p_rs = sub.add_parser("release-start", help="Assemble a release from a branch head")
+    p_rs.add_argument("repo")
+    p_rs.add_argument("kind")
+    p_rs.add_argument("--ref", default=None)
+    p_rs.add_argument("--actor", default="operator")
+    p_ra = sub.add_parser("release-approve", help="A person approves a release gate")
+    p_ra.add_argument("release_id")
+    p_ra.add_argument("gate", choices=["package", "promote"])
+    p_ra.add_argument("--actor", required=True)
+    p_rc = sub.add_parser("release-confirm", help="A person confirms a manual item")
+    p_rc.add_argument("release_id")
+    p_rc.add_argument("--item", required=True)
+    p_rc.add_argument("--evidence", default="")
+    p_rc.add_argument("--actor", required=True)
+    p_rb = sub.add_parser("release-rollback", help="Redeploy the previous kept package")
+    p_rb.add_argument("release_id")
+    p_rb.add_argument("--actor", required=True)
+    for name, text in (
+        ("release-run", "Run the next automatic stage of a release"),
+        ("release-status", "Show a release's stages, approvals and next step"),
+    ):
+        p_r = sub.add_parser(name, help=text)
+        p_r.add_argument("release_id")
+        p_r.add_argument("--actor", default="operator")
+    sub.add_parser("release-list", help="List releases")
+    sub.add_parser(
+        "metrics", help="Duration and outcome of every stage, by repo and runner"
+    )
     sub.add_parser("disk", help="Show disk use by area and by root")
     sub.add_parser("gc", help="Remove resources whose owners are finished")
     p_abandon = sub.add_parser(
@@ -326,6 +354,9 @@ def _dispatch(args: argparse.Namespace) -> int:
             data.get("accounts", {}),
             args.profile.parent / data["ca_file"] if data.get("ca_file") else None,
         )
+        from dark_factory import log
+
+        log.configure()
         count = client.serve(args.max_jobs)
         print(json.dumps({"jobs_run": count}))
         return 0
@@ -479,6 +510,9 @@ def _dispatch(args: argparse.Namespace) -> int:
                 thread.start()
             import signal
 
+            from dark_factory import log
+
+            log.configure()
             reason = ["interrupt"]
 
             def terminate(signum, frame):

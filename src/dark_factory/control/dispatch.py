@@ -545,6 +545,13 @@ class DispatchMixin(ControllerCore):
             self.sweep_if_due()
         except Exception as exc:  # Cleanup must never stop recovery.
             self.store.audit("controller", "resources.error", {"error": str(exc)[:500]})
+        if not getattr(self, "_releases_recovered", False):
+            self._releases_recovered = True
+            self.recover_releases()
+        try:
+            self.release_tick()
+        except Exception as exc:  # A release must never stop recovery.
+            self.store.audit("controller", "release.error", {"error": str(exc)[:500]})
         try:
             self.gate_tick()
         except Exception as exc:  # The gate must never stop recovery.

@@ -269,6 +269,23 @@ class Store:
             detail TEXT NOT NULL, outcome TEXT NOT NULL, verdict_json TEXT,
             actor TEXT, decided_at TEXT, resumed_by_attempt TEXT);
         CREATE INDEX IF NOT EXISTS interruptions_job ON interruptions(job_id, outcome);
+        CREATE TABLE IF NOT EXISTS releases (
+            id TEXT PRIMARY KEY, repo TEXT NOT NULL, kind TEXT NOT NULL,
+            branch TEXT NOT NULL, commit_sha TEXT NOT NULL, status TEXT NOT NULL,
+            pipeline_json TEXT NOT NULL, roots_json TEXT NOT NULL DEFAULT '[]',
+            package_digest TEXT, rollback_of TEXT, reason TEXT NOT NULL DEFAULT '',
+            created_by TEXT NOT NULL, created_at TEXT NOT NULL, closed_at TEXT,
+            notes TEXT NOT NULL DEFAULT '', pruned INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS release_stages (
+            release_id TEXT NOT NULL, stage TEXT NOT NULL, status TEXT NOT NULL,
+            runner TEXT, started_at TEXT, ended_at TEXT, seconds REAL,
+            evidence_json TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(release_id, stage));
+        CREATE TABLE IF NOT EXISTS release_approvals (
+            release_id TEXT NOT NULL, gate TEXT NOT NULL, actor TEXT NOT NULL,
+            at TEXT NOT NULL, digest TEXT NOT NULL, PRIMARY KEY(release_id, gate));
+        CREATE TABLE IF NOT EXISTS release_confirmations (
+            release_id TEXT NOT NULL, item TEXT NOT NULL, actor TEXT NOT NULL,
+            at TEXT NOT NULL, evidence TEXT NOT NULL, PRIMARY KEY(release_id, item));
         CREATE TABLE IF NOT EXISTS external_work (
             root_id TEXT PRIMARY KEY, actor TEXT NOT NULL, worktree TEXT,
             proposal_json TEXT, submitted INTEGER NOT NULL DEFAULT 0,
@@ -443,6 +460,9 @@ class Store:
             "INSERT INTO audit(id, at, actor, action, payload_json) VALUES (?,?,?,?,?)",
             (new_id("aud"), now_iso(), actor, action, json.dumps(payload)),
         )
+        from dark_factory import log
+
+        log.event(action, actor, payload)
 
     def set_op(self, key: str, value: str, actor: str) -> None:
         self.execute(

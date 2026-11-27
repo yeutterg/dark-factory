@@ -1,13 +1,25 @@
 services:
   server:
+    build:
+      args:
+        LOCKFILE: requirements-dev.lock
     environment:
       GH_TOKEN: ${DARK_FACTORY_GITHUB_TOKEN:-}
     volumes:
       - ./factory.local.toml:/config/factory.toml:ro
-      - .:/source:ro
+      # Only the repository metadata: a revision is pinned and cloned from it, and the
+      # working tree (with .env and local profiles) is never mounted.
+      - ./.git:/source/.git:ro
       - live-supervisor-state:/state
 
   worker:
+    build:
+      args:
+        LOCKFILE: requirements-dev.lock
+    # Matches environments.container-bwrap in examples/compose/factory-live.toml.
+    mem_limit: 4g
+    pids_limit: 512
+    cpus: 2.0
     user: "0:0"
     cap_drop:
       - ALL

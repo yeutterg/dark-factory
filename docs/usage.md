@@ -228,6 +228,14 @@ so an older global script or a source-checkout-relative module path cannot be
 selected accidentally. Third-party adapters remain ordinary explicit command
 arrays speaking the same JSON contract.
 
+## Pipeline, outside agents and releases
+
+`dark-factory work-start|work-plan|work-checkout|work-submit|work-status` carry a change from any coding
+agent through the same stages; `release-start|release-run|release-approve|release-confirm|release-rollback|release-status|release-list`
+run the release loop; `pipeline-validate` and `init-repo` prepare a repository; `metrics`, `disk` and `gc`
+report and clean up. See [Pipeline](pipeline.md), [Self-improvement](self-improvement.md) and the
+[code-host contract](code-host-contract.md).
+
 ## Preserve and restore work
 
 Every attempt archives the checkout (including Git history and untracked/ignored work), outputs, inputs, usage and session records. Hash verification and filesystem synchronization precede cleanup. Archive failure retains the original workspace. `cleanup` retries teardown only for verified archives and factory-owned terminal workspaces; it never prunes developer worktrees. Archives remain available for review/recovery; operators manage retention after merge and backup.

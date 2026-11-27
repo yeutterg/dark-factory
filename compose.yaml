@@ -10,6 +10,11 @@ x-runtime: &runtime
     - ALL
   tmpfs:
     - /tmp:size=64m,mode=1777
+  # Bounded by default; the live overlay raises the worker's limits to match its
+  # environment recipe.
+  mem_limit: 512m
+  pids_limit: 256
+  cpus: 1.0
 
 services:
   server:
@@ -19,7 +24,6 @@ services:
     command: ["--config", "/config/factory.toml", "serve"]
     environment:
       COMPOSE_OPERATOR_TOKEN: ${COMPOSE_OPERATOR_TOKEN:?Run ./scripts/compose-init}
-      COMPOSE_LEGACY_WORKER_TOKEN: ${COMPOSE_LEGACY_WORKER_TOKEN:?Run ./scripts/compose-init}
       COMPOSE_WORKER_TOKEN: ${COMPOSE_WORKER_TOKEN:?Run ./scripts/compose-init}
     volumes:
       - ./examples/compose/factory.toml:/config/factory.toml:ro
@@ -44,6 +48,7 @@ services:
       server:
         condition: service_healthy
     network_mode: service:server
+    mem_limit: 1g
     command:
       ["execution-worker", "--profile", "/config/execution-worker.toml"]
     environment:

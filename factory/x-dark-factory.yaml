@@ -1,0 +1,11 @@
+schemaVersion: 1
+# Dark Factory's own pipeline. It takes effect only when this file is on main and the
+# operator's profile adopts the repository; the host profile still grants every runner,
+# secret and budget.
+change:
+  build:
+    steps:
+      - ["python", "-m", "compileall", "-q", "src"]
+  test:
+    steps:
+      - ["python", "-m", "pytest", "-q", "-n", "auto"]

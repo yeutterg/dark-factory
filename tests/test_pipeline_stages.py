@@ -132,3 +132,15 @@ def test_a_repository_without_a_pipeline_is_unchanged(tmp_path):
     )
     run_to_review(ctrl, worker, wid)
     assert check_result(store)["stages"] == []
+
+
+def test_change_stages_appear_in_the_same_metrics_report(tmp_path, monkeypatch):
+    from dark_factory.metrics import stage_metrics
+
+    with_pipeline(monkeypatch, PASS)
+    cfg, store, ctrl, wid, worker = setup(tmp_path)
+    run_to_review(ctrl, worker, wid)
+    rows = {(r["loop"], r["stage"]): r for r in stage_metrics(store)["stages"]}
+    assert rows[("change", "build")]["passed"] == 1
+    assert rows[("change", "test")]["runner"] == "local"
+    assert ("change", "implement") in rows and ("change", "review") in rows

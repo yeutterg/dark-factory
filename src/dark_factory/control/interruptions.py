@@ -135,6 +135,7 @@ class InterruptionMixin(ControllerCore):
                 cmd.timeout_seconds,
             )
             answer = result["evidence"]["answers"]["next"]
+            self._record_decider_cost(row, result["evidence"])
             return {
                 "agent": str(result["evidence"].get("agent", "decider")),
                 "model": str(result["evidence"].get("model", "")),
@@ -148,6 +149,32 @@ class InterruptionMixin(ControllerCore):
                 {"interruption": row["id"], "error": str(exc)[:500]},
             )
             return None
+
+    def _record_decider_cost(self, row, evidence):
+        """Charge what the decision agent reports it cost; never guess a figure."""
+        usage = evidence.get("usage") or {}
+        cents = usage.get("cost_cents")
+        if type(cents) is not int or cents <= 0:
+            return
+        with self.store.transaction():
+            self.store.execute(
+                "INSERT INTO costs(id,root_id,attempt_id,source,amount_cents,currency,status,created_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    new_id("cost"),
+                    row["root_id"],
+                    row["attempt_id"],
+                    "decider:" + str(evidence.get("agent", "decider")),
+                    cents,
+                    "USD",
+                    "reported",
+                    now_iso(),
+                ),
+            )
+            self.store.execute(
+                "UPDATE work_items SET spent_cents=spent_cents+? WHERE id=?",
+                (cents, row["root_id"]),
+            )
 
     def settle_interruptions(self, actor="controller"):
         """Resume trivial interruptions and hand the rest to a person."""

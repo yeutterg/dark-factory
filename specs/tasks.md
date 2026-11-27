@@ -71,19 +71,17 @@ Implementation authority remains the [specification](spec.md) and [constitution]
 - [~] Phase 4 consistency refactor: done — one active-attempt constant used everywhere, shared protected-path list, shared secret and redaction helpers, one retrying POST for the decision adapters, `interruptions.py` renamed `resume_policy.py`, one prompt layering. Not done — the larger splits (`config.py` into per-table validators, `Worker._execute`, `control/tasks.py`, `ui/screens.py`), the shared harness CLI base, status enums applied to every SQL literal, the Warp definition as a dataclass.
 - [x] Phase 5 Warp `v1alpha1` compatibility: reader checked against Warp's published schemas and 16 example trees (`tests/test_warp_conformance.py`); layered prompts keep the output contract; roles selection, aliases, self-improvement agent, version and strictness rules, whole-tree digest, per-resource report. Not done: runner platform field rules beyond `platform.os`, and automation trigger contents beyond presence.
 - [x] Phase 6 self-improvement on by default: `[improvement]` table, persisted signals (loop roots excluded, role attribution fixed), standing-policy approval bound to the profile digest, scoped paths and diff cap, dedicated budget, concurrency and cooldown, target refusals, draft PR publication through a new `push_branch` code-host operation (`tests/test_improvement_loop.py`, `docs/self-improvement.md`). The push and PR path is unit-tested against the contract but has not run against a live GitHub repository (Phase 8).
-- [~] Phase 7 operations: done — WAL, `synchronous=FULL`, busy timeout and an integrity check on open; numbered migrations and refusal of newer state; sub-second timestamps with rowid tie-breaks; incremental credential scrub; SIGTERM drains, stops process groups and records why (roots are not cancelled); backup/restore keeps a verifying manifest and cleans up a failed restore; CI pins actions by SHA, adds Python 3.13/3.14, `pip-audit`, live-overlay validation and Dependabot; runtime image has no dev tools unless asked. Not done — structured logging, hashed Python lockfile, locked harness manifests, audit retention, decider cost records, `/state` permissions (needs the non-root worker adopted), image vulnerability scan.
+- [~] Phase 7 operations: done — WAL, `synchronous=FULL`, busy timeout and an integrity check on open; numbered migrations and refusal of newer state; sub-second timestamps with rowid tie-breaks; structured JSON logs from the audit trail; incremental credential scrub; audit retention for noisy records only; decider cost records; SIGTERM drains, stops process groups and records why (roots are not cancelled); backup/restore keeps a verifying manifest and cleans up a failed restore; hashed lockfiles (`requirements.lock`, `requirements-dev.lock`) installed with `--require-hashes`; CI pins actions by SHA, adds Python 3.13/3.14, `pip-audit`, live-overlay validation and Dependabot; the runtime image has no dev tools unless asked. Not done — locked manifests for the harness CLIs (their installers need live qualification), `/state` permissions (needs the non-root worker adopted), an image vulnerability scan.
 - [ ] Phase 8 requalification (needs live probes and human approval).
 
-## Universal pipeline ([plan](pipeline-plan.md))
+## Universal pipeline ([plan](pipeline-plan.md), [guide](../docs/pipeline.md))
 
-Starts after repair Phase 4. Plan only; not approved for implementation.
-
-- [ ] P0 governance: constitution 1.3.0 and spec amendments.
-- [ ] P1 resource ownership and cleanup.
-- [ ] P2 repository pipeline file and fixed stages.
-- [ ] P3 external implementers and the pull-request gate.
-- [ ] P4 runners: local capacity, GitHub Actions, Blacksmith.
-- [ ] P5 release roots.
-- [ ] P6 code-host contract.
-- [ ] P7 stage metrics.
-- [ ] P8 adoption, one repository at a time, each with human approval.
+- [x] P0 governance: constitution 1.3.0 and the spec amendment.
+- [x] P1 resource ownership and cleanup: owners and removal rules, sweep at startup and every ten minutes, disk floor and budget, `disk` and `gc`.
+- [x] P2 repository pipeline: `factory/x-dark-factory.yaml` read from main by commit and pinned per root, fixed stages, build and test inside the check, stage evidence bound to the commit and pipeline digest. Not done: a stage-level container environment (stages run in the check job's environment).
+- [x] P3 external implementers and the gate: `work-*` commands, a contributor credential, factory-owned worktrees, `ExternalHarness`, draft PR after review, `dark-factory/gate`. A resubmission after a new push goes through `work-plan` again.
+- [x] P4 runners: local capacity limits and labels, GitHub Actions and Blacksmith through one adapter, secret grants, signing secrets refused on local runners. Hosted *change* stages wait for publishing the candidate.
+- [x] P5 release roots: two human decisions bound to the package digest, manual verification, retention, rollback.
+- [x] P6 code-host contract: written contract, reference fake, conformance suite over both adapters, no GitHub calls outside the two adapters.
+- [x] P7 metrics: one report over both loops.
+- [ ] P8 adoption, one repository at a time, each with human approval. Dark Factory's own pipeline file is written; cloud, app and firmware are not adopted.

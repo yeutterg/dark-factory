@@ -357,3 +357,30 @@ def test_prompt_only_claims_restored_work_when_it_was_restored(loop):
     assert "start the step again" in brief(False)["instructions"]
     assert brief(True)["work_restored"] is True
     assert "already in the workspace" in brief(True)["instructions"]
+
+
+def test_a_reported_decider_cost_is_recorded_against_the_root(loop):
+    cfg, store, ctrl, wid, worker = loop
+    first = ctrl.claim_job("w", ["native", "fake", "environment:local"])
+    ctrl.finish_attempt(
+        first["attempt_id"],
+        False,
+        "",
+        0,
+        None,
+        error="HTTP 503 overloaded",
+        timed_out=True,
+    )
+    row = store.one("SELECT * FROM interruptions")
+    before = store.one("SELECT spent_cents FROM work_items")[0]
+    ctrl._record_decider_cost(
+        row, {"agent": "test-decider", "usage": {"cost_cents": 3}}
+    )
+    ctrl._record_decider_cost(
+        row, {"agent": "test-decider", "usage": {}}
+    )  # unknown: nothing
+    assert store.one("SELECT spent_cents FROM work_items")[0] == before + 3
+    cost = store.one(
+        "SELECT source,amount_cents,status FROM costs WHERE source LIKE 'decider:%'"
+    )
+    assert tuple(cost) == ("decider:test-decider", 3, "reported")

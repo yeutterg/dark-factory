@@ -1,0 +1,21 @@
+# Opt-in: run the live worker without root, added capabilities or an unconfined
+# seccomp profile. Use with compose.yaml and compose.live.yaml:
+#
+#   docker compose -f compose.yaml -f compose.live.yaml -f compose.live-hardened.yaml up
+#
+# Spike result (Docker, Debian trixie image, bubblewrap 0.12): the sandbox driver
+# and a Bubblewrap nested inside it both run as uid 10001 with every capability
+# dropped, under deploy/seccomp/dark-factory-userns.json (Docker's default profile
+# plus the namespace and mount syscalls) and systempaths=unconfined. Without
+# systempaths=unconfined the /proc mount is refused. Not yet qualified with a live
+# Codex run: see specs/repair-plan.md, Phase 3 and Phase 8.
+services:
+  worker:
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    cap_add: !reset []
+    security_opt: !override
+      - no-new-privileges:true
+      - seccomp=./deploy/seccomp/dark-factory-userns.json
+      - systempaths=unconfined

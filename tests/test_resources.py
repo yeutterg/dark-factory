@@ -138,3 +138,19 @@ def test_a_killed_build_leaves_nothing_after_restart_sweep(tmp_path):
     )
     ctrl.sweep_resources()
     assert not workspace.exists()
+
+
+def test_old_noise_is_pruned_from_the_audit_trail_but_decisions_stay(tmp_path):
+    cfg, store, ctrl, wid, worker = setup(tmp_path)
+    old = "2020-01-01T00:00:00+00:00"
+    for action in ("attempt.finish", "gate.status", "approve", "reject", "manual_gate"):
+        store.execute(
+            "INSERT INTO audit(id,at,actor,action,payload_json) VALUES (?,?,?,?,'{}')",
+            (f"aud_{action}", old, "x", action),
+        )
+    result = ctrl.sweep_resources()
+    assert result["audit_pruned"] == 2
+    left = {
+        r["action"] for r in store.query("SELECT action FROM audit WHERE at=?", (old,))
+    }
+    assert left == {"approve", "reject", "manual_gate"}

@@ -22,6 +22,23 @@ from dark_factory.execution.cleanup import release_attempt_environment
 from dark_factory.models import ACTIVE_ATTEMPT, TERMINAL_ROOT, sql_set
 
 ATTEMPT_AREAS = ("workspaces", "runtime", "dispatch")
+# High-volume records no later decision reads. Decisions (approve, reject, accept,
+# manual_gate, external.*, release.*, improvement.*) are never pruned.
+NOISY_AUDIT = (
+    "attempt.finish",
+    "attempt.not_started",
+    "recover",
+    "worker.error",
+    "gate.status",
+    "gate.error",
+    "resources.swept",
+    "resources.retained",
+    "credentials.scrub",
+    "decider.unavailable",
+    "task_progress.rejected",
+    "continuation.reconcile",
+    "tasks.reconcile",
+)
 SWEEP_INTERVAL_SECONDS = 600
 STATE_SIZE_CACHE_SECONDS = 60
 
@@ -203,6 +220,7 @@ class ResourcesMixin(ControllerCore):
                 (attempt["id"],),
             )
 
+        pruned = self.prune_audit()
         leftover = self.sweep_external_worktrees()
         if leftover:
             freed["external"] = leftover
@@ -211,7 +229,24 @@ class ResourcesMixin(ControllerCore):
             self.store.audit(
                 actor, "resources.swept", {"freed_bytes": total, "by_area": freed}
             )
-        return {"freed_bytes": total, "by_area": freed, "kept": kept}
+        return {
+            "freed_bytes": total,
+            "by_area": freed,
+            "kept": kept,
+            "audit_pruned": pruned,
+        }
+
+    def prune_audit(self):
+        """Drop old noise from the audit trail; decisions stay for good."""
+        cutoff = (
+            datetime.now(UTC) - timedelta(days=self.cfg.disk["keep_audit_days"])
+        ).isoformat()
+        marks = ",".join("?" for _ in NOISY_AUDIT)
+        cursor = self.store.execute(
+            f"DELETE FROM audit WHERE at<? AND action IN ({marks})",
+            (cutoff, *NOISY_AUDIT),
+        )
+        return cursor.rowcount
 
     def sweep_if_due(self):
         """At startup and then at most every few minutes."""

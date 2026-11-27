@@ -117,7 +117,7 @@ class ImprovementMixin(ControllerCore):
             return {"state": reason}
         self.refresh_improvement_signals()
         created = self._maybe_create_root(repo, actor)
-        advanced = [self._advance(root) for root in self._open_roots()]
+        advanced = [self._advance_improvement(root) for root in self._open_roots()]
         return {"created": created, "advanced": [a for a in advanced if a]}
 
     def _open_roots(self):
@@ -203,7 +203,7 @@ class ImprovementMixin(ControllerCore):
         self.start_planning(wid, actor)
         return wid
 
-    def _advance(self, root):
+    def _advance_improvement(self, root):
         status = root["status"]
         if status == "awaiting_approval" and not root["approved_digest"]:
             return self._approve_by_policy(root)

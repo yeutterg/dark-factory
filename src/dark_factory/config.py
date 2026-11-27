@@ -18,7 +18,12 @@ from dark_factory.secrets import secret
 
 SCHEMA_VERSION = 1
 # Every optional setting has exactly one default, shared by validation and use.
-DEFAULT_DISK = {"min_free_gb": 2, "max_state_gb": 0, "keep_finished_days": 7}
+DEFAULT_DISK = {
+    "min_free_gb": 2,
+    "max_state_gb": 0,
+    "keep_finished_days": 7,
+    "keep_audit_days": 90,
+}
 DEFAULT_IMPROVEMENT = {
     "max_files": 3,
     "max_changed_lines": 80,
@@ -202,6 +207,9 @@ class FactoryConfig:
             "max_state_gb": table.get("max_state_gb", DEFAULT_DISK["max_state_gb"]),
             "keep_finished_days": table.get(
                 "keep_finished_days", DEFAULT_DISK["keep_finished_days"]
+            ),
+            "keep_audit_days": table.get(
+                "keep_audit_days", DEFAULT_DISK["keep_audit_days"]
             ),
         }
 
@@ -389,207 +397,12 @@ def _integer(table: dict[str, Any], key: str, default: int, minimum: int = 0) ->
     return value
 
 
-def _validate_improvement(
+def _parse_routes(
     raw: dict[str, Any],
-    repositories: list[str],
-    sources: dict[str, dict[str, Any]],
-    state_dir: Path,
-) -> None:
-    table = raw.get("improvement", {})
-    if not isinstance(table, dict):
-        raise ConfigError("improvement must be a table")
-    _fields(
-        table,
-        {
-            "enabled",
-            "repository",
-            "base_branch",
-            "allowed_paths",
-            "protected_paths",
-            "max_files",
-            "max_changed_lines",
-            "max_open",
-            "cooldown_days",
-            "budget_cents",
-            "threshold",
-        },
-        "improvement",
-    )
-    if "enabled" in table:
-        _require(table, "enabled", bool)
-    for key in ("max_files", "max_changed_lines", "max_open", "cooldown_days"):
-        _integer(table, key, 1, 1)
-    _integer(table, "budget_cents", 1, 1)
-    if "threshold" in table:
-        _integer(table, "threshold", 3, 2)
-    for key in ("allowed_paths", "protected_paths"):
-        values = table.get(key, [])
-        if not isinstance(values, list) or not all(
-            isinstance(v, str) and v for v in values
-        ):
-            raise ConfigError(f"improvement.{key} must be a list of strings")
-        for name in values:
-            if (
-                Path(name).is_absolute()
-                or ".." in Path(name).parts
-                or name in {".", ".git"}
-                or any(c in name for c in "*?[")
-            ):
-                raise ConfigError(
-                    "improvement scope paths must be literal repository-relative paths"
-                )
-    repository = table.get("repository")
-    if repository is not None and repository not in repositories:
-        raise ConfigError("improvement.repository must be a configured repository")
-    target = sources.get(repository or "")
-    if target:
-        # The loop may change a separate checkout, never the installation that is
-        # running it or the directory that holds its state.
-        path = Path(target["path"]).resolve()
-        installation = Path(__file__).resolve().parents[2]
-        if path == installation or installation.is_relative_to(path):
-            raise ConfigError(
-                "improvement.repository cannot be the running installation; use a separate checkout"
-            )
-        if state_dir.resolve().is_relative_to(path) or path.is_relative_to(
-            state_dir.resolve()
-        ):
-            raise ConfigError(
-                "improvement.repository cannot contain the controller state directory"
-            )
+) -> tuple[dict[str, Any], dict[str, Route], set[str]]:
+    """Routes plus the geography checks that cover them and the optional decision agents.
 
-
-def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> FactoryConfig:
-    _fields(
-        raw,
-        {
-            "schema_version",
-            "project",
-            "repositories",
-            "labels",
-            "routes",
-            "windows",
-            "date_exceptions",
-            "commands",
-            "prompts",
-            "skills",
-            "geography_policy",
-            "runtime",
-            "budgets",
-            "sources",
-            "execution",
-            "operators",
-            "continuation",
-            "role_routes",
-            "environments",
-            "workers",
-            "decider",
-            "task_supervisor",
-            "definition",
-            "improvement",
-            "disk",
-            "gate",
-            "runners",
-            "secret_classes",
-        },
-        "profile",
-    )
-    for key, allowed in {
-        "project": {"name", "state_dir", "id"},
-        "runtime": {
-            "operator_token",
-            "operator_token_env",
-            "contributor_token_env",
-            "api_host",
-            "api_port",
-            "default_timeout_seconds",
-            "max_output_bytes",
-        },
-        "budgets": {"root_cents", "planning_cents", "account_cents"},
-        "geography_policy": {"blocked_regions"},
-    }.items():
-        table = raw.get(key, {})
-        if not isinstance(table, dict):
-            raise ConfigError(f"{key} must be a table")
-        _fields(table, allowed, key)
-    definition_table = raw.get("definition", {})
-    if not isinstance(definition_table, dict):
-        raise ConfigError("definition must be a table")
-    _fields(definition_table, {"format", "path", "strict", "roles"}, "definition")
-    definition: dict[str, Any] = {}
-    if definition_table:
-        if definition_table.get("format") != "warp-v1alpha1":
-            raise ConfigError("definition.format must be warp-v1alpha1")
-        definition_path = definition_table.get("path")
-        if not isinstance(definition_path, str) or not definition_path.strip():
-            raise ConfigError("definition.path is required")
-        strict = definition_table.get("strict", True)
-        if type(strict) is not bool:
-            raise ConfigError("definition.strict must be a boolean")
-        from dark_factory.adapters.definition.warp import (
-            WarpDefinitionError,
-            load_definition,
-        )
-
-        role_choices = definition_table.get("roles", {})
-        if not isinstance(role_choices, dict) or not all(
-            isinstance(k, str) and isinstance(v, str) for k, v in role_choices.items()
-        ):
-            raise ConfigError("definition.roles must map a role to an agent name")
-        try:
-            definition = load_definition(
-                _resolve(source_path.parent, definition_path),
-                strict=strict,
-                roles=role_choices,
-            )
-        except WarpDefinitionError as exc:
-            raise ConfigError(f"invalid Warp definition: {exc}") from exc
-    _integer(raw.get("budgets", {}), "root_cents", BUDGET_DEFAULTS["root_cents"])
-    continuation = raw.get("continuation", {})
-    if not isinstance(continuation, dict):
-        raise ConfigError("continuation must be a table")
-    _fields(continuation, {"max_repairs", "max_resumes"}, "continuation")
-    if _integer(continuation, "max_repairs", DEFAULT_MAX_REPAIRS) > 1:
-        raise ConfigError("at most one targeted correctness repair is supported")
-    if _integer(continuation, "max_resumes", DEFAULT_MAX_RESUMES) > MAX_RESUMES_LIMIT:
-        raise ConfigError(
-            f"at most {MAX_RESUMES_LIMIT} automatic resumes per step are supported"
-        )
-    operators = raw.get("operators", {})
-    if not isinstance(operators, dict):
-        raise ConfigError("operators must be a table")
-    _fields(operators, {"humans"}, "operators")
-    humans = operators.get("humans", [])
-    if (
-        not isinstance(humans, list)
-        or not all(isinstance(x, str) and x.strip() for x in humans)
-        or len(set(humans)) != len(humans)
-    ):
-        raise ConfigError("operators.humans must contain unique named identities")
-    if _integer(raw.get("runtime", {}), "api_port", 8745, 1) > 65535:
-        raise ConfigError("api_port must be <= 65535")
-    version = _require(raw, "schema_version", int)
-    if version != SCHEMA_VERSION:
-        raise ConfigError(
-            f"unsupported schema_version {version}; expected {SCHEMA_VERSION}"
-        )
-    project = _require(raw, "project", dict)
-    name = _require(project, "name", str)
-    state_dir = Path(_resolve(source_path.parent, _require(project, "state_dir", str)))
-    repositories = _require(raw, "repositories", list)
-    if not repositories or not all(isinstance(r, str) and r for r in repositories):
-        raise ConfigError("repositories must be a non-empty list of strings")
-    if definition and definition["repositories"] != repositories:
-        raise ConfigError(
-            "Warp definition repositories must exactly match the operator profile"
-        )
-
-    labels = raw.get("labels", {})
-    if not isinstance(labels, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in labels.items()
-    ):
-        raise ConfigError("labels must be a string table")
-
+    Returns (raw routes table, routes, blocked regions)."""
     routes_raw = _require(raw, "routes", dict)
     routes: dict[str, Route] = {}
     policy = raw.get("geography_policy", {"blocked_regions": ["CN"]})
@@ -758,6 +571,321 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         )
     if not routes:
         raise ConfigError("at least one route is required")
+    return routes_raw, routes, blocked
+
+
+def _load_definition(raw: dict[str, Any], source_path: Path) -> dict[str, Any]:
+    """The Warp definition the profile points at, or an empty one."""
+    definition_table = raw.get("definition", {})
+    if not isinstance(definition_table, dict):
+        raise ConfigError("definition must be a table")
+    _fields(definition_table, {"format", "path", "strict", "roles"}, "definition")
+    definition: dict[str, Any] = {}
+    if definition_table:
+        if definition_table.get("format") != "warp-v1alpha1":
+            raise ConfigError("definition.format must be warp-v1alpha1")
+        definition_path = definition_table.get("path")
+        if not isinstance(definition_path, str) or not definition_path.strip():
+            raise ConfigError("definition.path is required")
+        strict = definition_table.get("strict", True)
+        if type(strict) is not bool:
+            raise ConfigError("definition.strict must be a boolean")
+        from dark_factory.adapters.definition.warp import (
+            WarpDefinitionError,
+            load_definition,
+        )
+
+        role_choices = definition_table.get("roles", {})
+        if not isinstance(role_choices, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in role_choices.items()
+        ):
+            raise ConfigError("definition.roles must map a role to an agent name")
+        try:
+            definition = load_definition(
+                _resolve(source_path.parent, definition_path),
+                strict=strict,
+                roles=role_choices,
+            )
+        except WarpDefinitionError as exc:
+            raise ConfigError(f"invalid Warp definition: {exc}") from exc
+    return definition
+
+
+def _normalize_sources(
+    raw: dict[str, Any],
+    repositories: list[str],
+    commands: dict[str, IntegrationCommand],
+    source_path: Path,
+) -> dict[str, dict[str, Any]]:
+    """Validate each repository source: pinned revision, checks, and a literal scope."""
+    sources = raw.get("sources", {})
+    if not isinstance(sources, dict):
+        raise ConfigError("sources must be a table")
+    normalized_sources = {}
+    for repo, source in sources.items():
+        if repo not in repositories or not isinstance(source, dict):
+            raise ConfigError("sources must name configured repositories")
+        _fields(
+            source,
+            {
+                "path",
+                "revision",
+                "checks",
+                "allowed_paths",
+                "protected_paths",
+                "manual_acceptance",
+                "external_acceptance",
+                "require_live_evidence",
+                "ephemeral_paths",
+                "pipeline_ref",
+            },
+            "source",
+        )
+        if "require_live_evidence" in source:
+            _require(source, "require_live_evidence", bool)
+        path = Path(_resolve(source_path.parent, _require(source, "path", str)))
+        if not path.is_dir():
+            raise ConfigError(f"source repository does not exist: {path}")
+        revision = _require(source, "revision", str)
+        if not revision or revision.startswith("-"):
+            raise ConfigError("source revision is required")
+        for key in (
+            "checks",
+            "allowed_paths",
+            "protected_paths",
+            "manual_acceptance",
+            "external_acceptance",
+            "ephemeral_paths",
+        ):
+            values = source.get(key, [])
+            if not isinstance(values, list) or not all(
+                isinstance(v, str) and v for v in values
+            ):
+                raise ConfigError(f"source {key} must be a list of strings")
+        for requirement in source.get("external_acceptance", []):
+            kind, _, ident = requirement.partition(":")
+            if kind not in {"check", "status", "review"} or not ident:
+                raise ConfigError(
+                    "external_acceptance entries must be check:<name>, "
+                    f"status:<context> or review:<login>, not {requirement!r}"
+                )
+        if not source.get("protected_paths"):
+            raise ConfigError(
+                "sources must explicitly pin protected verification definitions"
+            )
+        if not source.get("checks") or not source.get("allowed_paths"):
+            raise ConfigError(
+                "source needs canonical checks and explicit allowed_paths"
+            )
+        for cid in source["checks"]:
+            if cid not in commands:
+                raise ConfigError(f"unknown verification command {cid}")
+        for path_name in source["allowed_paths"] + source.get("protected_paths", []):
+            if (
+                Path(path_name).is_absolute()
+                or ".." in Path(path_name).parts
+                or path_name in {".", ".git"}
+                or any(c in path_name for c in "*?[")
+            ):
+                raise ConfigError(
+                    "scope paths must be literal repository-relative files or directories"
+                )
+        normalized_sources[repo] = {**source, "path": str(path), "revision": revision}
+        for ephemeral in source.get("ephemeral_paths", []):
+            if (
+                Path(ephemeral).is_absolute()
+                or ".." in Path(ephemeral).parts
+                or ephemeral in {".", ".git", ""}
+                or any(c in ephemeral for c in "*?[\n")
+            ):
+                raise ConfigError(
+                    "ephemeral paths must be literal owned output directories"
+                )
+            for required_path in (
+                source["allowed_paths"] + source["protected_paths"] + [".git"]
+            ):
+                if (
+                    ephemeral == required_path
+                    or ephemeral.startswith(required_path + "/")
+                    or required_path.startswith(ephemeral + "/")
+                ):
+                    raise ConfigError(
+                        "ephemeral outputs cannot overlap source or protected inputs"
+                    )
+    return normalized_sources
+
+
+def _validate_improvement(
+    raw: dict[str, Any],
+    repositories: list[str],
+    sources: dict[str, dict[str, Any]],
+    state_dir: Path,
+) -> None:
+    table = raw.get("improvement", {})
+    if not isinstance(table, dict):
+        raise ConfigError("improvement must be a table")
+    _fields(
+        table,
+        {
+            "enabled",
+            "repository",
+            "base_branch",
+            "allowed_paths",
+            "protected_paths",
+            "max_files",
+            "max_changed_lines",
+            "max_open",
+            "cooldown_days",
+            "budget_cents",
+            "threshold",
+        },
+        "improvement",
+    )
+    if "enabled" in table:
+        _require(table, "enabled", bool)
+    for key in ("max_files", "max_changed_lines", "max_open", "cooldown_days"):
+        _integer(table, key, 1, 1)
+    _integer(table, "budget_cents", 1, 1)
+    if "threshold" in table:
+        _integer(table, "threshold", 3, 2)
+    for key in ("allowed_paths", "protected_paths"):
+        values = table.get(key, [])
+        if not isinstance(values, list) or not all(
+            isinstance(v, str) and v for v in values
+        ):
+            raise ConfigError(f"improvement.{key} must be a list of strings")
+        for name in values:
+            if (
+                Path(name).is_absolute()
+                or ".." in Path(name).parts
+                or name in {".", ".git"}
+                or any(c in name for c in "*?[")
+            ):
+                raise ConfigError(
+                    "improvement scope paths must be literal repository-relative paths"
+                )
+    repository = table.get("repository")
+    if repository is not None and repository not in repositories:
+        raise ConfigError("improvement.repository must be a configured repository")
+    target = sources.get(repository or "")
+    if target:
+        # The loop may change a separate checkout, never the installation that is
+        # running it or the directory that holds its state.
+        path = Path(target["path"]).resolve()
+        installation = Path(__file__).resolve().parents[2]
+        if path == installation or installation.is_relative_to(path):
+            raise ConfigError(
+                "improvement.repository cannot be the running installation; use a separate checkout"
+            )
+        if state_dir.resolve().is_relative_to(path) or path.is_relative_to(
+            state_dir.resolve()
+        ):
+            raise ConfigError(
+                "improvement.repository cannot contain the controller state directory"
+            )
+
+
+def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> FactoryConfig:
+    _fields(
+        raw,
+        {
+            "schema_version",
+            "project",
+            "repositories",
+            "labels",
+            "routes",
+            "windows",
+            "date_exceptions",
+            "commands",
+            "prompts",
+            "skills",
+            "geography_policy",
+            "runtime",
+            "budgets",
+            "sources",
+            "execution",
+            "operators",
+            "continuation",
+            "role_routes",
+            "environments",
+            "workers",
+            "decider",
+            "task_supervisor",
+            "definition",
+            "improvement",
+            "disk",
+            "gate",
+            "runners",
+            "secret_classes",
+        },
+        "profile",
+    )
+    for key, allowed in {
+        "project": {"name", "state_dir", "id"},
+        "runtime": {
+            "operator_token",
+            "operator_token_env",
+            "contributor_token_env",
+            "api_host",
+            "api_port",
+            "default_timeout_seconds",
+            "max_output_bytes",
+        },
+        "budgets": {"root_cents", "planning_cents", "account_cents"},
+        "geography_policy": {"blocked_regions"},
+    }.items():
+        table = raw.get(key, {})
+        if not isinstance(table, dict):
+            raise ConfigError(f"{key} must be a table")
+        _fields(table, allowed, key)
+    definition = _load_definition(raw, source_path)
+    _integer(raw.get("budgets", {}), "root_cents", BUDGET_DEFAULTS["root_cents"])
+    continuation = raw.get("continuation", {})
+    if not isinstance(continuation, dict):
+        raise ConfigError("continuation must be a table")
+    _fields(continuation, {"max_repairs", "max_resumes"}, "continuation")
+    if _integer(continuation, "max_repairs", DEFAULT_MAX_REPAIRS) > 1:
+        raise ConfigError("at most one targeted correctness repair is supported")
+    if _integer(continuation, "max_resumes", DEFAULT_MAX_RESUMES) > MAX_RESUMES_LIMIT:
+        raise ConfigError(
+            f"at most {MAX_RESUMES_LIMIT} automatic resumes per step are supported"
+        )
+    operators = raw.get("operators", {})
+    if not isinstance(operators, dict):
+        raise ConfigError("operators must be a table")
+    _fields(operators, {"humans"}, "operators")
+    humans = operators.get("humans", [])
+    if (
+        not isinstance(humans, list)
+        or not all(isinstance(x, str) and x.strip() for x in humans)
+        or len(set(humans)) != len(humans)
+    ):
+        raise ConfigError("operators.humans must contain unique named identities")
+    if _integer(raw.get("runtime", {}), "api_port", 8745, 1) > 65535:
+        raise ConfigError("api_port must be <= 65535")
+    version = _require(raw, "schema_version", int)
+    if version != SCHEMA_VERSION:
+        raise ConfigError(
+            f"unsupported schema_version {version}; expected {SCHEMA_VERSION}"
+        )
+    project = _require(raw, "project", dict)
+    name = _require(project, "name", str)
+    state_dir = Path(_resolve(source_path.parent, _require(project, "state_dir", str)))
+    repositories = _require(raw, "repositories", list)
+    if not repositories or not all(isinstance(r, str) and r for r in repositories):
+        raise ConfigError("repositories must be a non-empty list of strings")
+    if definition and definition["repositories"] != repositories:
+        raise ConfigError(
+            "Warp definition repositories must exactly match the operator profile"
+        )
+
+    labels = raw.get("labels", {})
+    if not isinstance(labels, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in labels.items()
+    ):
+        raise ConfigError("labels must be a string table")
+
+    routes_raw, routes, blocked = _parse_routes(raw)
 
     if definition:
         from dark_factory.adapters.harness.registry import adapter_for
@@ -943,100 +1071,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     if operator_token and len(operator_token) < 32:
         raise ConfigError("the operator credential must be at least 32 characters")
 
-    sources = raw.get("sources", {})
-    if not isinstance(sources, dict):
-        raise ConfigError("sources must be a table")
-    normalized_sources = {}
-    for repo, source in sources.items():
-        if repo not in repositories or not isinstance(source, dict):
-            raise ConfigError("sources must name configured repositories")
-        _fields(
-            source,
-            {
-                "path",
-                "revision",
-                "checks",
-                "allowed_paths",
-                "protected_paths",
-                "manual_acceptance",
-                "external_acceptance",
-                "require_live_evidence",
-                "ephemeral_paths",
-                "pipeline_ref",
-            },
-            "source",
-        )
-        if "require_live_evidence" in source:
-            _require(source, "require_live_evidence", bool)
-        path = Path(_resolve(source_path.parent, _require(source, "path", str)))
-        if not path.is_dir():
-            raise ConfigError(f"source repository does not exist: {path}")
-        revision = _require(source, "revision", str)
-        if not revision or revision.startswith("-"):
-            raise ConfigError("source revision is required")
-        for key in (
-            "checks",
-            "allowed_paths",
-            "protected_paths",
-            "manual_acceptance",
-            "external_acceptance",
-            "ephemeral_paths",
-        ):
-            values = source.get(key, [])
-            if not isinstance(values, list) or not all(
-                isinstance(v, str) and v for v in values
-            ):
-                raise ConfigError(f"source {key} must be a list of strings")
-        for requirement in source.get("external_acceptance", []):
-            kind, _, ident = requirement.partition(":")
-            if kind not in {"check", "status", "review"} or not ident:
-                raise ConfigError(
-                    "external_acceptance entries must be check:<name>, "
-                    f"status:<context> or review:<login>, not {requirement!r}"
-                )
-        if not source.get("protected_paths"):
-            raise ConfigError(
-                "sources must explicitly pin protected verification definitions"
-            )
-        if not source.get("checks") or not source.get("allowed_paths"):
-            raise ConfigError(
-                "source needs canonical checks and explicit allowed_paths"
-            )
-        for cid in source["checks"]:
-            if cid not in commands:
-                raise ConfigError(f"unknown verification command {cid}")
-        for path_name in source["allowed_paths"] + source.get("protected_paths", []):
-            if (
-                Path(path_name).is_absolute()
-                or ".." in Path(path_name).parts
-                or path_name in {".", ".git"}
-                or any(c in path_name for c in "*?[")
-            ):
-                raise ConfigError(
-                    "scope paths must be literal repository-relative files or directories"
-                )
-        normalized_sources[repo] = {**source, "path": str(path), "revision": revision}
-        for ephemeral in source.get("ephemeral_paths", []):
-            if (
-                Path(ephemeral).is_absolute()
-                or ".." in Path(ephemeral).parts
-                or ephemeral in {".", ".git", ""}
-                or any(c in ephemeral for c in "*?[\n")
-            ):
-                raise ConfigError(
-                    "ephemeral paths must be literal owned output directories"
-                )
-            for required_path in (
-                source["allowed_paths"] + source["protected_paths"] + [".git"]
-            ):
-                if (
-                    ephemeral == required_path
-                    or ephemeral.startswith(required_path + "/")
-                    or required_path.startswith(ephemeral + "/")
-                ):
-                    raise ConfigError(
-                        "ephemeral outputs cannot overlap source or protected inputs"
-                    )
+    normalized_sources = _normalize_sources(raw, repositories, commands, source_path)
     from dark_factory.runners import validate_runner_table
 
     validate_runner_table(raw)
@@ -1052,10 +1087,15 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     disk = raw.get("disk", {})
     if not isinstance(disk, dict):
         raise ConfigError("disk must be a table")
-    _fields(disk, {"min_free_gb", "max_state_gb", "keep_finished_days"}, "disk")
+    _fields(
+        disk,
+        {"min_free_gb", "max_state_gb", "keep_finished_days", "keep_audit_days"},
+        "disk",
+    )
     _integer(disk, "min_free_gb", DEFAULT_DISK["min_free_gb"], 0)
     _integer(disk, "max_state_gb", DEFAULT_DISK["max_state_gb"], 0)
     _integer(disk, "keep_finished_days", DEFAULT_DISK["keep_finished_days"], 1)
+    _integer(disk, "keep_audit_days", DEFAULT_DISK["keep_audit_days"], 1)
     _validate_improvement(raw, repositories, normalized_sources, state_dir)
     execution = raw.get("execution", {})
     if not isinstance(execution, dict):

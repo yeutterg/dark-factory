@@ -65,6 +65,12 @@ def _task_import(ctrl: Controller, p: dict[str, Any], actor: str) -> dict[str, A
     return result
 
 
+def _metrics(ctrl: Controller) -> dict[str, Any]:
+    from dark_factory.metrics import stage_metrics
+
+    return stage_metrics(ctrl.store)
+
+
 COMMANDS: dict[str, OperatorCommand] = {
     command.name: command
     for command in (
@@ -234,6 +240,48 @@ COMMANDS: dict[str, OperatorCommand] = {
             render=_pretty,
             contributor=True,
         ),
+        OperatorCommand(
+            "release-start",
+            lambda c, p, a: c.release_start(p["repo"], p["kind"], a, p.get("ref")),
+            ("repo", "kind", "ref"),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "release-run",
+            lambda c, p, a: c.release_run_stage(p["release_id"], a),
+            ("release_id",),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "release-approve",
+            lambda c, p, a: c.release_approve(p["release_id"], p["gate"], a),
+            ("release_id", "gate"),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "release-confirm",
+            lambda c, p, a: c.release_confirm(
+                p["release_id"], p["item"], a, p.get("evidence") or ""
+            ),
+            ("release_id", "item", "evidence"),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "release-rollback",
+            lambda c, p, a: c.release_rollback(p["release_id"], a),
+            ("release_id",),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "release-status",
+            lambda c, p, a: c.release_status(p["release_id"]),
+            ("release_id",),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "release-list", lambda c, p, a: c.release_list(), render=_pretty
+        ),
+        OperatorCommand("metrics", lambda c, p, a: _metrics(c), render=_pretty),
         OperatorCommand("disk", lambda c, p, a: c.disk_usage(), render=_pretty),
         OperatorCommand("gc", lambda c, p, a: c.sweep_resources(a), render=_pretty),
         OperatorCommand(

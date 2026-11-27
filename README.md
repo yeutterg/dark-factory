@@ -102,7 +102,7 @@ Run tests with `python -m pytest -n auto`; lint and type-check with `ruff check 
 
 This is early. The control plane, adapters, task dashboard, and isolation are tested with simulated and loopback providers. The pinned local Codex container route has also passed a bounded authenticated isolation probe; a complete factory outcome, live task-supervisor/steering qualification, and independent-model review remain unqualified. Multi-repository work and previews come later.
 
-[Usage guide](docs/usage.md) · [Docker Compose](docs/docker-compose.md) · [Live configuration](examples/compose/factory-live.toml) · [Qualification status](specs/qualification.md) · [Roadmap](specs/tasks.md)
+[Pipeline](docs/pipeline.md) · [Usage guide](docs/usage.md) · [Docker Compose](docs/docker-compose.md) · [Live configuration](examples/compose/factory-live.toml) · [Qualification status](specs/qualification.md) · [Roadmap](specs/tasks.md)
 
 [Warp-shaped definitions](docs/warp-compatibility.md) documents the deliberately
 small compatibility surface and proposal-only improvement loop.

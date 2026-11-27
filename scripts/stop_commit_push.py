@@ -15,7 +15,17 @@ REMOTES = {
     "https://github.com/yeutterg/dark-factory.git",
     "git@github.com:yeutterg/dark-factory.git",
 }
-ROOT_FILES = {"README.md", "AGENTS.md", "LICENSE", "pyproject.toml", ".gitignore"}
+ROOT_FILES = {
+    "README.md",
+    "AGENTS.md",
+    "LICENSE",
+    "pyproject.toml",
+    ".gitignore",
+    "Dockerfile",
+    "compose.yaml",
+    "compose.live.yaml",
+    "compose.live-hardened.yaml",
+}
 DIRECTORIES = {
     "src",
     "tests",
@@ -23,6 +33,8 @@ DIRECTORIES = {
     "specs",
     "examples",
     "scripts",
+    "deploy",
+    "factory",
     ".specify",
     ".github",
 }

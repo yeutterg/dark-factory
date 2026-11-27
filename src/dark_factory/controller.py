@@ -22,6 +22,7 @@ from dark_factory.control.improvement import ImprovementMixin
 from dark_factory.control.interruptions import InterruptionMixin
 from dark_factory.control.planning import PlanningMixin
 from dark_factory.control.policy import PolicyMixin
+from dark_factory.control.release import ReleaseMixin
 from dark_factory.control.resources import ResourcesMixin
 from dark_factory.control.results import ResultsMixin
 from dark_factory.control.review import ReviewMixin
@@ -53,6 +54,7 @@ class Controller(
     GateMixin,
     InterruptionMixin,
     ImprovementMixin,
+    ReleaseMixin,
     ResourcesMixin,
     TaskMixin,
     AttemptRecords,
