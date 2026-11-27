@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,8 +13,18 @@ from dark_factory.adapters.git.local import clone, fixture, pin
 from dark_factory.control.base import ControllerCore, ControllerError, _digest, atomic
 from dark_factory.control.graph import default_bootstrap_graph, validate_graph
 from dark_factory.models import (
+    ACTIVE_ATTEMPT,
     PlanGraph,
+    sql_set,
 )
+from dark_factory.pipeline import (
+    PIPELINE_PATH,
+    Pipeline,
+    PipelineError,
+    read_pipeline,
+    unprotected_steps,
+)
+from dark_factory.runners import RunnerError, check_pipeline_grants
 from dark_factory.store import new_id, now_iso
 
 
@@ -199,6 +210,36 @@ class PlanningMixin(ControllerCore):
                 "bootstrap cannot execute roots with required child issues; preserve the complete root"
             )
 
+    def _pin_pipeline(self, source):
+        """The repository's pipeline as its main branch has it now, or None."""
+        try:
+            pipeline, commit = read_pipeline(
+                Path(source["path"]), source.get("pipeline_ref", "main")
+            )
+        except PipelineError as exc:
+            if "unknown revision" in str(exc) or "Needed a single revision" in str(exc):
+                return None  # No such branch: this repository has no pipeline yet.
+            raise ControllerError(
+                f"the repository's pipeline is invalid: {exc}"
+            ) from exc
+        if pipeline is None:
+            return None
+        try:
+            check_pipeline_grants(pipeline, self.cfg.runners)
+            hosted = [
+                n
+                for n, s in pipeline.change.items()
+                if s.applicable and self.cfg.runners[s.runner]["kind"] != "local"
+            ]
+            if hosted:
+                raise RunnerError(
+                    f"change stages {hosted} name a hosted runner; the candidate is "
+                    "not on the code host yet, so change stages run on local runners"
+                )
+        except RunnerError as exc:
+            raise ControllerError(str(exc)) from exc
+        return {**pipeline.to_dict(), "commit": commit}
+
     @atomic
     def start_planning(self, work_item_id: str, actor="operator") -> PlanGraph:
 
@@ -207,7 +248,8 @@ class PlanningMixin(ControllerCore):
             raise ControllerError("work item not found")
         self._require_root_scope(row)
         if self.store.one(
-            "SELECT a.id FROM attempts a JOIN jobs j ON a.job_id=j.id WHERE j.work_item_id=? AND a.status IN ('leased','running')",
+            "SELECT a.id FROM attempts a JOIN jobs j ON a.job_id=j.id WHERE j.work_item_id=? "
+            f"AND a.status IN {sql_set(ACTIVE_ATTEMPT)}",
             (work_item_id,),
         ):
             raise ControllerError("stop active attempts before replanning")
@@ -231,11 +273,38 @@ class PlanningMixin(ControllerCore):
             if not simulation:
                 raise ControllerError("source repository configuration required")
             source = fixture(self.cfg.state_dir)
+        improving = row["origin"].startswith("improvement:")
+        if improving:
+            source = self.improvement_scope(source)
+        pipeline = self._pin_pipeline(source)
+        if pipeline:
+            # The pipeline file is part of what judges a change, so a change cannot edit it.
+            source = {
+                **source,
+                "protected_paths": list(
+                    dict.fromkeys([*source.get("protected_paths", []), PIPELINE_PATH])
+                ),
+            }
+            loose = unprotected_steps(
+                Pipeline.from_dict(pipeline).change, source["protected_paths"]
+            )
+            if loose:
+                raise ControllerError(
+                    "pipeline steps run repository files that are not protected paths: "
+                    + ", ".join(loose)
+                )
         version = row["plan_version"] + 1
         base = pin(Path(source["path"]), source["revision"])
         inputs = self.cfg.state_dir / "inputs" / work_item_id / str(version)
-        inputs.mkdir(parents=True, exist_ok=False)
-        clone(Path(source["path"]), inputs / "repo", base)
+        # The version only advances on success, so a directory already here is the
+        # remains of a failed earlier attempt; it is never referenced by any record.
+        shutil.rmtree(inputs, ignore_errors=True)
+        inputs.mkdir(parents=True)
+        try:
+            clone(Path(source["path"]), inputs / "repo", base)
+        except BaseException:
+            shutil.rmtree(inputs, ignore_errors=True)
+            raise
         bindings = self._bindings()
         if simulation and source["checks"] == ["fixture-check"]:
             bindings["fixture-check"] = {
@@ -244,6 +313,8 @@ class PlanningMixin(ControllerCore):
                 "timeout_seconds": 30,
             }
         ceiling = self.cfg.budgets["root_cents"]
+        if improving:
+            ceiling = min(ceiling, self.cfg.improvement["budget_cents"])
         graph = default_bootstrap_graph(
             work_item_id,
             row["repo"],
@@ -265,18 +336,19 @@ class PlanningMixin(ControllerCore):
                     "decision": json.loads(event["payload_json"]),
                 }
                 for event in self.store.query(
-                    "SELECT * FROM audit WHERE action='reject' AND json_extract(payload_json,'$.work_item_id')=? ORDER BY at,id",
+                    "SELECT * FROM audit WHERE action='reject' AND json_extract(payload_json,'$.work_item_id')=? ORDER BY at,rowid",
                     (work_item_id,),
                 )
             ]
             + [
                 {"attempt": attempt["id"], "findings": attempt["error"]}
                 for attempt in self.store.query(
-                    "SELECT a.id,a.error FROM attempts a JOIN jobs j ON a.job_id=j.id WHERE j.work_item_id=? AND j.kind IN ('critique','review') AND a.status='failed' ORDER BY a.started_at,a.id",
+                    "SELECT a.id,a.error FROM attempts a JOIN jobs j ON a.job_id=j.id WHERE j.work_item_id=? AND j.kind IN ('critique','review') AND a.status='failed' ORDER BY a.started_at,a.rowid",
                     (work_item_id,),
                 )
             ],
             "source": dict(source),
+            "pipeline": pipeline,
             "base": base,
             "input_repo": str(inputs / "repo"),
             "bindings": bindings,
@@ -368,6 +440,28 @@ class PlanningMixin(ControllerCore):
             raise ControllerError("cannot approve before planning and critique succeed")
         self._require_root_scope(row)
         self._require_human(actor, row)
+        self._approve(row, actor)
+
+    @atomic
+    def approve_standing(self, work_item_id):
+        """Approval by the operator's standing improvement policy, never by a model.
+
+        Only a root the improvement loop created may use it, and only through the
+        same checks a person's approval passes. The profile digest in force is
+        recorded with the decision; changing the profile invalidates it.
+        """
+        row = self.store.one("SELECT * FROM work_items WHERE id=?", (work_item_id,))
+        if not row or row["status"] != "awaiting_approval":
+            raise ControllerError("cannot approve before planning and critique succeed")
+        if not row["origin"].startswith("improvement:"):
+            raise ControllerError("a standing policy covers improvement roots only")
+        if not self.cfg.improvement["enabled"]:
+            raise ControllerError("the improvement policy is disabled")
+        self._require_root_scope(row)
+        self._approve(row, "policy:improvement", standing=True)
+
+    def _approve(self, row, actor, standing=False):
+        work_item_id = row["id"]
         if any(
             j["status"] != "succeeded"
             for j in self.jobs(work_item_id)
@@ -406,7 +500,13 @@ class PlanningMixin(ControllerCore):
                     "UPDATE jobs SET status='ready' WHERE id=?", (job["id"],)
                 )
         self.store.audit(
-            actor, "approve", {"work_item_id": work_item_id, "digest": digest}
+            actor,
+            "approve",
+            {
+                "work_item_id": work_item_id,
+                "digest": digest,
+                **({"standing_policy_profile": self.cfg.digest} if standing else {}),
+            },
         )
         self.reconcile_continuations()
         return digest
@@ -434,9 +534,9 @@ class PlanningMixin(ControllerCore):
     def _require_human(self, actor, row):
         if not isinstance(actor, str) or not actor.strip() or actor != actor.strip():
             raise ControllerError("named human identity is required")
-        if actor.lower().startswith(("agent", "worker", "model")) or self.store.one(
-            "SELECT id FROM workers WHERE id=?", (actor,)
-        ):
+        if actor.lower().startswith(
+            ("agent", "worker", "model", "contributor:", "policy:")
+        ) or self.store.one("SELECT id FROM workers WHERE id=?", (actor,)):
             raise ControllerError("worker identities cannot make human decisions")
         humans = self.cfg.humans
         simulation = json.loads(row["snapshot_json"])["simulation"]

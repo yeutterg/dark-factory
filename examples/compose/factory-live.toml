@@ -22,16 +22,11 @@ planning_cents = 200
 account_cents = 1000
 
 [runtime]
-worker_token_env = "COMPOSE_LEGACY_WORKER_TOKEN"
 operator_token_env = "COMPOSE_OPERATOR_TOKEN"
 api_host = "127.0.0.1"
 api_port = 8745
 default_timeout_seconds = 3600
 max_output_bytes = 2000000
-
-[workflow]
-engine = "pi-durable"
-node_binary = "node"
 
 [continuation]
 max_resumes = 1

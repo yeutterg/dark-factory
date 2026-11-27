@@ -1,6 +1,7 @@
 """Regression tests for boundaries that the successful simulation does not exercise."""
 
 import json
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -68,7 +69,10 @@ def test_claim_is_atomic_across_connections(simulation):
     try:
         with ThreadPoolExecutor(2) as pool:
             results = list(
-                pool.map(lambda c: c.claim_job("w", ["native", "fake"]), [ctrl, second])
+                pool.map(
+                    lambda c: c.claim_job("w", ["native", "fake", "environment:local"]),
+                    [ctrl, second],
+                )
             )
         assert sum(result is not None for result in results) == 1
         assert store.one("SELECT reserved_cents FROM work_items")[0] == 50
@@ -78,7 +82,7 @@ def test_claim_is_atomic_across_connections(simulation):
 
 def test_late_cancelled_result_cannot_publish(simulation):
     cfg, store, ctrl, wid = simulation
-    claim = ctrl.claim_job("w", ["native", "fake"])
+    claim = ctrl.claim_job("w", ["native", "fake", "environment:local"])
     ctrl.cancel_job(claim["job"]["id"], "human")
     ctrl.finish_attempt(claim["attempt_id"], True, "late success", 1, None)
     assert store.one("SELECT status FROM attempts")[0] == "cancelled"
@@ -101,7 +105,7 @@ def test_duplicate_result_does_not_charge_twice(simulation):
 
 def test_expired_result_stops_without_progress(simulation):
     cfg, store, ctrl, wid = simulation
-    claim = ctrl.claim_job("w", ["native", "fake"])
+    claim = ctrl.claim_job("w", ["native", "fake", "environment:local"])
     store.execute(
         "UPDATE jobs SET lease_until='2000-01-01T00:00:00+00:00' WHERE id=?",
         (claim["job"]["id"],),
@@ -112,11 +116,11 @@ def test_expired_result_stops_without_progress(simulation):
         store.one("SELECT status FROM jobs WHERE id=?", (claim["job"]["id"],))[0]
         == "interrupted"
     )
-    assert ctrl.claim_job("w", ["native", "fake"]) is None
+    assert ctrl.claim_job("w", ["native", "fake", "environment:local"]) is None
     # Running out of time is not trivial: a person decides.
     ctrl.settle_interruptions()
     assert store.one("SELECT status FROM work_items")[0] == "interrupted"
-    assert ctrl.claim_job("w", ["native", "fake"]) is None
+    assert ctrl.claim_job("w", ["native", "fake", "environment:local"]) is None
 
 
 def test_archive_failure_preserves_workspace(simulation, monkeypatch):
@@ -151,7 +155,7 @@ def test_existing_workspace_is_never_erased(tmp_path):
 def test_live_route_cannot_fall_back_to_fake(simulation):
     cfg, store, ctrl, wid = simulation
     cfg.routes["fake-coder"].harness = "pi"
-    with pytest.raises(ControllerError, match="not qualified"):
+    with pytest.raises(ControllerError, match="inputs changed"):
         Worker(cfg, store, ctrl).run_once()
     assert store.one("SELECT COUNT(*) FROM attempts")[0] == 0
 
@@ -204,24 +208,27 @@ def test_invalid_config_fails_early(old, new):
 def test_stderr_is_bounded_while_process_runs(tmp_path):
     runner = CommandRunner(tmp_path, 1024)
     with pytest.raises(RunnerError, match="output limit"):
-        runner.run_plain(
+        runner.supervise(
             [
                 sys.executable,
                 "-c",
                 'import os,time; os.write(2,b"x"*2000); time.sleep(60)',
             ],
+            b"",
             2,
+            tmp_path,
+            dict(os.environ),
         )
 
 
-def test_config_history_does_not_store_worker_token(simulation):
+def test_config_history_does_not_store_operator_token(simulation):
     cfg, store, *_ = simulation
-    assert cfg.worker_token not in store.one("SELECT body FROM config_revisions")[0]
+    assert cfg.operator_token not in store.one("SELECT body FROM config_revisions")[0]
 
 
 def test_success_without_durable_archive_cannot_advance(simulation):
     cfg, store, ctrl, wid = simulation
-    claim = ctrl.claim_job("w", ["native", "fake"])
+    claim = ctrl.claim_job("w", ["native", "fake", "environment:local"])
     ctrl.finish_attempt(claim["attempt_id"], True, "claimed success", 1, None)
     assert store.one("SELECT status FROM attempts")[0] == "failed"
     assert store.one("SELECT status FROM work_items")[0] == "failed"

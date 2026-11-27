@@ -15,6 +15,7 @@ from dark_factory.config import (
     load_operator_token,
 )
 from dark_factory.controller import Controller, ControllerError
+from dark_factory.secrets import secret
 from dark_factory.store import Store
 from dark_factory.worker import Worker
 
@@ -51,6 +52,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_definition.add_argument("path", type=Path)
     p_definition.add_argument("--no-strict", action="store_true")
+    p_pipeline = sub.add_parser(
+        "pipeline-validate",
+        help="Validate a repository's pipeline file as read from its main branch",
+    )
+    p_pipeline.add_argument("repository", type=Path)
+    p_pipeline.add_argument("--ref", default="main")
+    p_init = sub.add_parser(
+        "init-repo",
+        help="Write the pipeline skeleton and agent instructions into a repository",
+    )
+    p_init.add_argument("repository", type=Path)
     p_improve = sub.add_parser(
         "improve",
         help="Report recurring failure patterns as inert improvement proposals",
@@ -138,6 +150,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_pr.add_argument("work_item_id")
     p_pr.add_argument("--payload-json", required=True)
     p_pr.add_argument("--actor", required=True)
+    p_ws = sub.add_parser("work-start", help="Start (or find) a root from an issue")
+    p_ws.add_argument("repo")
+    p_ws.add_argument("number", type=int)
+    p_ws.add_argument("--title", default="")
+    p_ws.add_argument("--body", default="")
+    p_ws.add_argument("--actor", default="contributor")
+    p_wp = sub.add_parser("work-plan", help="Submit a plan draft or ask for one")
+    p_wp.add_argument("work_item_id")
+    p_wp.add_argument("--proposal", default="", help="JSON plan draft")
+    p_wp.add_argument("--actor", default="contributor")
+    for name, text in (
+        ("work-checkout", "Get a factory-owned worktree for approved work"),
+        ("work-submit", "Hand the worktree to the factory as a candidate"),
+        ("work-status", "Show the stage and what blocks it"),
+    ):
+        p_w = sub.add_parser(name, help=text)
+        p_w.add_argument("work_item_id")
+        p_w.add_argument("--actor", default="contributor")
+    sub.add_parser("disk", help="Show disk use by area and by root")
+    sub.add_parser("gc", help="Remove resources whose owners are finished")
+    p_abandon = sub.add_parser(
+        "abandon-action",
+        help="Close a pending or ambiguous external write held on one root",
+    )
+    p_abandon.add_argument("work_item_id")
+    p_abandon.add_argument("--reason", required=True)
+    p_abandon.add_argument("--actor", default="operator")
     p_evidence = sub.add_parser(
         "pr-evidence",
         help="Read a PR's checks and reviews as outside evidence for the candidate",
@@ -232,9 +271,37 @@ def _dispatch(args: argparse.Namespace) -> int:
         result = load_definition(args.path, strict=not args.no_strict)
         print(json.dumps(public_report(result), indent=2))
         return 0
+    if args.cmd == "pipeline-validate":
+        from dark_factory.pipeline import read_pipeline
+
+        pipeline, commit = read_pipeline(args.repository, args.ref)
+        if pipeline is None:
+            raise ValueError(f"no pipeline file at {args.ref} ({commit[:12]})")
+        print(
+            json.dumps(
+                {
+                    "commit": commit,
+                    "digest": pipeline.digest,
+                    "change": {
+                        n: (
+                            "not applicable: " + s.not_applicable
+                            if not s.applicable
+                            else f"{len(s.steps)} step(s) on {s.runner}"
+                        )
+                        for n, s in pipeline.change.items()
+                    },
+                    "releases": sorted(pipeline.releases),
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.cmd == "init-repo":
+        from dark_factory.pipeline import init_repository
+
+        print(json.dumps({"written": init_repository(args.repository)}, indent=2))
+        return 0
     if args.cmd == "execution-worker":
-        import os
-        import time
         import tomllib
 
         from dark_factory.execution.client import WorkerClient
@@ -254,19 +321,12 @@ def _dispatch(args: argparse.Namespace) -> int:
             data["url"],
             data["project_id"],
             data["worker_id"],
-            os.environ.get(data["token_env"], ""),
+            secret(data["token_env"]),
             args.profile.parent / data["state_dir"],
             data.get("accounts", {}),
             args.profile.parent / data["ca_file"] if data.get("ca_file") else None,
         )
-        count = 0
-        while not args.max_jobs or count < args.max_jobs:
-            if client.run_once():
-                count += 1
-            elif args.max_jobs:
-                break
-            else:
-                time.sleep(1)
+        count = client.serve(args.max_jobs)
         print(json.dumps({"jobs_run": count}))
         return 0
     if args.cmd == "adapter":
@@ -389,7 +449,6 @@ def _dispatch(args: argparse.Namespace) -> int:
                 ctrl,
                 host,
                 port,
-                ctrl.cfg.worker_token,
                 (str(args.tls_cert), str(args.tls_key)) if args.tls_cert else None,
             )
             print(json.dumps({"listening": f"{host}:{port}"}))
@@ -418,17 +477,27 @@ def _dispatch(args: argparse.Namespace) -> int:
             )
             if thread:
                 thread.start()
+            import signal
+
+            reason = ["interrupt"]
+
+            def terminate(signum, frame):
+                reason[0] = signal.Signals(signum).name
+                raise KeyboardInterrupt
+
+            signal.signal(signal.SIGTERM, terminate)
             try:
                 server.serve_forever()
+            except KeyboardInterrupt:
+                pass
             finally:
+                # Drain, stop running work's process groups, record why. Roots are
+                # not cancelled: after a restart recovery resumes interrupted work.
                 stop.set()
                 ctrl.drain("shutdown")
-                for job in store.query(
-                    "SELECT id FROM jobs WHERE status IN ('leased','running')"
-                ):
-                    ctrl.cancel_job(job["id"], "shutdown")
+                ctrl.stop_active_processes(reason[0])
                 if thread:
-                    thread.join()
+                    thread.join(timeout=15)
                 server.server_close()
             return 0
         if args.cmd == "demo":

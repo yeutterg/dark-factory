@@ -133,7 +133,9 @@ def main():
         )
 
     result = execute_assignment(assignment, args.directory, alive)
-    (args.directory.parent / "result.json").write_text(json.dumps(result))
+    from dark_factory.execution.client import write_json_atomic
+
+    write_json_atomic(args.directory.parent / "result.json", result)
 
 
 if __name__ == "__main__":

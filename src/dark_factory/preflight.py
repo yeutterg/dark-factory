@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import platform
 import shutil
 from dataclasses import asdict
@@ -10,7 +9,7 @@ from pathlib import Path
 
 from dark_factory.adapters.git.local import pin
 from dark_factory.adapters.harness.registry import adapter_for
-from dark_factory.workflow import runtime_for
+from dark_factory.secrets import secret
 
 
 def inspect_configuration(cfg):
@@ -25,7 +24,6 @@ def inspect_configuration(cfg):
             checks.append({"name": name, "passed": True, "details": details})
 
     # No Store/Controller: do not create, lock, migrate, recover or read live state.
-    check("workflow", lambda: runtime_for(cfg, None).validate())
     for repo, source in cfg.sources.items():
         check(
             "source:" + repo,
@@ -39,6 +37,18 @@ def inspect_configuration(cfg):
             return {"available": True, "executed": False}
 
         check("command:" + name, executable)
+    # The code-host credential should be a fine-grained token scoped to the
+    # one repository, not a classic token that reaches every repository.
+    token = secret("GH_TOKEN") or secret("GITHUB_TOKEN")
+    if token:
+        checks.append(
+            {
+                "name": "github-token-scope",
+                "passed": not token.startswith(("ghp_", "gho_")),
+                "requirement": "a fine-grained token limited to the configured repositories "
+                "(github_pat_… or an app installation token), not a classic token",
+            }
+        )
     roles = set()
     for name, route in cfg.routes.items():
         adapter = adapter_for(route.harness)
@@ -60,14 +70,7 @@ def inspect_configuration(cfg):
             checks.append(
                 {
                     "name": "credential-source:" + name,
-                    "passed": bool(os.environ.get(route.auth_env))
-                    or bool(cfg.workers)
-                    or (
-                        route.harness == "pi"
-                        and not cfg.project_id
-                        and route.provider == "together"
-                        and route.auth_env == "TOGETHER_API_KEY"
-                    ),
+                    "passed": bool(secret(route.auth_env)) or bool(cfg.workers),
                     "requirement": "explicit environment credential or configured harness-native login source; validity unverified",
                 }
             )
@@ -80,19 +83,23 @@ def inspect_configuration(cfg):
         checks.append(
             {
                 "name": "operator-channel",
-                "passed": len(cfg.operator_token) >= 32
-                and len(cfg.worker_token) >= 32
-                and cfg.operator_token != cfg.worker_token,
-                "requirement": "distinct private random worker/operator credentials, at least 32 characters",
+                "passed": len(cfg.operator_token) >= 32,
+                "requirement": "private random operator credential, at least 32 characters",
             }
         )
         checks.append(
             {
                 "name": "native-isolation",
-                "passed": bool(cfg.workers)
-                or platform.system() == "Darwin"
-                and Path("/usr/bin/sandbox-exec").is_file()
-                and cfg.execution.get("profile") == "macos-sandbox",
+                "passed": all(
+                    cfg.environments[r.environment]["kind"] != "native"
+                    and (
+                        cfg.environments[r.environment]["kind"] != "macos-sandbox"
+                        or platform.system() == "Darwin"
+                        and Path("/usr/bin/sandbox-exec").is_file()
+                    )
+                    for r in cfg.routes.values()
+                    if r.evidence_kind == "live"
+                ),
             }
         )
         checks.append(
@@ -112,11 +119,8 @@ def inspect_configuration(cfg):
     credential_references = [
         {
             "route": name,
-            "environment_present": bool(os.environ.get(route.auth_env)),
-            "native_login_possible": route.harness == "pi"
-            and not cfg.project_id
-            and route.provider == "together"
-            and route.auth_env == "TOGETHER_API_KEY",
+            "environment_present": bool(secret(route.auth_env)),
+            "native_login_possible": False,
         }
         for name, route in cfg.routes.items()
         if route.auth_env

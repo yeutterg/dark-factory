@@ -9,7 +9,6 @@ name = "example-project"
 state_dir = "./state/example-supervisor"
 
 [runtime]
-worker_token_env = "EXAMPLE_PROJECT_LEGACY_WORKER_TOKEN"
 operator_token_env = "EXAMPLE_PROJECT_OPERATOR_TOKEN"
 api_host = "127.0.0.1"
 api_port = 8745

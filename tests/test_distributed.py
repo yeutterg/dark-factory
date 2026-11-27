@@ -142,10 +142,7 @@ def test_full_portable_loop_and_idempotent_settlement(tmp_path, monkeypatch):
             assignment = service.claim("worker1", f"request-{n}")
             assert assignment == service.claim("worker1", f"request-{n}")
             serialized = json.dumps(assignment)
-            assert (
-                cfg.operator_token not in serialized
-                and cfg.worker_token not in serialized
-            )
+            assert cfg.operator_token not in serialized
             with pytest.raises(ControllerError):
                 service.heartbeat("worker2", assignment["claim"]["attempt_id"])
             import uuid
@@ -189,7 +186,7 @@ def test_outbound_worker_process_and_verified_cleanup(tmp_path, monkeypatch):
     store = Store(cfg.state_dir)
     ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))
     wid = selected(ctrl)
-    server = serve(ctrl, "127.0.0.1", 0, cfg.worker_token)
+    server = serve(ctrl, "127.0.0.1", 0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -247,7 +244,7 @@ def test_remote_named_sandbox_release_retries_without_agent_replay(
     store = Store(cfg.state_dir)
     ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))
     selected(ctrl)
-    server = serve(ctrl, "127.0.0.1", 0, cfg.worker_token)
+    server = serve(ctrl, "127.0.0.1", 0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

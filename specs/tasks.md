@@ -61,3 +61,29 @@ Implementation authority remains the [specification](spec.md) and [constitution]
 - [ ] Behavioral compatibility for automations, routers, benchmarks, webhooks,
   arbitrary agent graphs, or external skill references remains outside this
   slice and must not be implied by syntax compatibility.
+
+## Repair and hardening ([plan](repair-plan.md))
+
+- [x] Phase 0 governance: constitution 1.2.0, spec amendments, history move.
+- [x] Phase 1 removals: Pi Durable runtime, shared-token channel, legacy config dialect (`[project] id` is now mandatory; examples converted; `factory-live.toml` and `factory-durable.toml` removed), dead code (`attach_command`, `run_plain`, `NativeEnvironment.run`) and dev-tool/image bumps. Deferred: unused job status `running` and `jobs.reserved_cents` (Phase 4 and Phase 7 migrations). Open design point resolved: the in-process worker and the remote executor share `Worker._execute`; they differ only in transport, so a simulation-only profile keeps the in-process worker and any real route needs registered workers.
+- [x] Phase 2 correctness: C1–C18 and worker robustness done with regression tests (`tests/test_correctness.py`, `tests/test_worker_robustness.py`); kill-and-restart soak in `tests/test_soak.py`.
+- [~] Phase 3 isolation and credentials: done — trixie base (Bubblewrap 0.12, image builds), process limit and sized scratch in the bwrap driver, Compose resource limits, `NAME_FILE` credential files, one redaction pass, one protected-path list, API hardening (timeouts, off-thread TLS handshake, login throttle, session cleanup, 500 bodies, 32-character token floor), supervisor mounts only `.git`, GitHub token-scope preflight, stop hook hardening, operator-identity note. Spike result (non-root worker with a written seccomp profile) is in `compose.live-hardened.yaml`, opt-in until a live Codex run qualifies it. Not done — credentials by file or descriptor for Claude Code and Pi and closing `/proc` exposure of the harness environment (needs live probes; Phase 8), macOS deny-by-default profile (cannot be tested on Linux), per-process memory and CPU caps (container-level only).
+- [~] Phase 4 consistency refactor: done — one active-attempt constant used everywhere, shared protected-path list, shared secret and redaction helpers, one retrying POST for the decision adapters, `interruptions.py` renamed `resume_policy.py`, one prompt layering. Not done — the larger splits (`config.py` into per-table validators, `Worker._execute`, `control/tasks.py`, `ui/screens.py`), the shared harness CLI base, status enums applied to every SQL literal, the Warp definition as a dataclass.
+- [x] Phase 5 Warp `v1alpha1` compatibility: reader checked against Warp's published schemas and 16 example trees (`tests/test_warp_conformance.py`); layered prompts keep the output contract; roles selection, aliases, self-improvement agent, version and strictness rules, whole-tree digest, per-resource report. Not done: runner platform field rules beyond `platform.os`, and automation trigger contents beyond presence.
+- [x] Phase 6 self-improvement on by default: `[improvement]` table, persisted signals (loop roots excluded, role attribution fixed), standing-policy approval bound to the profile digest, scoped paths and diff cap, dedicated budget, concurrency and cooldown, target refusals, draft PR publication through a new `push_branch` code-host operation (`tests/test_improvement_loop.py`, `docs/self-improvement.md`). The push and PR path is unit-tested against the contract but has not run against a live GitHub repository (Phase 8).
+- [~] Phase 7 operations: done — WAL, `synchronous=FULL`, busy timeout and an integrity check on open; numbered migrations and refusal of newer state; sub-second timestamps with rowid tie-breaks; incremental credential scrub; SIGTERM drains, stops process groups and records why (roots are not cancelled); backup/restore keeps a verifying manifest and cleans up a failed restore; CI pins actions by SHA, adds Python 3.13/3.14, `pip-audit`, live-overlay validation and Dependabot; runtime image has no dev tools unless asked. Not done — structured logging, hashed Python lockfile, locked harness manifests, audit retention, decider cost records, `/state` permissions (needs the non-root worker adopted), image vulnerability scan.
+- [ ] Phase 8 requalification (needs live probes and human approval).
+
+## Universal pipeline ([plan](pipeline-plan.md))
+
+Starts after repair Phase 4. Plan only; not approved for implementation.
+
+- [ ] P0 governance: constitution 1.3.0 and spec amendments.
+- [ ] P1 resource ownership and cleanup.
+- [ ] P2 repository pipeline file and fixed stages.
+- [ ] P3 external implementers and the pull-request gate.
+- [ ] P4 runners: local capacity, GitHub Actions, Blacksmith.
+- [ ] P5 release roots.
+- [ ] P6 code-host contract.
+- [ ] P7 stage metrics.
+- [ ] P8 adoption, one repository at a time, each with human approval.

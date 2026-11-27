@@ -14,7 +14,6 @@ from dark_factory.artifacts import digest_cached
 from dark_factory.config import ConfigError, load_config, load_prompt
 from dark_factory.control.base import ControllerCore, ControllerError, _digest
 from dark_factory.runner import CommandRunner
-from dark_factory.workflow import runtime_policy
 
 # The approved runner code is the whole dark_factory package.
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
@@ -27,9 +26,8 @@ class PolicyMixin(ControllerCore):
 
         raw = copy.deepcopy(self.cfg.raw)
         # A literal dev token is intentionally not a recoverable credential snapshot.
-        for key in ("worker_token", "operator_token"):
-            if key in raw.get("runtime", {}):
-                raw["runtime"][key] = "<redacted>"
+        if "operator_token" in raw.get("runtime", {}):
+            raw["runtime"]["operator_token"] = "<redacted>"
         self.store.save_config_revision(self.cfg.digest, json.dumps(raw), True)
 
     def reload(self, actor="operator") -> bool:
@@ -103,7 +101,6 @@ class PolicyMixin(ControllerCore):
                 "assets": self._assets(),
                 "sources": self.cfg.sources,
                 "execution": self.cfg.execution,
-                "workflow": runtime_policy(self.cfg),
                 "operators": self.cfg.raw.get("operators", {}),
                 "continuation": {
                     "max_repairs": self.cfg.max_repairs,
@@ -112,6 +109,7 @@ class PolicyMixin(ControllerCore):
                 "decider": self.cfg.decider,
                 "task_supervisor": self.cfg.task_supervisor,
                 "definition": self._definition_snapshot(),
+                "improvement": self.cfg.improvement,
                 "budgets": self.cfg.raw.get("budgets", {}),
                 "geography": self.cfg.geography_policy,
                 "deployment": {
@@ -129,9 +127,15 @@ class PolicyMixin(ControllerCore):
             body, sha = load_prompt(self.cfg, role, self.packaged_prompts)
             assets[role] = {"body": body, "sha256": sha}
 
+        snapshots = self.cfg.definition.get("skill_snapshots", {})
+
         def snapshot_skills(names: list[str]) -> list[dict[str, Any]]:
             skills = []
             for name in names:
+                if name in snapshots:
+                    # Read once when the definition loaded; digest and use agree.
+                    skills.append({"name": Path(name).name, **snapshots[name]})
+                    continue
                 path = Path(name)
                 if not path.is_dir() or not (path / "SKILL.md").is_file():
                     raise ControllerError(f"selected skill not found: {path}")

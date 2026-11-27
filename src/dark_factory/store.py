@@ -8,6 +8,7 @@ import os
 import sqlite3
 import threading
 import uuid
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -127,12 +128,22 @@ CREATE TABLE IF NOT EXISTS config_revisions (
 
 
 def now_iso() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
+
+# State schema version. Each version above MIN_SCHEMA_VERSION has one step in
+# MIGRATIONS, run in order inside a transaction; a step must be safe to repeat.
+# Version 3 added work_items.origin and the improvement_signals table, which the
+# idempotent schema above creates.
+SCHEMA_VERSION = 3
+MIN_SCHEMA_VERSION = 2
+MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
+    3: lambda conn: None,
+}
 
 _OWNERS: dict[str, tuple[int, Any, int]] = {}
 _OWNER_LOCK = threading.Lock()
@@ -165,6 +176,20 @@ class Store:
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        # Durability and concurrency: WAL lets readers proceed during a write,
+        # FULL syncs every commit, and a busy timeout waits instead of failing.
+        try:
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self.conn.execute("PRAGMA synchronous = FULL")
+            self.conn.execute("PRAGMA busy_timeout = 30000")
+            intact = self.conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        except sqlite3.DatabaseError:
+            intact = False
+        if not intact:
+            self.close()
+            raise RuntimeError(
+                "state database failed its integrity check; restore from a backup"
+            )
         existing_tables = {
             r[0]
             for r in self.conn.execute(
@@ -175,7 +200,16 @@ class Store:
             version = self.conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()
-            if version and version[0] != "2":
+            if version and not version[0].isdigit():
+                self.close()
+                raise RuntimeError("state schema version is unreadable")
+            if version and int(version[0]) > SCHEMA_VERSION:
+                self.close()
+                raise RuntimeError(
+                    "state was written by a newer controller; run that version or "
+                    "restore a backup"
+                )
+            if version and int(version[0]) < MIN_SCHEMA_VERSION:
                 self.close()
                 raise RuntimeError(
                     "incompatible state schema; restore with its pinned controller version"
@@ -196,6 +230,7 @@ class Store:
                 "snapshot_json": "TEXT",
                 "created_at": "TEXT",
                 "accepted_at": "TEXT",
+                "origin": "TEXT NOT NULL DEFAULT 'tracker'",
             },
             "jobs": {
                 "plan_version": "INTEGER",
@@ -210,6 +245,7 @@ class Store:
                 "pid": "INTEGER",
                 "pid_identity": "TEXT",
                 "cleanup_status": "TEXT",
+                "credentials_scrubbed": "INTEGER NOT NULL DEFAULT 0",
             },
         }.items():
             present = {
@@ -233,6 +269,15 @@ class Store:
             detail TEXT NOT NULL, outcome TEXT NOT NULL, verdict_json TEXT,
             actor TEXT, decided_at TEXT, resumed_by_attempt TEXT);
         CREATE INDEX IF NOT EXISTS interruptions_job ON interruptions(job_id, outcome);
+        CREATE TABLE IF NOT EXISTS external_work (
+            root_id TEXT PRIMARY KEY, actor TEXT NOT NULL, worktree TEXT,
+            proposal_json TEXT, submitted INTEGER NOT NULL DEFAULT 0,
+            consumed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+            FOREIGN KEY(root_id) REFERENCES work_items(id));
+        CREATE TABLE IF NOT EXISTS improvement_signals (
+            signal TEXT NOT NULL, root_id TEXT NOT NULL, attempt_id TEXT,
+            label TEXT NOT NULL, roles TEXT NOT NULL, detail TEXT NOT NULL,
+            at TEXT NOT NULL, PRIMARY KEY(signal, root_id));
         CREATE TABLE IF NOT EXISTS external_reviews (
             root_id TEXT NOT NULL, candidate TEXT NOT NULL, pr_number INTEGER NOT NULL,
             url TEXT NOT NULL, actor TEXT NOT NULL, at TEXT NOT NULL,
@@ -279,9 +324,20 @@ class Store:
             id TEXT PRIMARY KEY, root_id TEXT NOT NULL, input_digest TEXT NOT NULL,
             request_json TEXT NOT NULL, response_json TEXT, status TEXT NOT NULL,
             cost_cents INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+            requests INTEGER NOT NULL DEFAULT 1,
+            reserved_cents INTEGER NOT NULL DEFAULT 0,
             UNIQUE(root_id,input_digest),
             FOREIGN KEY(root_id) REFERENCES work_items(id));
         """)
+        present = {
+            row[1] for row in self.conn.execute("PRAGMA table_info(supervisor_calls)")
+        }
+        for column in (
+            "requests INTEGER NOT NULL DEFAULT 1",
+            "reserved_cents INTEGER NOT NULL DEFAULT 0",
+        ):
+            if column.split()[0] not in present:
+                self.conn.execute(f"ALTER TABLE supervisor_calls ADD COLUMN {column}")
         # Jobs created before these columns existed carry the same facts in spec_json
         # and a numeric position prefix in their identifier.
         self.conn.execute(
@@ -304,9 +360,23 @@ class Store:
         CREATE INDEX IF NOT EXISTS task_events_root ON task_events(root_id, created_at);
         CREATE INDEX IF NOT EXISTS task_instructions_attempt ON task_instructions(attempt_id, state);
         """)
-        self.conn.execute(
-            "INSERT OR REPLACE INTO meta(key,value) VALUES ('schema_version','2')"
-        )
+        recorded = self.conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()
+        current = int(recorded[0]) if recorded else MIN_SCHEMA_VERSION
+        for step in range(current + 1, SCHEMA_VERSION + 1):
+            with self.conn:
+                MIGRATIONS[step](self.conn)
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO meta(key,value) VALUES ('schema_version',?)",
+                    (str(step),),
+                )
+        if not recorded:
+            with self.conn:
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO meta(key,value) VALUES ('schema_version',?)",
+                    (str(SCHEMA_VERSION),),
+                )
         self.conn.commit()
 
     def close(self) -> None:

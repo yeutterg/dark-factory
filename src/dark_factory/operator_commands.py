@@ -34,6 +34,8 @@ class OperatorCommand:
     render: Callable[[Any], tuple[str | None, int]] = field(default=_compact)
     # Code-host writes use controller credentials and stay a local CLI action.
     api: bool = True
+    # A contributor credential may run this; it never approves, accepts or configures.
+    contributor: bool = False
 
 
 def _plan(ctrl: Controller, p: dict[str, Any], actor: str) -> dict[str, Any]:
@@ -192,6 +194,55 @@ COMMANDS: dict[str, OperatorCommand] = {
             render=_pretty,
         ),
         OperatorCommand(
+            "work-start",
+            lambda c, p, a: c.work_start(
+                p["repo"], p["number"], a, p.get("title") or "", p.get("body") or ""
+            ),
+            ("repo", "number", "title", "body"),
+            render=_pretty,
+            contributor=True,
+        ),
+        OperatorCommand(
+            "work-plan",
+            lambda c, p, a: c.work_plan(
+                p["work_item_id"],
+                a,
+                json.loads(p["proposal"]) if p.get("proposal") else None,
+            ),
+            ("work_item_id", "proposal"),
+            render=_pretty,
+            contributor=True,
+        ),
+        OperatorCommand(
+            "work-checkout",
+            lambda c, p, a: c.work_checkout(p["work_item_id"], a),
+            ("work_item_id",),
+            render=_pretty,
+            contributor=True,
+        ),
+        OperatorCommand(
+            "work-submit",
+            lambda c, p, a: c.work_submit(p["work_item_id"], a),
+            ("work_item_id",),
+            render=_pretty,
+            contributor=True,
+        ),
+        OperatorCommand(
+            "work-status",
+            lambda c, p, a: c.work_status(p["work_item_id"], a),
+            ("work_item_id",),
+            render=_pretty,
+            contributor=True,
+        ),
+        OperatorCommand("disk", lambda c, p, a: c.disk_usage(), render=_pretty),
+        OperatorCommand("gc", lambda c, p, a: c.sweep_resources(a), render=_pretty),
+        OperatorCommand(
+            "abandon-action",
+            lambda c, p, a: c.abandon_action(p["work_item_id"], p["reason"], a),
+            ("work_item_id", "reason"),
+            render=_pretty,
+        ),
+        OperatorCommand(
             "create-pr",
             lambda c, p, a: c.external_action(
                 p.get("work_item_id"), "create_pr", p["payload"], a
@@ -250,6 +301,8 @@ LOCAL_ONLY = frozenset(
     {
         "preflight",  # Reads configuration without opening controller state.
         "definition-validate",  # Reads an inert definition tree without state.
+        "pipeline-validate",  # Reads a repository's pipeline from git without state.
+        "init-repo",  # Writes files into a local repository.
         "improve",  # Reads local evidence; performs no external action.
         "execution-worker",  # Separate outbound worker process.
         "adapter",  # JSON command adapters invoked by the controller.

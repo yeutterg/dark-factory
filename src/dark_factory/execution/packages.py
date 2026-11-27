@@ -20,11 +20,35 @@ def identity(value):
     ).hexdigest()
 
 
+def link_problem(member, linkname):
+    """Why a symbolic link cannot travel, or None.
+
+    A relative link may use ``..`` as long as it stays inside the package; only
+    absolute links and links that leave the tree are refused.
+    """
+    if linkname.startswith("/"):
+        return "absolute link target"
+    target = posixpath.normpath(
+        posixpath.join(str(PurePosixPath(member).parent), linkname)
+    )
+    if target == ".." or target.startswith("../"):
+        return "link target leaves the package"
+    return None
+
+
 def pack(paths):
     total = 0
-    for source in paths.values():
+    for name, source in paths.items():
         for item in [source] if source.is_file() else source.rglob("*"):
-            if item.is_file() and not item.is_symlink():
+            if item.is_symlink():
+                relative = PurePosixPath(name) / item.relative_to(source).as_posix()
+                problem = link_problem(str(relative), str(item.readlink()))
+                if problem:
+                    # Refused here, with its reason, rather than failing on a remote worker.
+                    raise ValueError(
+                        f"escaping package link: {relative} -> {item.readlink()} ({problem})"
+                    )
+            elif item.is_file():
                 total += item.stat().st_size
                 if total > MAX_BYTES:
                     raise ValueError("expanded package exceeds limit")
@@ -86,15 +110,7 @@ def unpack(package, destination):
             if total > MAX_BYTES or len(names) > 100000:
                 raise ValueError("expanded package exceeds limit")
             if item.issym():
-                target = posixpath.normpath(
-                    posixpath.join(str(name.parent), item.linkname)
-                )
-                if (
-                    item.linkname.startswith("/")
-                    or ".." in PurePosixPath(item.linkname).parts
-                    or target == ".."
-                    or target.startswith("../")
-                ):
+                if link_problem(str(name), item.linkname):
                     raise ValueError("escaping package link")
                 links.add(str(name))
             if any(str(parent) in links for parent in PurePosixPath(name).parents):

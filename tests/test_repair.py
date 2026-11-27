@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from test_workflow import durable, setup
+from test_workflow import setup
 
 from dark_factory.adapters.harness.fake import FakeHarness
 from dark_factory.controller import Controller, ControllerError
@@ -45,14 +45,11 @@ def install_failure(worker, monkeypatch, mode="check", repeat=False):
     return calls, Harness
 
 
-@pytest.mark.parametrize(
-    "engine", ["native", pytest.param("pi-durable", marks=durable)]
-)
 @pytest.mark.parametrize("failure", ["check", "review"])
 def test_self_heals_and_rechecks_before_first_human_gate(
-    tmp_path, monkeypatch, engine, failure
+    tmp_path, monkeypatch, failure
 ):
-    cfg, store, ctrl, wid, worker = setup(tmp_path, engine, repairs=1)
+    cfg, store, ctrl, wid, worker = setup(tmp_path, repairs=1)
     calls, _ = install_failure(worker, monkeypatch, failure)
     try:
         worker.run_loop(2)

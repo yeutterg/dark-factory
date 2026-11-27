@@ -2,10 +2,7 @@
 
 The factory Pi adapter does not read `~/.pi` from the sandbox. It starts a fresh `PI_CODING_AGENT_DIR` per attempt and injects only the approved route.
 
-For a deployment where Pi 1.4.0 is logged into Together (`pi auth check --provider together` reports `ready`), the worker can use that login without copying the key into git:
-
-1. `TOGETHER_API_KEY` if set, otherwise
-2. `pi auth print-api-key --provider together`
+The route names its credential explicitly (`auth_env`, namespaced to the project). The worker reads that environment variable, or the file named by `<NAME>_FILE` for a mounted container secret. Pi's own stored login is never read, so no host login can stand in for an approved route.
 
 The isolated `models.json` points at `https://us-api.together.ai/v1` with `api = "openai-completions"`. Together documents that this endpoint keeps inference processing in the United States and returns an error rather than falling back outside the selected geography. This processing guarantee does not by itself govern storage, logs or request routing; review those separately under the account's privacy settings.
 
@@ -25,7 +22,7 @@ A deployment-local `factory.local.toml` is gitignored. The provided template is 
 - provider `together`
 - model `deepseek-ai/DeepSeek-V4.1-Flash` (registered explicitly; Together's Pi catalog still listed V4-Flash-0731 after `pi update --models`)
 - endpoint `https://us-api.together.ai/v1`, region `US`, and Together's published geo-specific inference evidence
-- `macos-sandbox`
+- an isolated environment (`macos-sandbox` or the container driver)
 
 Together's geo-specific serverless endpoint pins inference processing to the United States with no cross-geography fallback. The default `api.together.ai` endpoint is not an acceptable substitute for this route.
 

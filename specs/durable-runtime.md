@@ -1,5 +1,7 @@
 # Modular durable execution
 
+> **Superseded in part (2026-11-19).** The Pi Durable workflow runtime and its engine were removed ([repair plan](repair-plan.md), D4). The boundaries table, recovery contract and post-merge hardening sections below still apply to the native path; statements about a workflow runtime, engine database or bridge describe removed code.
+
 ## Approved direction
 
 Preserve task-selected CLI harnesses and the project-neutral factory. Add Pi Durable as an optional execution runtime, behind an application-owned interface. Do not replace the controller's policy or acceptance authority, use Pi's model loop for CLI assignments, or upgrade a running controller.

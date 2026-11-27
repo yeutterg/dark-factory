@@ -1,0 +1,12 @@
+schemaVersion: v1alpha1
+name: single-repo-quickstart
+description: >-
+  This factory turns labeled issues into pull requests in one repository.
+  A foreman routes work to an implementation agent.
+alias: Quickstart
+repositories:
+  - owner: acme
+    name: api-service
+agentDefaults:
+  model: auto
+  runner: linux-small

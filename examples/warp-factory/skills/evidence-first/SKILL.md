@@ -1,3 +1,8 @@
+---
+name: evidence-first
+description: Evidence first. Use when working on a selected outcome.
+---
+
 # Evidence first
 
 Tie claims to the exact commit, command binding, environment, and archived

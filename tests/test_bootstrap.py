@@ -160,7 +160,7 @@ def test_backup_restore_preserves_candidate_evidence(loop, tmp_path):
 
 def test_backup_refuses_active_attempt(loop, tmp_path):
     cfg, store, ctrl, wid = loop
-    ctrl.claim_job("worker", ["native", "fake"])
+    ctrl.claim_job("worker", ["native", "fake", "environment:local"])
     with pytest.raises(ValueError, match="drain"):
         artifacts.backup(store, tmp_path / "backup")
 
@@ -183,12 +183,14 @@ def test_state_has_one_process_owner(loop):
 
 def test_recover_expired_claim_releases_reservation_without_replacement(loop):
     cfg, store, ctrl, wid = loop
-    ctrl.claim_job("worker", ["native", "fake"])
+    ctrl.claim_job("worker", ["native", "fake", "environment:local"])
     store.execute("UPDATE attempts SET deadline='2000-01-01T00:00:00+00:00'")
     assert ctrl.recover() == 1
     assert store.one("SELECT reserved_cents FROM work_items")[0] == 0
     assert store.one("SELECT status FROM attempts")[0] == "timed_out"
-    assert ctrl.claim_job("replacement", ["native", "fake"]) is None
+    assert (
+        ctrl.claim_job("replacement", ["native", "fake", "environment:local"]) is None
+    )
 
 
 def test_macos_denies_host_data_and_protected_writes(tmp_path):
@@ -322,7 +324,7 @@ def test_pr_changed_branch_rejected_before_write(monkeypatch):
 
 def test_expired_lease_cannot_be_renewed(loop):
     cfg, store, ctrl, wid = loop
-    claim = ctrl.claim_job("worker", ["native", "fake"])
+    claim = ctrl.claim_job("worker", ["native", "fake", "environment:local"])
     store.execute(
         "UPDATE jobs SET lease_until='2000-01-01T00:00:00+00:00' WHERE id=?",
         (claim["job"]["id"],),
@@ -433,7 +435,8 @@ def test_ambiguous_pr_write_reconciles_same_identity_without_retry(loop, monkeyp
     with pytest.raises(RunnerError):
         ctrl.external_action(wid, "create_pr", payload, "human")
     assert store.one("SELECT status FROM pending_actions")[0] == "ambiguous"
-    assert ctrl.dispatch_allowed()[1] == "external_action_needs_reconciliation"
+    assert ctrl.dispatch_allowed()[0], "one root's stuck write must not stop the host"
+    assert ctrl.unresolved_action(wid)
     result = ctrl.external_action(wid, "create_pr", payload, "human")
     assert result["evidence"]["observed"]
     assert [op for op, identity in calls] == ["create_pr", "reconcile_create_pr"]
@@ -623,3 +626,22 @@ def test_plan_rejects_unverifiable_acceptance(loop):
     proposal["acceptance"][-1]["checks"] = []
     with pytest.raises(ValueError, match="no verification gate"):
         ctrl._parse_role("plan", json.dumps(proposal), json.loads(row["snapshot_json"]))
+
+
+def test_restored_state_still_verifies_and_a_failed_restore_leaves_nothing(
+    loop, tmp_path
+):
+    cfg, store, ctrl, wid = loop
+    target = tmp_path / "backup"
+    artifacts.backup(store, target)
+    restored = tmp_path / "restored"
+    artifacts.restore(target, restored)
+    artifacts.verify(restored)  # the manifest describes the restored tree
+
+    broken = tmp_path / "broken-backup"
+    artifacts.backup(store, broken)
+    # Corrupt a file the manifest covers: verification refuses before any copy.
+    (broken / "factory.sqlite").write_bytes(b"not a database")
+    with pytest.raises(ValueError):
+        artifacts.restore(broken, tmp_path / "never")
+    assert not (tmp_path / "never").exists()

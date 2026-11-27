@@ -1,0 +1,6 @@
+description: Names the execution Dark Factory's operator profile approves. The profile stays authoritative.
+platform:
+  os: linux
+  arch: x86_64
+  linux:
+    dockerImage: ubuntu:24.04

@@ -6,10 +6,10 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dark_factory import artifacts
 from dark_factory.adapters.git.local import pin
 from dark_factory.continuation import describe
 from dark_factory.control.base import ControllerCore, ControllerError, atomic, decided
+from dark_factory.execution.policy import selected_route
 from dark_factory.models import (
     TERMINAL_ROOT,
     sql_set,
@@ -21,6 +21,9 @@ def _latest(entries, key):
     return max(entries, key=lambda entry: str(entry.get(key) or ""), default=None)
 
 
+EXTERNAL_KINDS = frozenset({"check", "status", "review"})
+
+
 def assess_external(names, evidence, sha):
     """Judge each required outside check or reviewer on the exact candidate only.
 
@@ -30,11 +33,22 @@ def assess_external(names, evidence, sha):
     ``APPROVED``. Comments alone never pass.
     """
     results = []
-    for name in names:
+    for requirement in names:
         found = []
+        # "check:", "status:" and "review:" bind a requirement to one kind of
+        # evidence. A bare name (older approved plans) matches every kind.
+        kind, _, ident = requirement.partition(":")
+        if kind in EXTERNAL_KINDS and ident:
+            name = ident
+        else:
+            kind, name = "", requirement
         if evidence and evidence.get("head_sha") == sha:
             run = _latest(
-                [c for c in evidence.get("checks", []) if c.get("name") == name],
+                [
+                    c
+                    for c in evidence.get("checks", [])
+                    if kind in {"", "check"} and c.get("name") == name
+                ],
                 "started_at",
             )
             if run:
@@ -48,7 +62,11 @@ def assess_external(names, evidence, sha):
                     }
                 )
             status = _latest(
-                [s for s in evidence.get("statuses", []) if s.get("context") == name],
+                [
+                    s
+                    for s in evidence.get("statuses", [])
+                    if kind in {"", "status"} and s.get("context") == name
+                ],
                 "updated_at",
             )
             if status:
@@ -64,7 +82,8 @@ def assess_external(names, evidence, sha):
                 [
                     r
                     for r in evidence.get("reviews", [])
-                    if str(r.get("author", "")).lower() == name.lower()
+                    if kind in {"", "review"}
+                    and str(r.get("author", "")).lower() == name.lower()
                     and r.get("commit_id") == sha
                     and r.get("state") in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}
                 ],
@@ -81,7 +100,7 @@ def assess_external(names, evidence, sha):
                 )
         results.append(
             {
-                "name": name,
+                "name": requirement,
                 "passed": bool(found) and all(f["passed"] for f in found),
                 "observed": found,
             }
@@ -191,7 +210,7 @@ class ReviewMixin(ControllerCore):
                 "repairs": [
                     dict(a)
                     for a in self.store.query(
-                        "SELECT at,payload_json FROM audit WHERE action='repair.activate' AND json_extract(payload_json,'$.root')=? ORDER BY at,id",
+                        "SELECT at,payload_json FROM audit WHERE action='repair.activate' AND json_extract(payload_json,'$.root')=? ORDER BY at,rowid",
                         (wid,),
                     )
                 ],
@@ -369,14 +388,6 @@ class ReviewMixin(ControllerCore):
                 >= row["spending_ceiling_cents"]
             ):
                 reason = "root allowance exhausted"
-        if (
-            automated_work_pending
-            and not reason
-            and self.store.get_op("workflow_unavailable", "")
-        ):
-            reason = "Workflow runtime unavailable: " + self.store.get_op(
-                "workflow_unavailable", ""
-            )
         if not reason and row["status"] in {"approved", "running"}:
             succeeded = {
                 j["logical_id"] for j in self.jobs(wid) if j["status"] == "succeeded"
@@ -387,14 +398,18 @@ class ReviewMixin(ControllerCore):
                 if j["status"] == "ready"
                 and set(json.loads(j["depends_on"])) <= succeeded
             ]
-            if (
-                eligible
-                and min(json.loads(j["spec_json"])["budget_cents"] for j in eligible)
-                + row["spent_cents"]
-                + row["reserved_cents"]
-                > row["spending_ceiling_cents"]
-            ):
-                reason = "remaining root allowance cannot fund the next required task"
+            if eligible:
+                blockers = []
+                for j in eligible:
+                    spec = json.loads(j["spec_json"])
+                    route = (
+                        selected_route(self.cfg, spec["role"])
+                        if spec.get("role")
+                        else None
+                    )
+                    blockers.append(self._budget_blocker(row, j, spec, route))
+                if all(blockers):
+                    reason = blockers[0]
         view = describe(
             row,
             self.required_jobs(wid),
@@ -419,7 +434,7 @@ class ReviewMixin(ControllerCore):
             OR o.value IS NULL OR json_extract(o.value,'$.root_status') IS NOT w.status
             OR EXISTS (SELECT 1 FROM jobs j WHERE j.work_item_id=w.id
                        AND j.status IN ('leased','running','cancelling'))
-            ORDER BY w.created_at,w.id"""
+            ORDER BY w.created_at,w.rowid"""
         ):
             if row["status"] in {"approved", "running"} and self._approval_current(row):
                 jobs = self.jobs(row["id"])
@@ -497,12 +512,13 @@ class ReviewMixin(ControllerCore):
                 raise ControllerError(
                     "source target changed; revalidate against the new target before acceptance"
                 )
+        self.verify_candidate(row)
         for job in self.required_jobs(work_item_id):
             att = self.store.one(
                 "SELECT * FROM attempts WHERE job_id=? AND status='succeeded'",
                 (job["id"],),
             )
-            artifacts.verify(self.store.resolve_path(att["archive_path"]))
+            self._verified_archive(att["id"], att["archive_path"])
             inputs = json.loads(att["inputs_json"])
             if job["kind"] in {"check", "review"} and inputs["candidate"] != json.loads(
                 row["candidate_commits"]
@@ -527,10 +543,18 @@ class ReviewMixin(ControllerCore):
             raise ControllerError(
                 "live evidence required; simulation cannot qualify this outcome"
             )
+        tasks = self.tasks_view(work_item_id)["tasks"]
+        waiting = [
+            t for t in tasks if t["owner_kind"] == "agent" and t["state"] == "inbox"
+        ]
+        if waiting:
+            raise ControllerError(
+                "an agent request is still waiting for admission and would be "
+                "lost; reject with feedback to replan it: "
+                + ", ".join(t["title"] for t in waiting[:5])
+            )
         unfinished_tasks = [
-            task
-            for task in self.tasks_view(work_item_id)["tasks"]
-            if task["required"] and task["state"] != "done"
+            task for task in tasks if task["required"] and task["state"] != "done"
         ]
         if unfinished_tasks:
             raise ControllerError(
@@ -557,7 +581,7 @@ class ReviewMixin(ControllerCore):
 
     @decided
     def status(self):
-        from dark_factory.improvement import analyze_improvements
+        from dark_factory.improvement import stored_improvements
 
         allowed, reason = self.dispatch_allowed()
         return {
@@ -584,5 +608,6 @@ class ReviewMixin(ControllerCore):
                 self.continuation(r["id"])
                 for r in self.store.query("SELECT id FROM work_items")
             ],
-            "improvements": analyze_improvements(self.store, self.cfg),
+            "improvements": stored_improvements(self.store, self.cfg),
+            "improvement_loop": self.improvement_status(),
         }

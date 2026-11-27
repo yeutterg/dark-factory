@@ -5,33 +5,49 @@ on:
     branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   tests:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
+      fail-fast: false
       matrix:
-        node-version: ['22', '24']
+        python: ['3.11', '3.13', '3.14']
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
-          python-version: '3.11'
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ matrix.node-version }}
+          python-version: ${{ matrix.python }}
       - run: pip install '.[dev]'
-      - run: ruff check src tests
-      - run: ruff format --check src tests
+      - run: ruff check src tests scripts
+      - run: ruff format --check src tests scripts
       - run: mypy
-      - run: npm ci --ignore-scripts && npm run check
-        working-directory: src/dark_factory/adapters/workflow/pi_engine
       - run: python -m pytest -q -n auto
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.13'
+      # Fails on a known-vulnerable runtime dependency.
+      - run: pip install . pip-audit
+      - run: pip freeze --exclude dark-factory > audited-requirements.txt
+      - run: pip-audit -r audited-requirements.txt --no-deps --disable-pip --strict
   compose:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: ./scripts/compose-init
       - run: docker compose config --quiet
+      # The live overlays must stay valid even though CI never runs them.
+      - run: docker compose -f compose.yaml -f compose.live.yaml config --quiet
+      - run: docker compose -f compose.yaml -f compose.live.yaml -f compose.live-hardened.yaml config --quiet
       - run: docker compose build server
       - run: docker compose up --detach server worker
       - run: ./scripts/compose-smoke

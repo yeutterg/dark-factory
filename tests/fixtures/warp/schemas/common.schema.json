@@ -1,0 +1,932 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "common.schema.json",
+  "$comment": "Generated from the Factory file parser and the catalogues its apply path validates against. Edit logic/factoryfile/schema, then regenerate; a hand edit is reverted by the drift test.",
+  "title": "Shared Factory file definitions (v1alpha1)",
+  "description": "Definitions shared by factory.yaml, Agent, Automation, Scorer, and Runner documents.",
+  "$defs": {
+    "blueprintRef": {
+      "type": "string",
+      "pattern": "^warp/[a-z0-9][a-z0-9_-]*@\\S+$",
+      "description": "A hosted catalog reference: warp/<name>@<constraint> where constraint is latest, an exact version, or a semver range such as ^2."
+    },
+    "agentRef": {
+      "type": "string",
+      "pattern": "^warp/[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*@\\S+$",
+      "description": "A hosted catalog reference: warp/<name>@<constraint> where constraint is latest, an exact version, or a semver range such as ^2."
+    },
+    "promptParams": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "common.schema.json#/$defs/nonEmptyString"
+      },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          },
+          {
+            "type": "object",
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "text": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "prewarmedPool": {
+      "description": "A pre-warmed pool keeps a set of sandboxes ready for future runs. Omit to inherit the Factory default. False disables the pool. A policy replaces the whole default. Each Agent has a separate pool.",
+      "oneOf": [
+        {
+          "const": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "max"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "strategy": {
+              "type": "string",
+              "enum": [
+                "fixed",
+                "scheduled"
+              ],
+              "default": "fixed"
+            },
+            "min": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 50
+            },
+            "max": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 50
+            },
+            "schedules": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "required": [
+                  "cron",
+                  "durationMinutes"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "cron": {
+                    "type": "string",
+                    "pattern": "^\\s*[^@\\s]+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s*$",
+                    "description": "Five-field UTC cron. Descriptors, seconds, and time-zone prefixes are not allowed."
+                  },
+                  "durationMinutes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10080
+                  }
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "strategy"
+                ],
+                "properties": {
+                  "strategy": {
+                    "const": "scheduled"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "schedules"
+                ],
+                "properties": {
+                  "max": {
+                    "minimum": 1
+                  }
+                }
+              },
+              "else": {
+                "not": {
+                  "required": [
+                    "schedules"
+                  ]
+                }
+              }
+            }
+          ],
+          "description": "A pre-warmed pool keeps a set of sandboxes ready for future runs. Fixed targets max and requires min omitted or equal to max. Scheduled defaults min to zero and targets max inside any window, otherwise min. Window starts are inclusive and ends are exclusive. The parser validates cron syntax and min <= max."
+        }
+      ]
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "A string that is non-empty after trimming surrounding whitespace."
+    },
+    "nullableNonEmptyString": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "if": {
+        "type": "string"
+      },
+      "then": {
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "description": "A non-empty string override, or null to inherit."
+    },
+    "clearableString": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "A string override. Null or empty explicitly clears an inherited value; omitting the field inherits it."
+    },
+    "alias": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 60,
+      "x-warp-character-class": "unicode-letters-numbers-space-dot-underscore-hyphen",
+      "description": "Factory display handle, used as the @-mention name on integrated platforms. Letters, digits, spaces, '-', '_', and '.' only. Case is preserved; uniqueness is compared case-insensitively across the workspace. The character class is an annotation rather than a pattern because it needs a Unicode property escape, which not every JSON Schema regex engine supports."
+    },
+    "agentType": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "CUSTOM",
+        "FOREMAN",
+        "IMPLEMENT",
+        "MAIN",
+        "REVIEW",
+        "SPEC",
+        "TRIAGE",
+        "VERIFY",
+        null
+      ],
+      "description": "Worker role. MAIN is an authoring alias for FOREMAN. Exactly one worker in the tree must declare MAIN or FOREMAN. Omitting the role resolves to CUSTOM."
+    },
+    "credentialStrategy": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "CREATOR",
+        "EXECUTOR",
+        null
+      ],
+      "description": "Whose credentials a run executes with. Omit or null to leave the value already stored on the server untouched."
+    },
+    "secretName": {
+      "$ref": "#/$defs/nonEmptyString",
+      "description": "Name of a managed secret already registered for the team."
+    },
+    "secrets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/secretName"
+      },
+      "description": "Managed secret names. Declaring the field at Agent, Automation, or Scorer level replaces the inherited list rather than adding to it."
+    },
+    "uniqueSecrets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/secretName"
+      },
+      "uniqueItems": true,
+      "description": "Managed secret names. Duplicates are rejected in factory.yaml."
+    },
+    "mcpServers": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/mcpServerEntry"
+      },
+      "description": "MCP servers keyed by the name the agent sees. Declaring the field at Agent, Automation, or Scorer level replaces the inherited map."
+    },
+    "mcpServerEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "warpId": {
+          "$ref": "#/$defs/nonEmptyString",
+          "description": "Warp-managed MCP server ID, including well-known integration IDs (e.g. linear)."
+        },
+        "command": {
+          "$ref": "#/$defs/nonEmptyString",
+          "description": "Stdio transport command to run."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Stdio transport command arguments. Valid only alongside command."
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^\\s*[hH][tT][tT][pP][sS]?://[^/\\s]+",
+          "description": "HTTP/SSE transport server URL. Must be an absolute http or https URL with a host."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables for the stdio transport. Valid only alongside command."
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "HTTP headers for the URL transport. Valid only alongside url."
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "warpId"
+          ]
+        },
+        {
+          "required": [
+            "command"
+          ]
+        },
+        {
+          "required": [
+            "url"
+          ]
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "not": {
+              "required": [
+                "command"
+              ]
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "args"
+                  ]
+                },
+                {
+                  "required": [
+                    "env"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "required": [
+                "url"
+              ]
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "headers"
+              ]
+            }
+          }
+        }
+      ],
+      "description": "One MCP server. Selects exactly one transport: warpId (managed), command (stdio), or url (remote)."
+    },
+    "networkPolicyReference": {
+      "type": "string",
+      "description": "Warp-managed network policy."
+    },
+    "networkPolicy": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "description": "Optional network policy declaration. An empty policy denies all network egress. If no policy applies to the agent, all egress is allowed. Network policies cannot block services required for the platform to function.",
+      "properties": {
+        "allowedHosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Literal hostnames or IPs, normalized without reordering or deduplication. URLs, ports, CIDRs, and wildcards are invalid."
+        },
+        "deniedHosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Literal hostnames or IPs. Overlap with allowedHosts is retained."
+        },
+        "extends": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/networkPolicyReference"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/networkPolicyReference"
+              }
+            }
+          ],
+          "description": "Warp-managed network policies to extend from. Either a single policy or a list of policies is accepted.",
+          "examples": [
+            "warp/package-registries@1.0.0",
+            [
+              "warp/claude-code@^1",
+              "warp/codex@latest"
+            ]
+          ]
+        }
+      }
+    },
+    "harnessAuth": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": [
+            "managedSecret",
+            "workerEnvironment"
+          ]
+        },
+        "secretName": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "if": {
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "source"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "source"
+              ],
+              "properties": {
+                "source": {
+                  "const": "managedSecret"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "secretName"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "source"
+              ],
+              "properties": {
+                "source": {
+                  "const": "workerEnvironment"
+                }
+              }
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "secretName"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "description": "Credentials for a non-Oz harness. Null explicitly clears inherited auth."
+    },
+    "harnessCommonProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "claude",
+            "claude-code",
+            "codex",
+            "gemini",
+            "oz",
+            "pi",
+            null
+          ],
+          "description": "Harness config name. claude-code is an accepted alias for claude."
+        },
+        "model": {
+          "$ref": "#/$defs/nullableNonEmptyString"
+        },
+        "reasoningLevel": {
+          "$ref": "#/$defs/clearableString"
+        },
+        "auth": {
+          "$ref": "#/$defs/harnessAuth"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "const": "oz"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reasoningLevel"
+              ]
+            },
+            "properties": {
+              "auth": {
+                "type": "null"
+              },
+              "model": {
+                "$ref": "#/$defs/ozModelOverride"
+              }
+            }
+          }
+        }
+      ],
+      "$comment": "The oz harness supplies its own credentials and takes no reasoning level."
+    },
+    "agentHarnessOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "claude",
+            "claude-code",
+            "codex",
+            "gemini",
+            "oz",
+            "pi",
+            null
+          ],
+          "description": "Harness config name. claude-code is an accepted alias for claude."
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "An explicit empty model selects the environment for a Claude Code Agent. Null or omission inherits the default. Other harnesses require a non-empty model at resolution."
+        },
+        "reasoningLevel": {
+          "$ref": "#/$defs/clearableString"
+        },
+        "auth": {
+          "$ref": "#/$defs/harnessAuth"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "const": "oz"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reasoningLevel"
+              ]
+            },
+            "properties": {
+              "auth": {
+                "type": "null"
+              },
+              "model": {
+                "$ref": "#/$defs/ozModelOverride"
+              }
+            }
+          }
+        }
+      ],
+      "$comment": "The oz harness supplies its own credentials and takes no reasoning level.",
+      "anyOf": [
+        {
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "required": [
+            "model"
+          ],
+          "properties": {
+            "model": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "required": [
+            "reasoningLevel"
+          ]
+        },
+        {
+          "required": [
+            "auth"
+          ]
+        }
+      ]
+    },
+    "harnessOverride": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/harnessCommonProperties"
+        },
+        {
+          "anyOf": [
+            {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "required": [
+                "model"
+              ],
+              "properties": {
+                "model": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "required": [
+                "reasoningLevel"
+              ]
+            },
+            {
+              "required": [
+                "auth"
+              ]
+            }
+          ]
+        }
+      ],
+      "description": "Sparse harness override. Must declare at least one of type, model, reasoningLevel, or auth."
+    },
+    "harnessDefault": {
+      "allOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "claude",
+                "claude-code",
+                "codex",
+                "gemini",
+                "oz",
+                "pi",
+                null
+              ],
+              "description": "Harness config name. claude-code is an accepted alias for claude."
+            },
+            "model": {
+              "type": "string"
+            },
+            "reasoningLevel": {
+              "$ref": "#/$defs/clearableString"
+            },
+            "auth": {
+              "$ref": "#/$defs/harnessAuth"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "oz"
+                  }
+                }
+              },
+              "then": {
+                "not": {
+                  "required": [
+                    "reasoningLevel"
+                  ]
+                },
+                "properties": {
+                  "auth": {
+                    "type": "null"
+                  },
+                  "model": {
+                    "$ref": "#/$defs/ozModelOverride"
+                  }
+                }
+              }
+            }
+          ],
+          "$comment": "The oz harness supplies its own credentials and takes no reasoning level."
+        },
+        {
+          "required": [
+            "type",
+            "model"
+          ],
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "reasoningLevel": {
+              "$ref": "#/$defs/nullableNonEmptyString"
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "claude",
+                  "claude-code"
+                ]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "model": {
+                "$ref": "#/$defs/nonEmptyString"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "oz"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "model": {
+                "$ref": "#/$defs/ozModelDefault"
+              }
+            }
+          }
+        }
+      ],
+      "description": "Factory-level harness default. Both type and model are required. An explicit empty Claude model selects From environment; other harnesses require a non-empty model."
+    },
+    "ozModelDefault": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Oz model ID or custom:<slug> for a team endpoint model. The slug is case-sensitive and must match exactly one configured model. Shorthand for harness: {type: oz, model: <selection>}. Mutually exclusive with harness."
+    },
+    "ozModelOverride": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/nullableNonEmptyString"
+        }
+      ],
+      "description": "Oz model ID or custom:<slug> for a team endpoint model, or null to inherit. The slug is case-sensitive and must match exactly one configured model. Shorthand for harness: {type: oz, model: <selection>}. Mutually exclusive with harness."
+    },
+    "modelXorHarnessRequired": {
+      "oneOf": [
+        {
+          "required": [
+            "model"
+          ]
+        },
+        {
+          "required": [
+            "harness"
+          ]
+        }
+      ],
+      "description": "Declare exactly one of model (Oz harness shorthand) or harness (explicit harness block)."
+    },
+    "modelXorHarnessOptional": {
+      "not": {
+        "required": [
+          "model",
+          "harness"
+        ]
+      },
+      "description": "model and harness are mutually exclusive."
+    },
+    "runnerRef": {
+      "$ref": "#/$defs/nullableNonEmptyString",
+      "description": "Name of a runner declared under runners/<name>.yaml, or null to inherit."
+    },
+    "environmentId": {
+      "$ref": "#/$defs/nullableNonEmptyString",
+      "description": "Cloud environment ID the run executes in, or null to inherit."
+    },
+    "workerHost": {
+      "$ref": "#/$defs/clearableString",
+      "description": "Self-hosted worker host. Null or empty clears an inherited host and defers to the workspace default."
+    },
+    "computerUseModel": {
+      "$ref": "#/$defs/nullableNonEmptyString",
+      "description": "Model ID for the computer use subagent, or null to inherit. It is a sub-setting of the Warp Agent harness, like computer use itself: a value declared under a non-Warp Agent harness is kept but inert."
+    },
+    "idleTimeoutMinutes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 60,
+      "description": "Post-completion idle timeout in minutes. Omit or set null to inherit; when no Agent or run value is set, the server uses 10 minutes. An explicit run-level value takes precedence over the Agent value."
+    },
+    "optionalText": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Free-form prose. Null is equivalent to omitting the field."
+    },
+    "requiredRepos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "owner"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "owner": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "codeForge": {
+            "type": "string",
+            "enum": [
+              "GITHUB",
+              "GITLAB",
+              "AZURE_DEVOPS"
+            ],
+            "description": "Disambiguates a reference whose owner and name are attached to the Factory on more than one code forge. Omit it when the owner and name are unambiguous."
+          }
+        }
+      },
+      "description": "Repositories, attached to the same Factory, that must be eagerly prepared for every run. Duplicates are accepted and normalized to one set member; a reference to an unattached repository is invalid, and a reference matching repositories attached on more than one code forge must declare codeForge to disambiguate."
+    },
+    "hooks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "format",
+          "path"
+        ],
+        "additionalProperties": false,
+        "description": "One hook directory. Entries load in the order listed, and each entry's hooks apply to the whole run.",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "cursor"
+            ],
+            "description": "Layout of the hook directory. cursor: the directory holds a hooks.json in Cursor's hooks format."
+          },
+          "repository": {
+            "type": "object",
+            "required": [
+              "name",
+              "owner"
+            ],
+            "additionalProperties": false,
+            "description": "A non-deferred repository attached to this Factory that contains the hook directory. Omit it for a directory that already exists on the worker.",
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "owner": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "codeForge": {
+                "type": "string",
+                "enum": [
+                  "GITHUB",
+                  "GITLAB",
+                  "AZURE_DEVOPS"
+                ],
+                "description": "Disambiguates a repository whose owner and name are attached to the Factory on more than one code forge. Omit it when the owner and name are unambiguous."
+              },
+              "deferred": {
+                "type": "boolean",
+                "const": false,
+                "description": "Accepted only when false. Hook source repositories must be prepared eagerly."
+              }
+            }
+          },
+          "path": {
+            "$ref": "#/$defs/nonEmptyString",
+            "description": "With repository, a directory relative to the repository root that does not contain ..; . is the root. Without repository, an absolute directory on the worker."
+          },
+          "strict": {
+            "type": "boolean",
+            "default": false,
+            "description": "When true, the run fails before it starts if this directory cannot be loaded, and a hook from it that crashes, times out, or prints invalid output denies the action. When false, a directory that cannot be loaded is a warning and such a hook lets the action through."
+          },
+          "onAsk": {
+            "type": "string",
+            "enum": [
+              "deny",
+              "fail_run"
+            ],
+            "default": "deny",
+            "description": "What happens when a hook from this directory asks for approval in a run with no person to answer. The tool call is denied either way; deny lets the run continue and fail_run ends it as failed."
+          }
+        }
+      }
+    }
+  }
+}

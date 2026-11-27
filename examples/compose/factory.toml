@@ -9,7 +9,6 @@ name = "compose-example"
 state_dir = "/state/supervisor"
 
 [runtime]
-worker_token_env = "COMPOSE_LEGACY_WORKER_TOKEN"
 operator_token_env = "COMPOSE_OPERATOR_TOKEN"
 api_host = "127.0.0.1"
 api_port = 8745

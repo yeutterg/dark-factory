@@ -1,0 +1,2388 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "automation.schema.json",
+  "$comment": "Generated from the Factory file parser and the catalogues its apply path validates against. Edit logic/factoryfile/schema, then regenerate; a hand edit is reverted by the drift test.",
+  "title": "automations/<name>/automation.md frontmatter (v1alpha1)",
+  "description": "YAML frontmatter of an Automation file. The Automation's name comes from its directory, never from a field. The Markdown body after the closing fence is the run prompt.",
+  "type": "object",
+  "required": [
+    "triggers"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "displayName": {
+      "$ref": "common.schema.json#/$defs/nullableNonEmptyString",
+      "description": "Optional display label. Null clears it; the Automation's identity and canonical name still come from its directory."
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Defaults to true when omitted."
+    },
+    "worker": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString",
+      "description": "Name of a declared worker. Defaults to the MAIN/FOREMAN worker when omitted. Not valid together with stage."
+    },
+    "agent": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString",
+      "deprecated": true,
+      "description": "Deprecated alias of worker. Set only one of the two."
+    },
+    "model": {
+      "$ref": "common.schema.json#/$defs/ozModelOverride"
+    },
+    "harness": {
+      "$ref": "common.schema.json#/$defs/harnessOverride"
+    },
+    "runner": {
+      "$ref": "common.schema.json#/$defs/runnerRef"
+    },
+    "environmentId": {
+      "$ref": "common.schema.json#/$defs/environmentId"
+    },
+    "secrets": {
+      "$ref": "common.schema.json#/$defs/secrets"
+    },
+    "mcpServers": {
+      "$ref": "common.schema.json#/$defs/mcpServers"
+    },
+    "workerHost": {
+      "$ref": "common.schema.json#/$defs/workerHost"
+    },
+    "computerUseModel": {
+      "$ref": "common.schema.json#/$defs/computerUseModel"
+    },
+    "idleTimeoutMinutes": {
+      "$ref": "common.schema.json#/$defs/idleTimeoutMinutes"
+    },
+    "required_repos": {
+      "$ref": "common.schema.json#/$defs/requiredRepos",
+      "description": "Repositories, attached to the same Factory, that must be eagerly prepared for every run this Automation triggers, in addition to its Agent's own required_repos."
+    },
+    "triggers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/trigger"
+      }
+    },
+    "stage": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString",
+      "description": "Name of the blueprint stage that receives the event. Requires a blueprint; not valid with worker or any per-run override."
+    }
+  },
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/modelXorHarnessOptional"
+    },
+    {
+      "not": {
+        "required": [
+          "agent",
+          "worker"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "stringMatcher": {
+      "description": "A bare array is sugar for {in: [...]}. Within a field, in matches ANY-of and not_in excludes ANY-of. Null and an empty matcher impose nothing.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "not_in": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "stringMatcherInOnly": {
+      "description": "A bare array is sugar for {in: [...]}. This field supports only in: an exclusion would match everything else in scope.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "webhookIDsMatcher": {
+      "description": "Exactly one webhook source UID, as an in-only matcher or its bare-array shorthand.",
+      "anyOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "in"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "intMatcher": {
+      "description": "A bare array is sugar for {in: [...]}. Within a field, in matches ANY-of and not_in excludes ANY-of. Null and an empty matcher impose nothing.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "not_in": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "intMatcherInOnly": {
+      "description": "A bare array is sugar for {in: [...]}. This field supports only in: an exclusion would match everything else in scope.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "stringAliasList": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/nonEmptyString"
+      },
+      "description": "A provider alias takes a bare list of names, never a matcher object, because its values are resolved against the provider before the filter is canonicalized."
+    },
+    "intAliasList": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "description": "A provider alias takes a bare list of positive numbers, never a matcher object, because its values are resolved against the provider before the filter is canonicalized."
+    },
+    "payloadPattern": {
+      "type": "object",
+      "description": "Structural pattern over the delivery body. Keys mirror the payload and AND together; an absent key imposes nothing.",
+      "additionalProperties": {
+        "$ref": "#/$defs/payloadPatternValue"
+      }
+    },
+    "payloadPatternValue": {
+      "description": "A bare array is sugar for {in: [...]}. An operator object takes in, not_in, contains, and exists; any other object nests further into the payload. contains matches a string holding ANY of its keywords as a case-sensitive substring.",
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "contains": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "exists": {
+              "type": "boolean"
+            },
+            "in": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "not_in": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/payloadPattern"
+        }
+      ]
+    },
+    "botPolicy": {
+      "type": "string",
+      "enum": [
+        "all",
+        "self",
+        "none"
+      ],
+      "default": "all",
+      "description": "Which bot-authored events to skip: all bots, only Warp-owned bots (self), or none."
+    },
+    "jql": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Optional Jira issue query. Trimmed before validation; must contain 1–10000 characters and cannot accompany Basic issue predicates. Event predicates remain active.",
+      "pattern": "\\S"
+    },
+    "inlineSchedule": {
+      "type": "object",
+      "required": [
+        "cron"
+      ],
+      "additionalProperties": false,
+      "description": "A cron schedule declared inline on a schedule.cron_fired trigger. Only valid on that kind.",
+      "properties": {
+        "name": {
+          "$ref": "common.schema.json#/$defs/optionalText",
+          "description": "Stable identity of this declaration within the Automation. At most one inline schedule may omit name. Changing name replaces the schedule; changing only cron updates it in place."
+        },
+        "cron": {
+          "$ref": "common.schema.json#/$defs/nonEmptyString",
+          "pattern": "^\\s*(@(annually|yearly|monthly|weekly|daily|midnight|hourly)|@every\\s+\\S+|(\\S+\\s+){4}\\S+)\\s*$",
+          "description": "Standard five-field cron expression or a descriptor (@daily, @hourly, @every 1h). Always interpreted in UTC: a CRON_TZ= or TZ= prefix and the six-field seconds form are both rejected. The pattern is structural; the parser is the authority on the grammar."
+        }
+      }
+    },
+    "trigger": {
+      "type": "object",
+      "required": [
+        "event",
+        "provider"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "azure_devops",
+            "factory",
+            "github",
+            "gitlab",
+            "jira",
+            "linear",
+            "schedule",
+            "slack",
+            "teams",
+            "webhook"
+          ]
+        },
+        "event": {
+          "$ref": "common.schema.json#/$defs/nonEmptyString",
+          "description": "Canonical event kind. The accepted values depend on the provider."
+        },
+        "filter": {
+          "type": "object",
+          "description": "Filter fields combine with AND. An absent field is a wildcard. The accepted keys depend on the (provider, event) pair."
+        },
+        "schedule": {
+          "$ref": "#/$defs/inlineSchedule"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "provider"
+            ],
+            "properties": {
+              "provider": {
+                "const": "azure_devops"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "pull_request_closed",
+                  "pull_request_commented",
+                  "pull_request_created",
+                  "pull_request_mentioned",
+                  "pull_request_merged",
+                  "pull_request_updated",
+                  "push",
+                  "work_item_assigned",
+                  "work_item_created",
+                  "work_item_labeled",
+                  "work_item_mentioned"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "provider"
+            ],
+            "properties": {
+              "provider": {
+                "const": "factory"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "work_item_stage_changed"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "provider"
+            ],
+            "properties": {
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "check_run_rerequested",
+                  "check_suite_completed",
+                  "check_suite_rerequested",
+                  "commit_status",
+                  "issue_assigned",
+                  "issue_commented",
+                  "issue_created",
+                  "issue_labeled",
+                  "issue_mentioned",
+                  "pull_request_assigned",
+                  "pull_request_closed",
+                  "pull_request_commented",
+                  "pull_request_dequeued",
+                  "pull_request_enqueued",
+                  "pull_request_labeled",
+                  "pull_request_mentioned",
+                  "pull_request_merged",
+                  "pull_request_opened",
+                  "pull_request_ready",
+                  "pull_request_reopened",
+                  "pull_request_review_requested",
+                  "pull_request_review_submitted",
+                  "pull_request_synchronized",
+                  "push",
+                  "workflow_run_completed"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "provider"
+            ],
+            "properties": {
+              "provider": {
+                "const": "gitlab"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "bot_mentioned",
+                  "merge_request",
+                  "push"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "provider"
+            ],
+            "properties": {
+              "provider": {
+                "const": "jira"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "agent_session_created",
+                  "app_mentioned",
+                  "issue_created",
+                  "issue_labeled",
+                  "status_changed"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "provider"
+            ],
+            "properties": {
+              "provider": {
+                "const": "linear"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "agent_session_created",
+                  "comment_created",
+                  "issue_assigned",
+                  "issue_created",
+                  "issue_labeled",
+                  "issue_state_changed"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "provider"
+            ],
+            "properties": {
+              "provider": {
+                "const": "schedule"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "cron_fired"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "provider"
+            ],
+            "properties": {
+              "provider": {
+                "const": "slack"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "app_mention",
+                  "member_joined_channel",
+                  "message_dm",
+                  "message_im",
+                  "message_mpim",
+                  "message_posted",
+                  "reaction_added"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "provider"
+            ],
+            "properties": {
+              "provider": {
+                "const": "teams"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "app_mention",
+                  "message_posted"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "provider"
+            ],
+            "properties": {
+              "provider": {
+                "const": "webhook"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "received"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "enum": [
+                  "pull_request_closed",
+                  "pull_request_commented",
+                  "pull_request_created",
+                  "pull_request_merged",
+                  "pull_request_updated"
+                ]
+              },
+              "provider": {
+                "const": "azure_devops"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "base_branches": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "source_repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "pull_request_mentioned"
+              },
+              "provider": {
+                "const": "azure_devops"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "mentioned": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "push"
+              },
+              "provider": {
+                "const": "azure_devops"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "branches": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "enum": [
+                  "work_item_assigned",
+                  "work_item_created",
+                  "work_item_labeled"
+                ]
+              },
+              "provider": {
+                "const": "azure_devops"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "assignees": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "authors": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "work_item_types": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "work_item_mentioned"
+              },
+              "provider": {
+                "const": "azure_devops"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "mentioned": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "work_item_stage_changed"
+              },
+              "provider": {
+                "const": "factory"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "stages": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "enum": [
+                  "check_run_rerequested",
+                  "check_suite_rerequested"
+                ]
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "check_suite_completed"
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "authors": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "branches": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "conclusions": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "commit_status"
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "contexts": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  },
+                  "states": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "enum": [
+                  "issue_assigned",
+                  "pull_request_assigned"
+                ]
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "assignees": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "authors": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "enum": [
+                  "issue_commented",
+                  "pull_request_commented"
+                ]
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "authors": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "keywords": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "issue_created"
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "assignees": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "authors": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "keywords": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "issue_labeled"
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "assignees": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "authors": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "enum": [
+                  "issue_mentioned",
+                  "pull_request_mentioned"
+                ]
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "authors": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "keywords": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "mentioned": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "enum": [
+                  "pull_request_closed",
+                  "pull_request_dequeued",
+                  "pull_request_enqueued",
+                  "pull_request_labeled",
+                  "pull_request_merged",
+                  "pull_request_synchronized"
+                ]
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "assignees": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "authors": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "baseBranches": {
+                    "$ref": "#/$defs/stringMatcher",
+                    "description": "Authoring alias for base_branches; the two are mutually exclusive."
+                  },
+                  "base_branches": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "paths": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "prNumbers": {
+                    "$ref": "#/$defs/intMatcher",
+                    "description": "Authoring alias for pr_numbers; the two are mutually exclusive."
+                  },
+                  "pr_numbers": {
+                    "$ref": "#/$defs/intMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  }
+                },
+                "allOf": [
+                  {
+                    "not": {
+                      "required": [
+                        "baseBranches",
+                        "base_branches"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "prNumbers",
+                        "pr_numbers"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "enum": [
+                  "pull_request_opened",
+                  "pull_request_ready",
+                  "pull_request_reopened"
+                ]
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "assignees": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "authors": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "baseBranches": {
+                    "$ref": "#/$defs/stringMatcher",
+                    "description": "Authoring alias for base_branches; the two are mutually exclusive."
+                  },
+                  "base_branches": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "keywords": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "paths": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "prNumbers": {
+                    "$ref": "#/$defs/intMatcher",
+                    "description": "Authoring alias for pr_numbers; the two are mutually exclusive."
+                  },
+                  "pr_numbers": {
+                    "$ref": "#/$defs/intMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  }
+                },
+                "allOf": [
+                  {
+                    "not": {
+                      "required": [
+                        "baseBranches",
+                        "base_branches"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "prNumbers",
+                        "pr_numbers"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "pull_request_review_requested"
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "authors": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "reviewer_teams": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "reviewers": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "pull_request_review_submitted"
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "authors": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "keywords": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "mentioned": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "review_states": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "reviewers": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "push"
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "branches": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "paths": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "workflow_run_completed"
+              },
+              "provider": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "authors": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "branches": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "conclusions": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "skip_bots": {
+                    "$ref": "#/$defs/botPolicy"
+                  },
+                  "workflows": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "bot_mentioned"
+              },
+              "provider": {
+                "const": "gitlab"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "mentioned": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "merge_request"
+              },
+              "provider": {
+                "const": "gitlab"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "actions": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "base_branches": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "push"
+              },
+              "provider": {
+                "const": "gitlab"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "branches": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "repos": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "enum": [
+                  "agent_session_created",
+                  "app_mentioned"
+                ]
+              },
+              "provider": {
+                "const": "jira"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "jql": {
+                    "$ref": "#/$defs/jql"
+                  },
+                  "keywords": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "project_keys": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "enum": [
+                  "issue_created",
+                  "issue_labeled"
+                ]
+              },
+              "provider": {
+                "const": "jira"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "jql": {
+                    "$ref": "#/$defs/jql"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "project_keys": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "status_changed"
+              },
+              "provider": {
+                "const": "jira"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "jql": {
+                    "$ref": "#/$defs/jql"
+                  },
+                  "project_keys": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "status_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "agent_session_created"
+              },
+              "provider": {
+                "const": "linear"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "creator_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "keywords": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "project_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "projects": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for project_ids; the two are mutually exclusive."
+                  },
+                  "team_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "teams": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for team_ids; the two are mutually exclusive."
+                  }
+                },
+                "allOf": [
+                  {
+                    "not": {
+                      "required": [
+                        "team_ids",
+                        "teams"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "project_ids",
+                        "projects"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "comment_created"
+              },
+              "provider": {
+                "const": "linear"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "creator_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "issue_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "issues": {
+                    "$ref": "#/$defs/intAliasList",
+                    "description": "Authoring alias for issue_ids; the two are mutually exclusive."
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "mentioned_user_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "project_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "projects": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for project_ids; the two are mutually exclusive."
+                  },
+                  "state_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "states": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for state_ids; the two are mutually exclusive."
+                  },
+                  "team_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "teams": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for team_ids; the two are mutually exclusive."
+                  }
+                },
+                "allOf": [
+                  {
+                    "not": {
+                      "required": [
+                        "team_ids",
+                        "teams"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "project_ids",
+                        "projects"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "state_ids",
+                        "states"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "issue_ids",
+                        "issues"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "enum": [
+                  "issue_assigned",
+                  "issue_created",
+                  "issue_labeled",
+                  "issue_state_changed"
+                ]
+              },
+              "provider": {
+                "const": "linear"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "assignee_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "creator_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "labels": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "mentioned_user_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "project_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "projects": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for project_ids; the two are mutually exclusive."
+                  },
+                  "state_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "states": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for state_ids; the two are mutually exclusive."
+                  },
+                  "team_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "teams": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for team_ids; the two are mutually exclusive."
+                  }
+                },
+                "allOf": [
+                  {
+                    "not": {
+                      "required": [
+                        "team_ids",
+                        "teams"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "project_ids",
+                        "projects"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "state_ids",
+                        "states"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "cron_fired"
+              },
+              "provider": {
+                "const": "schedule"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "schedule_ids": {
+                    "$ref": "#/$defs/stringMatcherInOnly"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "enum": [
+                  "app_mention",
+                  "message_dm",
+                  "message_im",
+                  "message_mpim",
+                  "message_posted"
+                ]
+              },
+              "provider": {
+                "const": "slack"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "channel_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "channels": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for channel_ids; the two are mutually exclusive."
+                  },
+                  "keywords": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "user_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "users": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for user_ids; the two are mutually exclusive."
+                  }
+                },
+                "allOf": [
+                  {
+                    "not": {
+                      "required": [
+                        "channel_ids",
+                        "channels"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "user_ids",
+                        "users"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "member_joined_channel"
+              },
+              "provider": {
+                "const": "slack"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "channel_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "channels": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for channel_ids; the two are mutually exclusive."
+                  },
+                  "user_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "users": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for user_ids; the two are mutually exclusive."
+                  }
+                },
+                "allOf": [
+                  {
+                    "not": {
+                      "required": [
+                        "channel_ids",
+                        "channels"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "user_ids",
+                        "users"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "reaction_added"
+              },
+              "provider": {
+                "const": "slack"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "channel_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "channels": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for channel_ids; the two are mutually exclusive."
+                  },
+                  "emojis": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "itemUsers": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for item_user_ids; the two are mutually exclusive."
+                  },
+                  "item_user_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "keywords": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "user_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "users": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for user_ids; the two are mutually exclusive."
+                  }
+                },
+                "allOf": [
+                  {
+                    "not": {
+                      "required": [
+                        "channel_ids",
+                        "channels"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "user_ids",
+                        "users"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "itemUsers",
+                        "item_user_ids"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "enum": [
+                  "app_mention",
+                  "message_posted"
+                ]
+              },
+              "provider": {
+                "const": "teams"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "channel_ids": {
+                    "$ref": "#/$defs/stringMatcherInOnly"
+                  },
+                  "keywords": {
+                    "$ref": "#/$defs/stringMatcher"
+                  },
+                  "team_ids": {
+                    "$ref": "#/$defs/stringMatcherInOnly"
+                  },
+                  "user_ids": {
+                    "$ref": "#/$defs/stringMatcher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "received"
+              },
+              "provider": {
+                "const": "webhook"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "payload": {
+                    "$ref": "#/$defs/payloadPattern"
+                  },
+                  "webhook_ids": {
+                    "$ref": "#/$defs/webhookIDsMatcher"
+                  }
+                },
+                "required": [
+                  "webhook_ids"
+                ]
+              }
+            },
+            "required": [
+              "filter"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event",
+              "provider"
+            ],
+            "properties": {
+              "event": {
+                "const": "cron_fired"
+              },
+              "provider": {
+                "const": "schedule"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "schedule"
+            ],
+            "properties": {
+              "filter": {
+                "not": {
+                  "required": [
+                    "schedule_ids"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "allOf": [
+                {
+                  "required": [
+                    "provider"
+                  ],
+                  "properties": {
+                    "provider": {
+                      "const": "schedule"
+                    }
+                  }
+                },
+                {
+                  "required": [
+                    "event"
+                  ],
+                  "properties": {
+                    "event": {
+                      "const": "cron_fired"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "schedule"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

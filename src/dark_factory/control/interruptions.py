@@ -6,7 +6,7 @@ import json
 from datetime import UTC, datetime
 
 from dark_factory.control.base import ControllerCore, ControllerError, atomic
-from dark_factory.interruptions import CATEGORY_TEXT, Verdict, categorize, decide
+from dark_factory.resume_policy import CATEGORY_TEXT, Verdict, categorize, decide
 from dark_factory.store import new_id, now_iso
 
 QUESTION = {
@@ -153,7 +153,7 @@ class InterruptionMixin(ControllerCore):
         """Resume trivial interruptions and hand the rest to a person."""
         settled = 0
         for row in self.store.query(
-            "SELECT * FROM interruptions WHERE outcome='pending' ORDER BY at,id"
+            "SELECT * FROM interruptions WHERE outcome='pending' ORDER BY at,rowid"
         ):
             # The decision agent runs outside any transaction.
             advice = self._ask_decider(row)
@@ -273,18 +273,37 @@ class InterruptionMixin(ControllerCore):
         )
         if not row:
             return None
+        # Prefer the interrupted attempt; if it saved nothing, fall back to the
+        # newest earlier attempt of this step that did.
         previous = self.store.one(
-            "SELECT archive_path,result_json FROM attempts WHERE id=?",
+            "SELECT id,archive_path,result_json FROM attempts WHERE job_id=? "
+            "AND archive_path IS NOT NULL AND id<>? ORDER BY "
+            "(id=?) DESC,started_at DESC LIMIT 1",
+            (job_id, attempt_id, row["attempt_id"]),
+        ) or self.store.one(
+            "SELECT id,archive_path,result_json FROM attempts WHERE id=?",
             (row["attempt_id"],),
         )
         result = json.loads(previous["result_json"] or "{}")
+        archive = previous["archive_path"]
+        if archive:
+            try:
+                self._verified_archive(previous["id"], archive)
+            except Exception as exc:
+                # A tampered or damaged archive is never resumed from.
+                self.store.audit(
+                    "controller",
+                    "resume.archive_rejected",
+                    {"attempt": previous["id"], "error": str(exc)[:300]},
+                )
+                archive = None
         self.store.execute(
             "UPDATE interruptions SET resumed_by_attempt=? WHERE id=?",
             (attempt_id, row["id"]),
         )
         return {
-            "attempt": row["attempt_id"],
-            "archive": previous["archive_path"],
+            "attempt": previous["id"],
+            "archive": archive,
             "category": row["category"],
             "detail": row["detail"],
             "session_id": result.get("session_id"),

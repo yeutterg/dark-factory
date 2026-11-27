@@ -1,167 +1,36 @@
-"""Workflow prerequisites cannot charge untouched assignments or poll Node while idle."""
+"""Idle, paused and drained workers do no work; failed starts are settled safely."""
 
-import json
-import shutil
 from pathlib import Path
 
 import pytest
 from test_loop import cfg_for
-from test_workflow import durable, setup
+from test_workflow import setup
 
-from dark_factory.adapters.workflow import pi_durable
-from dark_factory.controller import Controller, ControllerError
-from dark_factory.runner import CommandRunner
+from dark_factory.controller import Controller
 from dark_factory.store import Store
 from dark_factory.worker import Worker
 
 
-def test_idle_worker_does_not_start_node(tmp_path, monkeypatch):
+def test_idle_worker_claims_nothing(tmp_path):
     cfg = cfg_for(tmp_path)
-    cfg.raw["workflow"] = {"engine": "pi-durable"}
     store = Store(tmp_path)
     ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))
-    monkeypatch.setattr(
-        pi_durable.PiDurableRuntime,
-        "validate",
-        lambda self: pytest.fail("idle Node probe"),
-    )
     try:
         worker = Worker(cfg, store, ctrl)
         for _ in range(3):
             assert not worker.run_once()
+        assert not store.query("SELECT * FROM attempts")
     finally:
         store.close()
 
 
 @pytest.mark.parametrize("state", ["pause", "drain"])
-def test_disabled_dispatch_does_not_start_node(tmp_path, monkeypatch, state):
-    cfg, store, ctrl, wid, worker = setup(tmp_path, "pi-durable")
+def test_disabled_dispatch_claims_nothing(tmp_path, state):
+    cfg, store, ctrl, wid, worker = setup(tmp_path)
     getattr(ctrl, state)("human")
-    monkeypatch.setattr(
-        pi_durable.PiDurableRuntime,
-        "validate",
-        lambda self: pytest.fail("disabled Node probe"),
-    )
     try:
         assert not worker.run_once()
         assert not store.query("SELECT * FROM attempts")
-    finally:
-        store.close()
-
-
-@pytest.mark.skipif(not shutil.which("node"), reason="Node required")
-def test_broken_engine_only_subpath_cannot_lease_or_charge(tmp_path, monkeypatch):
-    cfg, store, ctrl, wid, worker = setup(tmp_path / "state", "pi-durable")
-    engine = tmp_path / "broken-engine"
-    engine.mkdir()
-    (engine / "package.json").write_text('{"type":"module"}')
-    (engine / "main.ts").write_text((pi_durable.ENGINE_DIR / "main.ts").read_text())
-    modules = {
-        "chord": (
-            {"./context": "./context.js"},
-            {"context.js": "export const BACKGROUND_CONTEXT = {};"},
-        ),
-        "pi-ai": (
-            {"./models": "./models.js"},
-            {"models.js": "export const createModels = () => ({});"},
-        ),
-        "pi-durable": (
-            {
-                ".": "./index.js",
-                "./storage/sqlite": "./storage.js",
-                "./storage/sqlite/node": "./missing-node.js",
-            },
-            {
-                "index.js": "export class Harness {}; export const createRegistry = () => ({}); export const defineDoc = x => x; export const defineExtension = x => x; export const defineTask = x => x;",
-                "storage.js": "export class SqliteStorage {};",
-            },
-        ),
-    }
-    for name, (exports, files) in modules.items():
-        directory = engine / "node_modules" / "@earendil-works" / name
-        directory.mkdir(parents=True)
-        (directory / "package.json").write_text(
-            json.dumps(
-                {
-                    "name": "@earendil-works/" + name,
-                    "version": pi_durable.PACKAGE_VERSION,
-                    "type": "module",
-                    "exports": exports,
-                }
-            )
-        )
-        for filename, body in files.items():
-            (directory / filename).write_text(body)
-    code, _, _ = CommandRunner(engine).supervise(
-        [
-            "node",
-            "--input-type=module",
-            "-e",
-            "await import('@earendil-works/pi-durable')",
-        ],
-        b"",
-        10,
-        engine,
-        pi_durable.PiDurableRuntime._environment(),
-    )
-    assert code == 0, "the original shallow probe must succeed in this fixture"
-    monkeypatch.setattr(pi_durable, "ENGINE_DIR", engine)
-    try:
-        with pytest.raises(RuntimeError, match="cannot load"):
-            worker.run_once()
-        assert not store.query("SELECT * FROM attempts")
-        assert not store.query("SELECT * FROM costs")
-        assert store.one("SELECT reserved_cents FROM work_items")[0] == 0
-        assert not (cfg.state_dir / "workflow").exists()
-        assert ctrl.continuation(wid)["next_action"]["kind"] == "blocked"
-        assert "cannot load" in ctrl.continuation(wid)["next_action"]["reason"]
-    finally:
-        store.close()
-
-
-@durable
-def test_post_claim_startup_failure_is_fenced_unbilled_then_resumes(
-    tmp_path, monkeypatch
-):
-    cfg, store, ctrl, wid, worker = setup(tmp_path, "pi-durable")
-    original = pi_durable.PiDurableRuntime._drive
-    calls = 0
-
-    def fail_once(self, *args):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("installation changed after validation")
-        return original(self, *args)
-
-    monkeypatch.setattr(pi_durable.PiDurableRuntime, "_drive", fail_once)
-    try:
-        deadline = json.loads(store.one("SELECT snapshot_json FROM work_items")[0])[
-            "deadline"
-        ]
-        with pytest.raises(RuntimeError, match="installation changed"):
-            worker.run_once()
-        retired = store.one("SELECT * FROM attempts")
-        assert retired["status"] == "not_started" and retired["cost_cents"] == 0
-        assert retired["workspace"] is None and retired["pid"] is None
-        root = store.one(
-            "SELECT reserved_cents,spent_cents,snapshot_json FROM work_items"
-        )
-        assert root["reserved_cents"] == root["spent_cents"] == 0
-        assert json.loads(root["snapshot_json"])["deadline"] == deadline
-        assert ctrl.continuation(wid)["next_action"]["kind"] == "blocked"
-        assert not ctrl.release_unstarted_claim(
-            retired["id"], worker.worker_id, "duplicate"
-        )
-        with pytest.raises(ControllerError, match="no longer active"):
-            ctrl.finish_attempt(retired["id"], True, "late result", 0, None)
-        assert worker.run_once()
-        assert not store.get_op("workflow_unavailable", "")
-        assert len(store.query("SELECT * FROM attempts")) == 2
-        assert len(store.query("SELECT * FROM attempts WHERE status='succeeded'")) == 1
-        assert not store.one(
-            "SELECT id FROM attempts WHERE status IN ('leased','running')"
-        )
     finally:
         store.close()
 
@@ -186,7 +55,7 @@ def test_started_callback_error_cannot_release_unbilled(tmp_path, monkeypatch):
 @pytest.mark.parametrize("guard", ["worker", "workspace", "pid", "running"])
 def test_unstarted_release_cannot_fence_other_owner_or_started_work(tmp_path, guard):
     cfg, store, ctrl, wid, worker = setup(tmp_path)
-    claim = ctrl.claim_job(worker.worker_id, ["native", "fake"])
+    claim = ctrl.claim_job(worker.worker_id, ["native", "fake", "environment:local"])
     aid = claim["attempt_id"]
     owner = worker.worker_id
     if guard == "worker":
@@ -203,5 +72,85 @@ def test_unstarted_release_cannot_fence_other_owner_or_started_work(tmp_path, gu
         assert not ctrl.release_unstarted_claim(aid, owner, "not eligible")
         assert store.one("SELECT reserved_cents FROM work_items")[0] == 50
         assert not store.query("SELECT * FROM costs")
+    finally:
+        store.close()
+
+
+def test_stopping_the_controller_stops_process_groups_but_keeps_roots(tmp_path):
+    import os
+    import signal
+    import subprocess
+
+    from test_workflow import setup
+
+    from dark_factory.runner import process_identity
+
+    cfg, store, ctrl, wid, worker = setup(tmp_path)
+    claimed = ctrl.claim_job("w", ["native", "fake", "environment:local"])
+    child = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        ctrl.record_process(claimed["attempt_id"], child.pid)
+        assert process_identity(child.pid)
+        ctrl.stop_active_processes("SIGTERM", grace_seconds=3)
+        assert child.wait(timeout=5) == -signal.SIGTERM
+        assert (
+            store.one("SELECT status FROM work_items WHERE id=?", (wid,))[0]
+            != "cancelled"
+        )
+        audit = store.one("SELECT payload_json FROM audit WHERE action='shutdown'")
+        assert "SIGTERM" in audit[0] and claimed["attempt_id"] in audit[0]
+    finally:
+        if child.poll() is None:
+            os.killpg(child.pid, signal.SIGKILL)
+
+
+def test_serve_exits_cleanly_on_sigterm_and_records_why(tmp_path):
+    import json
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    text = Path("examples/factory.toml").read_text()
+    text = text.replace('state_dir = "./state"', f'state_dir = "{tmp_path / "state"}"')
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    text = text.replace("api_port = 8745", f"api_port = {port}")
+    profile = tmp_path / "factory.toml"
+    profile.write_text(text)
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "dark_factory.cli",
+            "--config",
+            str(profile),
+            "serve",
+            "--worker",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        env={**os.environ, "PYTHONPATH": "src", "PYTHONUNBUFFERED": "1"},
+    )
+    try:
+        assert "listening" in proc.stdout.readline()
+        time.sleep(0.5)
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=30) == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    from dark_factory.store import Store
+
+    store = Store(tmp_path / "state")
+    try:
+        row = store.one("SELECT payload_json FROM audit WHERE action='shutdown'")
+        assert json.loads(row[0])["reason"] == "SIGTERM"
     finally:
         store.close()

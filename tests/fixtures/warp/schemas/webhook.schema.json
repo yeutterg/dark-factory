@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "webhook.schema.json",
+  "$comment": "Generated from the Factory file parser and the catalogues its apply path validates against. Edit logic/factoryfile/schema, then regenerate; a hand edit is reverted by the drift test.",
+  "title": "webhooks/<name>.yaml (v1alpha1)",
+  "description": "A custom webhook source document. The source's name comes from the file name, never from a field. The source's signing secret is never authored here and the server never generates one for a file-declared source: secretName is required in every authMode and must reference an existing managed secret holding the source's signing secret or bearer token.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "secretName"
+  ],
+  "properties": {
+    "authMode": {
+      "type": "string",
+      "enum": [
+        "token",
+        "url_token",
+        "signature"
+      ],
+      "description": "How the source authenticates deliveries. Defaults to token when omitted."
+    },
+    "signatureScheme": {
+      "type": "string",
+      "enum": [
+        "github",
+        "pagerduty",
+        "sentry",
+        "standard_webhooks",
+        "stripe",
+        "vercel"
+      ],
+      "description": "Provider-native signature scheme this source verifies. Required when authMode is signature; invalid otherwise."
+    },
+    "secretName": {
+      "$ref": "common.schema.json#/$defs/secretName",
+      "description": "Name of a managed secret holding the source's signing secret or bearer token. Required in every authMode: the server never generates or reveals a secret for a file-declared source."
+    },
+    "deliveryIdHeader": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "Header this sender stamps its own delivery identity into. Omit when the sender declares none. Must be a valid HTTP header name and must not be one whose value could carry a credential (e.g. Authorization, Cookie, or a provider's own signature header)."
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Defaults to true. Disabling stops ingress immediately without deleting the source."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "not": {
+          "required": [
+            "authMode"
+          ],
+          "properties": {
+            "authMode": {
+              "const": "signature"
+            }
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "signatureScheme"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "authMode"
+        ],
+        "properties": {
+          "authMode": {
+            "const": "signature"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "signatureScheme"
+        ]
+      }
+    }
+  ]
+}

@@ -31,7 +31,7 @@ def test_api_accepts_shared_commands_and_rejects_local_only(tmp_path):
     cfg = cfg_for(tmp_path)
     store = Store(tmp_path)
     ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))
-    server = serve(ctrl, "127.0.0.1", 0, cfg.worker_token)
+    server = serve(ctrl, "127.0.0.1", 0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     headers = {"Authorization": f"Bearer {cfg.operator_token}"}
@@ -88,13 +88,12 @@ def test_remote_cli_needs_only_operator_credential(tmp_path, monkeypatch, capsys
     store = Store(tmp_path)
     ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))
     ctrl.reload = lambda actor="operator": False
-    server = serve(ctrl, "127.0.0.1", 0, cfg.worker_token)
+    server = serve(ctrl, "127.0.0.1", 0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_port}"
     client = tmp_path / "operator.toml"
     client.write_text(
         '[runtime]\noperator_token_env = "REMOTE_OPERATOR_TOKEN"\n'
-        'worker_token_env = "INTENTIONALLY_MISSING"\n'
         '[sources."missing/repo"]\npath = "/also/intentionally/missing"\n'
     )
     monkeypatch.setenv("REMOTE_OPERATOR_TOKEN", cfg.operator_token)
@@ -119,7 +118,9 @@ def test_tui_defaults_to_separate_configured_controller(tmp_path, monkeypatch):
         'api_host = "127.0.0.1"\napi_port = 9876\n'
         '[sources."missing/repo"]\npath = "/intentionally/missing"\n'
     )
-    monkeypatch.setenv("REMOTE_OPERATOR_TOKEN", "separate-operator-token")
+    monkeypatch.setenv(
+        "REMOTE_OPERATOR_TOKEN", "separate-operator-token-0123456789-abcdef"
+    )
     observed = {}
 
     def run_tui(transport, actor):

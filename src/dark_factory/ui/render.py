@@ -13,6 +13,8 @@ from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
 
+from dark_factory.models import ACTIVE_ATTEMPT
+
 BG = "#161616"
 CHROME = "#1f1f1f"
 CURSOR = "#262626"
@@ -53,7 +55,7 @@ REACHED = {
     "awaiting_review": 6,
     "accepted": 7,
 }
-ACTIVE = frozenset({"leased", "running", "cancelling"})
+ACTIVE = ACTIVE_ATTEMPT
 FAILED = frozenset({"failed", "timed_out", "cancelled"})
 INTERRUPTED = "interrupted"
 RESERVE = frozenset({"standby", "not_needed", "superseded_by_repair"})

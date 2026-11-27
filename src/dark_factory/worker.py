@@ -6,13 +6,16 @@ import copy
 import json
 import shutil
 import subprocess
+import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dark_factory import artifacts
 from dark_factory.adapters.env.native import NativeEnvironment, process_environment
 from dark_factory.adapters.env.registry import environment_for
 from dark_factory.adapters.git.local import capture, git
+from dark_factory.adapters.harness.external import ExternalHarness
 from dark_factory.adapters.harness.registry import (
     adapter_for,
     capabilities,
@@ -20,9 +23,49 @@ from dark_factory.adapters.harness.registry import (
 )
 from dark_factory.execution.policy import recipe_for
 from dark_factory.models import ACTIVE_ATTEMPT
+from dark_factory.redaction import redact
 from dark_factory.runner import CommandRunner, RunnerTimeout
 from dark_factory.store import new_id
-from dark_factory.workflow import runtime_for
+
+HEARTBEAT_SECONDS = 5.0
+
+
+class LeaseKeeper:
+    """Renews one attempt's lease from claim to release, whatever the harness does.
+
+    A refusal (cancelled, fenced, past deadline) is recorded and read by the
+    worker; a transient error is not a refusal, and the lease itself bounds it.
+    """
+
+    def __init__(self, controller, worker_id, attempt_id, interval):
+        self.controller, self.worker_id, self.attempt_id = (
+            controller,
+            worker_id,
+            attempt_id,
+        )
+        self.interval = max(0.05, interval)
+        self.refused = False
+        self._halt = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+
+    def _beat(self):
+        try:
+            if not self.controller.heartbeat(self.worker_id, self.attempt_id):
+                self.refused = True
+        except Exception:
+            pass
+
+    def _loop(self):
+        while not self._halt.wait(self.interval) and not self.refused:
+            self._beat()
+
+    def start(self):
+        self._beat()
+        self._thread.start()
+
+    def stop(self):
+        self._halt.set()
+        self._thread.join(timeout=5)
 
 
 class Worker:
@@ -44,7 +87,7 @@ class Worker:
             getattr(self, "_harness_env", None),
         )
 
-    def _context(self, claimed, workspace):
+    def _context(self, claimed, workspace, restored=False):
         root = claimed["work_item"]
         snapshot = claimed["snapshot"]
         kind = claimed["job"]["kind"]
@@ -83,18 +126,28 @@ class Worker:
             ]
         resume = claimed["inputs"].get("resume")
         if resume:
+            # Say only what is true: the workspace is restored for an
+            # implementation step that had an archived checkout.
             common["resumed_after_interruption"] = {
                 "previous_attempt": resume["attempt"],
                 "what_happened": resume["detail"][:500],
+                "work_restored": restored,
                 "instructions": "Your previous attempt at this step was interrupted. "
-                "Its work is already in the workspace"
                 + (
-                    " and your earlier conversation is loaded"
-                    if resume.get("session_id")
-                    and (claimed["inputs"].get("route") or {}).get("harness") == "pi"
-                    else ""
-                )
-                + ". Check what is done, continue from there and do not redo finished work.",
+                    "Its work is already in the workspace"
+                    + (
+                        " and your earlier conversation is loaded"
+                        if resume.get("session_id")
+                        and (claimed["inputs"].get("route") or {}).get("harness")
+                        == "pi"
+                        else ""
+                    )
+                    + ". Check what is done, continue from there and do not redo "
+                    "finished work."
+                    if restored
+                    else "None of its work could be restored; start the step again "
+                    "from the beginning."
+                ),
             }
         if kind in {"check", "review"}:
             common["candidate"] = json.loads(root["candidate_commits"])
@@ -142,68 +195,58 @@ class Worker:
             + json.dumps(common, indent=2)
         )
 
+    def _unstarted_claims(self):
+        """Attempts this worker leased but never started (no workspace, no process)."""
+        return [
+            row["id"]
+            for row in self.store.query(
+                """SELECT id FROM attempts WHERE status='leased' AND worker_id=?
+                   AND workspace IS NULL AND pid IS NULL ORDER BY started_at,rowid""",
+                (self.worker_id,),
+            )
+        ]
+
     def run_once(self):
         self.controller.settle_interruptions(self.worker_id)
         self.controller.reconcile_continuations()
-        runtime = runtime_for(self.cfg, self.store)
-        pending = runtime.pending_attempts()
+        pending = self._unstarted_claims()
         if not pending and (
             not self.controller.dispatch_allowed()[0]
             or not self.store.one("SELECT id FROM jobs WHERE status='ready' LIMIT 1")
         ):
-            return False  # No Node probes while idle, paused or drained.
-        # Installation errors are not billable agent attempts. Keep jobs queued.
-        try:
-            runtime.validate()
-        except Exception as exc:
-            self.controller.set_workflow_unavailable(str(exc), self.worker_id)
-            self.controller.reconcile_continuations()
-            raise
-        self.controller.set_workflow_unavailable("", self.worker_id)
+            return False
         caps = capabilities(self.cfg)
+        # Discovery is not authority: resume_claim revalidates owner, policy,
+        # approval, lease and deadline before the claim runs again.
         for aid in pending:
             resumed = self.controller.resume_claim(aid, self.worker_id, caps)
             if resumed:
-                active = self.controller.attempt_status(aid) == "leased"
-                self._run_claim(runtime, resumed)
-                if active:
-                    self.controller.reconcile_continuations()
-                    return True
+                self._run_claim(resumed)
+                self.controller.reconcile_continuations()
+                return True
         claimed = self.controller.claim_job(self.worker_id, caps)
         if not claimed:
             return False
-        self._run_claim(runtime, claimed)
+        self._run_claim(claimed)
         return True
 
-    def _run_claim(self, runtime, claimed):
-        started = False
-
-        def execute():
-            nonlocal started
-            started = True
-            self._execute(claimed)
-
+    def _run_claim(self, claimed):
         try:
-            runtime.run(claimed, execute)
+            self._execute(claimed)
         except Exception as exc:
-            # A runtime failure cannot trigger another harness or duplicate a completed CLI.
-            self.controller.set_workflow_unavailable(str(exc), self.worker_id)
-            status = self.controller.attempt_status(claimed["attempt_id"])
-            released = not started and self.controller.release_unstarted_claim(
-                claimed["attempt_id"], self.worker_id, str(exc)
-            )
-            if not released and status in ACTIVE_ATTEMPT:
+            # An unexpected worker error must not replay a CLI or leave the lease open.
+            if self.controller.attempt_status(claimed["attempt_id"]) in ACTIVE_ATTEMPT:
                 self.controller.finish_attempt(
                     claimed["attempt_id"],
                     False,
-                    "workflow runtime failed",
+                    "worker error",
                     claimed["spec"]["budget_cents"],
                     None,
                     error=str(exc),
                 )
             self.store.audit(
                 self.worker_id,
-                "workflow.error",
+                "worker.error",
                 {"attempt": claimed["attempt_id"], "error": str(exc)},
             )
             raise
@@ -211,6 +254,20 @@ class Worker:
             self.controller.reconcile_continuations()
 
     def _execute(self, claimed):
+        """Run one claim while a dedicated thread keeps its lease alive."""
+        keeper = LeaseKeeper(
+            self.controller,
+            self.worker_id,
+            claimed["attempt_id"],
+            min(HEARTBEAT_SECONDS, claimed["inputs"].get("lease_seconds", 30) / 3),
+        )
+        keeper.start()
+        try:
+            return self._run(claimed, keeper)
+        finally:
+            keeper.stop()
+
+    def _run(self, claimed, keeper):
         self.cfg = self._base_cfg
         attempt_id = claimed["attempt_id"]
         job = claimed["job"]
@@ -240,18 +297,22 @@ class Worker:
         cost = 0
         result = {"ok": False, "inputs": claimed["inputs"], "usage": {}, "checks": []}
         events = []
+        redactions: list[str] = []
         archived = False
         cleaned = False
 
-        last_heartbeat = 0.0
+        deadline = datetime.fromisoformat(
+            self.store.one("SELECT deadline FROM attempts WHERE id=?", (attempt_id,))[
+                "deadline"
+            ]
+        )
+
+        def remaining():
+            return (deadline - datetime.now(UTC)).total_seconds()
 
         def stopped():
-            nonlocal last_heartbeat
-            if time.monotonic() - last_heartbeat >= 5:
-                last_heartbeat = time.monotonic()
-                if not self.controller.heartbeat(self.worker_id, attempt_id):
-                    return True
-            return self.controller.attempt_status(attempt_id) not in {
+            # Read-only: the lease is renewed by the keeper thread, not here.
+            return keeper.refused or self.controller.attempt_status(attempt_id) not in {
                 "leased",
                 "running",
             }
@@ -283,13 +344,16 @@ class Worker:
                     ),
                     "commit": candidate["commit"],
                 }
+            restored = False
             if (
                 job["kind"] == "implement"
+                and not spec.get("repair")
                 and resume_archive
                 and (resume_archive / "workspace").is_dir()
             ):
                 # Continue from the interrupted attempt's checkout, uncommitted work included.
                 source = {"path": str(resume_archive / "workspace"), "restore": True}
+                restored = True
             prepared = self.env.prepare(attempt_id, source)
             self.controller.record_workspace(attempt_id, prepared.workspace)
             if job["kind"] in {"plan", "critique", "review"}:
@@ -329,8 +393,9 @@ class Worker:
                 raise RuntimeError("attempt cancelled")
             if role:
                 route = claimed["inputs"]["route"]
-                if route["harness"] != "fake":
+                if route["harness"] != "fake" and not claimed["inputs"].get("external"):
                     secret = _route_secret(route, self.cfg)
+                    redactions.append(secret)
                     if not secret:
                         raise RuntimeError(
                             f"route credential unavailable: {route['auth_env']}"
@@ -351,8 +416,11 @@ class Worker:
                 )
                 self._harness_prefix = version_prefix
                 self._harness_env = process_environment(probe_runtime)
-                harness = self._harness(route)
-                prompt = self._context(claimed, prepared.workspace)
+                external = claimed["inputs"].get("external")
+                harness = (
+                    ExternalHarness(external) if external else self._harness(route)
+                )
+                prompt = self._context(claimed, prepared.workspace, restored)
                 (runtime / "prompt.txt").write_text(prompt)
                 extra = {
                     "role": role,
@@ -360,7 +428,9 @@ class Worker:
                     "runtime": str(runtime),
                     "env": env,
                     "prefix": prefix,
-                    "timeout_seconds": spec["timeout_seconds"],
+                    "timeout_seconds": max(
+                        1, min(spec["timeout_seconds"], int(remaining()))
+                    ),
                     "max_output_bytes": self.cfg.max_output_bytes,
                     "budget_cents": spec["budget_cents"],
                     "resume_session": _resume_session(resume_archive, resume),
@@ -372,13 +442,13 @@ class Worker:
                     "writable": snapshot["source"]["allowed_paths"],
                     "protected": snapshot["source"].get("protected_paths", []),
                 }
-                started = time.monotonic()
                 for event in harness.start(prompt, prepared.workspace, extra):
-                    if stopped():  # Also renews the lease at most every five seconds.
-                        cancelled = True
-                        harness.cancel()
-                    if time.monotonic() - started >= spec["timeout_seconds"]:
+                    if remaining() <= 0:
+                        # The attempt's own deadline, not an operator cancel.
                         timed_out = True
+                        harness.cancel()
+                    elif stopped():
+                        cancelled = True
                         harness.cancel()
                     if event.type != "heartbeat":
                         if event.type == "session":
@@ -391,7 +461,11 @@ class Worker:
                                 },
                             )
                         events.append(
-                            {"type": event.type, "text": event.text, "data": event.data}
+                            {
+                                "type": event.type,
+                                "text": redact(event.text, redactions),
+                                "data": event.data,
+                            }
                         )
                         if (
                             event.type
@@ -405,19 +479,32 @@ class Worker:
                             and isinstance(event.data.get("task_id"), str)
                             and hasattr(self.controller, "record_task_progress")
                         ):
-                            self.controller.record_task_progress(
-                                attempt_id,
-                                event.data["task_id"],
-                                event.type,
-                                event.data,
-                                self.worker_id,
-                                str(event.data.get("event_id") or new_id("evt")),
-                            )
+                            try:
+                                self.controller.record_task_progress(
+                                    attempt_id,
+                                    event.data["task_id"],
+                                    event.type,
+                                    event.data,
+                                    self.worker_id,
+                                    str(event.data.get("event_id") or new_id("evt")),
+                                )
+                            except Exception as exc:
+                                # One bad event from the agent is recorded and
+                                # skipped; it does not end the attempt.
+                                events.append(
+                                    {
+                                        "type": "task_event_rejected",
+                                        "text": str(exc)[:500],
+                                        "data": {"kind": event.type},
+                                    }
+                                )
                 answer = harness.wait()
-                output = answer.output
+                output = redact(answer.output, redactions)
                 ok = answer.ok
                 cost = answer.cost_cents
-                error = answer.error
+                error = (
+                    redact(answer.error, redactions) if answer.error else answer.error
+                )
                 if not ok:
                     result["failure_kind"] = "harness"
                 result["usage"] = answer.usage
@@ -501,6 +588,7 @@ class Worker:
                         snapshot["base"],
                         snapshot["source"]["allowed_paths"],
                         snapshot["source"].get("protected_paths", []),
+                        snapshot["source"].get("diff_limits"),
                     )
                     if result["candidate"]["scope_violations"]:
                         ok = False
@@ -509,7 +597,74 @@ class Worker:
                         )
             elif job["kind"] == "check":
                 ok = True
-                for cid in snapshot["source"]["checks"]:
+                result["stages"] = []
+                out_dir = runtime / "stage-out"
+                out_dir.mkdir(exist_ok=True)
+                pipeline = snapshot.get("pipeline") or {}
+                for stage_name in ("build", "test"):
+                    stage = pipeline.get("change", {}).get(stage_name)
+                    if not stage:
+                        continue
+                    if stage["not_applicable"]:
+                        result["stages"].append(
+                            {
+                                "stage": stage_name,
+                                "status": "not_applicable",
+                                "reason": stage["not_applicable"],
+                            }
+                        )
+                        continue
+                    for argv in stage["steps"]:
+                        left = remaining()
+                        if left <= 0:
+                            raise RunnerTimeout("check step ran out of time")
+                        began = time.monotonic()
+                        code, stdout, stderr = CommandRunner(
+                            prepared.workspace, self.cfg.max_output_bytes
+                        ).supervise(
+                            prefix + argv,
+                            b"",
+                            max(
+                                1,
+                                min(
+                                    spec["timeout_seconds"],
+                                    stage["timeout_seconds"],
+                                    int(left),
+                                ),
+                            ),
+                            prepared.workspace,
+                            {
+                                **env,
+                                "FACTORY_STAGE": stage_name,
+                                "FACTORY_KIND": "change",
+                                "FACTORY_COMMIT": candidate["commit"],
+                                "FACTORY_OUT": str(out_dir),
+                            },
+                            should_stop=stopped,
+                            on_start=on_start,
+                        )
+                        result["stages"].append(
+                            {
+                                "stage": stage_name,
+                                "status": "failed" if code else "passed",
+                                "argv": argv,
+                                "exit_code": code,
+                                "runner": stage["runner"],
+                                "seconds": round(time.monotonic() - began, 3),
+                                "candidate": candidate["commit"],
+                                "pipeline_digest": pipeline.get("digest"),
+                                "stdout": stdout.decode(errors="replace"),
+                                "stderr": stderr.decode(errors="replace"),
+                            }
+                        )
+                        if code:
+                            ok = False
+                            result["failure_kind"] = "pipeline-stage-failure"
+                            error = f"{stage_name} stage failed: {' '.join(argv)}"
+                            break
+                    if not ok:
+                        break
+                for cid in snapshot["source"]["checks"] if ok else []:
                     binding = snapshot["bindings"][cid]
                     for path, expected in binding["files"].items():
                         if path == binding["argv"][0] and cid in recipe.get(
@@ -532,12 +687,23 @@ class Worker:
                     ]
                     if cid in recipe.get("command_binaries", {}):
                         argv[0] = recipe["command_binaries"][cid]
+                    # All of a check's commands share the one attempt deadline.
+                    left = remaining()
+                    if left <= 0:
+                        raise RunnerTimeout("check step ran out of time")
                     code, stdout, stderr = CommandRunner(
                         prepared.workspace, self.cfg.max_output_bytes
                     ).supervise(
                         prefix + argv,
                         b"",
-                        min(spec["timeout_seconds"], binding["timeout_seconds"]),
+                        max(
+                            1,
+                            min(
+                                spec["timeout_seconds"],
+                                binding["timeout_seconds"],
+                                int(left),
+                            ),
+                        ),
                         prepared.workspace,
                         env,
                         should_stop=stopped,
@@ -557,14 +723,14 @@ class Worker:
                     if code:
                         ok = False
                 output = json.dumps(result["checks"], indent=2)
-                if not ok:
+                if not ok and "failure_kind" not in result:
                     error = "canonical verification failed"
                 # Check recipes may generate files, but may not change the candidate's tracked source.
                 if git(prepared.workspace, "diff", "HEAD", "--"):
                     ok = False
                     error = "verification command modified candidate source"
                     result["failure_kind"] = "integrity"
-                elif not ok:
+                elif not ok and "failure_kind" not in result:
                     result["failure_kind"] = "canonical-check-failure"
             else:
                 raise RuntimeError("unsupported bootstrap job")

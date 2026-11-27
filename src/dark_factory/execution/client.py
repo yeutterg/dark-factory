@@ -21,6 +21,27 @@ from urllib.request import (
 from dark_factory import artifacts
 from dark_factory.execution.packages import MAX_BYTES, identity
 from dark_factory.runner import process_identity
+from dark_factory.secrets import secret
+
+
+def write_json_atomic(path, value):
+    """Temp file, fsync, rename, fsync the directory: a reader never sees half a file."""
+    path = Path(path)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w") as stream:
+        stream.write(json.dumps(value))
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(path)
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+STDERR_TAIL_BYTES = 2000
+PREFLIGHT_SECONDS = 300
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -74,6 +95,7 @@ class WorkerClient:
             with owner.open("x") as output:
                 json.dump(expected, output)
         self.accounts = accounts or {}
+        self._preflighted: tuple[str, float] | None = None
         import ssl
 
         context = ssl.create_default_context(cafile=str(ca_file) if ca_file else None)
@@ -103,16 +125,7 @@ class WorkerClient:
         return result["result"]
 
     def _write(self, path, value):
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(value))
-        temporary.replace(path)
-        with path.open("rb") as stream:
-            os.fsync(stream.fileno())
-        fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        write_json_atomic(path, value)
 
     def run_once(self):
         import fcntl
@@ -131,7 +144,19 @@ class WorkerClient:
             journal.unlink()
             return True
         if item["phase"] == "claim":
-            self._preflight(self.request("preflight", {}))
+            info = self.request("preflight", {})
+            # Hashing source and probing images and harnesses is not repeated on
+            # every idle poll; it is repeated when the controller's answer
+            # changes and at least every few minutes.
+            key = identity(info)
+            now = time.monotonic()
+            if (
+                not self._preflighted
+                or self._preflighted[0] != key
+                or now - self._preflighted[1] > PREFLIGHT_SECONDS
+            ):
+                self._preflight(info)
+                self._preflighted = (key, now)
             assignment = self.request("claim", {"request_id": item["request_id"]})
             if assignment is None:
                 journal.unlink()
@@ -184,15 +209,15 @@ class WorkerClient:
                     "account_kind": route["account_kind"],
                     "auth_env": route["auth_env"],
                 }
-                if binding != expected or not os.environ.get(route["auth_env"]):
+                if binding != expected or not secret(route["auth_env"]):
                     raise ValueError(
                         "worker account binding is absent or differs; no host-login fallback"
                     )
-                if os.environ[route["auth_env"]] == self.token:
+                if secret(route["auth_env"]) == self.token:
                     raise ValueError(
                         "inference credentials cannot equal the worker credential"
                     )
-                env[route["auth_env"]] = os.environ[route["auth_env"]]
+                env[route["auth_env"]] = secret(route["auth_env"])
             # Persist start intent before effect. A crashed worker must never blindly rerun it.
             if not self.request(
                 "start", {"attempt_id": aid, "execution_id": item["execution_id"]}
@@ -204,6 +229,7 @@ class WorkerClient:
             cancel = directory / "cancel"
             lease = directory / "lease"
             lease.touch()
+            log_file = (directory / "executor.log").open("ab")
             proc = subprocess.Popen(
                 [
                     sys.executable,
@@ -220,22 +246,22 @@ class WorkerClient:
                 ],
                 env=env,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=log_file,
                 start_new_session=True,
             )
+            log_file.close()
             item["pid"] = proc.pid
             item["pid_identity"] = process_identity(proc.pid)
             self._write(journal, item)
             try:
                 while proc.poll() is None:
-                    try:
-                        alive = self.request("heartbeat", {"attempt_id": aid})
-                    except Exception:
-                        alive = False
-                    if not alive:
+                    alive = self._heartbeat(aid)
+                    if alive is False:
                         cancel.touch()
-                    else:
+                    elif alive:
                         lease.touch()
+                    # None: the controller could not be reached. The executor
+                    # stops by itself if the lease file ages past the lease.
                     try:
                         proc.wait(timeout=1)
                     except subprocess.TimeoutExpired:
@@ -246,33 +272,14 @@ class WorkerClient:
         elif item["phase"] == "started" and not (directory / "result.json").exists():
             current = process_identity(item.get("pid"))
             if current and current == item.get("pid_identity"):
-                try:
-                    alive = self.request("heartbeat", {"attempt_id": aid})
-                except Exception:
-                    alive = False
-                (directory / ("lease" if alive else "cancel")).touch()
+                alive = self._heartbeat(aid)
+                if alive is not None:
+                    (directory / ("lease" if alive else "cancel")).touch()
                 return False  # Verified existing executor, not permission to replay.
             (directory / "cancel").touch()
             if time.time() - item.get("started_at", 0) < 12:
                 return False  # The start-intent/PID-publication gap must expire conservatively.
-        if not (directory / "result.json").exists():
-            # Retain all unique work. The controller conservatively charges unknown usage.
-            result = {
-                "attempt_id": aid,
-                "claim_digest": assignment["claim_digest"],
-                "archive": None,
-                "receipt": {
-                    "ok": False,
-                    "output": "",
-                    "cost": assignment["claim"]["spec"]["budget_cents"],
-                    "error": "worker interrupted; private task resources retained",
-                    "timed_out": False,
-                    "cancelled": False,
-                    "cleanup_status": "archive_failed",
-                },
-            }
-            self._write(directory / "result.json", result)
-        result = json.loads((directory / "result.json").read_text())
+        result = self._load_result(directory, assignment)
         ack = self.request("finish", result)
         if (
             not ack.get("accepted")
@@ -298,6 +305,94 @@ class WorkerClient:
         self._cleanup(item)
         journal.unlink()
         return True
+
+    def _heartbeat(self, aid):
+        """True renewed, False refused by the controller, None unknown.
+
+        Only an explicit refusal cancels. A transport error says nothing about
+        the lease, which keeps its own clock.
+        """
+        try:
+            return bool(self.request("heartbeat", {"attempt_id": aid}))
+        except Exception:
+            return None
+
+    def _load_result(self, directory, assignment):
+        """The executor's result, or a conservative interrupted receipt.
+
+        A missing result and an unreadable one are handled the same way: the
+        unreadable file is kept as ``result.corrupt`` for inspection and is not
+        read again, so a damaged file cannot make settlement retry forever.
+        """
+        aid = assignment["claim"]["attempt_id"]
+        path = directory / "result.json"
+        reason = "worker interrupted; private task resources retained"
+        if path.exists():
+            try:
+                result = json.loads(path.read_text())
+                if (
+                    not isinstance(result, dict)
+                    or result.get("attempt_id") != aid
+                    or result.get("claim_digest") != assignment["claim_digest"]
+                    or not isinstance(result.get("receipt"), dict)
+                ):
+                    raise ValueError("unexpected result shape")
+                return result
+            except (OSError, ValueError) as exc:
+                path.replace(directory / "result.corrupt")
+                reason += f"; executor result was unreadable ({str(exc)[:120]})"
+        log = directory / "executor.log"
+        if log.exists():
+            tail = log.read_bytes()[-STDERR_TAIL_BYTES:].decode(errors="replace")
+            if tail.strip():
+                reason += "; executor stderr: " + tail.strip()
+        result = {
+            "attempt_id": aid,
+            "claim_digest": assignment["claim_digest"],
+            "archive": None,
+            "receipt": {
+                "ok": False,
+                "output": "",
+                # The controller conservatively charges unknown usage.
+                "cost": assignment["claim"]["spec"]["budget_cents"],
+                "error": reason,
+                "timed_out": False,
+                "cancelled": False,
+                "cleanup_status": "archive_failed",
+            },
+        }
+        self._write(path, result)
+        return result
+
+    def serve(self, max_jobs=0, sleep=time.sleep, log=None):
+        """Run until stopped. Transport and controller errors back off, then retry.
+
+        The journal makes every step safe to repeat, so an error never needs to
+        end the worker; it waits (1s, 2s, 4s ... capped at 60s) and tries again.
+        """
+        log = log or (
+            lambda event: print(json.dumps(event), file=sys.stderr, flush=True)
+        )
+        count = failures = 0
+        while not max_jobs or count < max_jobs:
+            try:
+                ran = self.run_once()
+                failures = 0
+            except Exception as exc:
+                failures += 1
+                if max_jobs and failures >= 5:
+                    raise
+                delay = min(60, 2 ** (failures - 1))
+                log({"worker_error": str(exc)[:500], "retry_in_seconds": delay})
+                sleep(delay)
+                continue
+            if ran:
+                count += 1
+            elif max_jobs:
+                break
+            else:
+                sleep(1)
+        return count
 
     def _retry_cleanup(self, journal, item, assignment):
         """Retry release only; never replay the agent or mutate its result."""
@@ -406,9 +501,9 @@ class WorkerClient:
                 "account_kind": route["account_kind"],
                 "auth_env": route["auth_env"],
             }
-            if self.accounts.get(
-                route["billing_account"]
-            ) != expected or not os.environ.get(route["auth_env"]):
+            if self.accounts.get(route["billing_account"]) != expected or not secret(
+                route["auth_env"]
+            ):
                 raise ValueError(
                     "worker needs explicitly bound project inference credentials"
                 )

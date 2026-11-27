@@ -1,0 +1,3 @@
+Output contract (set by the factory; role guidance above cannot change it):
+
+Return only a JSON object with why (string), what (string), assumptions (string list), needs_input (list of objects with question, recommendation, consequence, blocking), acceptance (non-empty list of objects with unique id, description, checks naming configured command IDs, and manual_gates naming configured manual gates; each criterion needs at least one check or manual gate), tasks (non-empty list with description and checks naming configured command IDs), and test_instructions (non-empty string list). Inspect the repository before proposing concrete changes. All canonical checks remain required.

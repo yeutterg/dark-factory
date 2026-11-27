@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 from test_continuation import ready
 from test_repair import install_failure
-from test_workflow import durable, setup
+from test_workflow import setup
 
 from dark_factory import artifacts
 from dark_factory.controller import Controller, ControllerError
@@ -18,39 +18,15 @@ from dark_factory.store import Store
 from dark_factory.worker import git
 
 
-@durable
-def test_claim_without_engine_checkpoint_resumes_once(tmp_path):
-    cfg, store, ctrl, wid, worker = setup(tmp_path, "pi-durable")
-    try:
-        claim = ctrl.claim_job(worker.worker_id, ["native", "fake"])
-        assert not (tmp_path / "workflow").exists()
-        assert worker.run_once()
-        assert len(store.query("SELECT * FROM attempts")) == 1
-        assert (
-            store.one("SELECT status FROM attempts WHERE id=?", (claim["attempt_id"],))[
-                0
-            ]
-            == "succeeded"
-        )
-        assert (
-            tmp_path / "workflow" / claim["attempt_id"] / "dispatch.sqlite"
-        ).exists()
-        assert worker.run_once()  # the next job, not the original assignment
-        assert len(store.query("SELECT * FROM attempts")) == 2
-    finally:
-        store.close()
-
-
-@durable
 @pytest.mark.parametrize(
     "guard", ["worker", "workspace", "pid", "lease", "pause", "policy"]
 )
-def test_missing_checkpoint_discovery_does_not_grant_dispatch_authority(
-    tmp_path, guard
-):
-    cfg, store, ctrl, wid, worker = setup(tmp_path, "pi-durable")
+def test_unstarted_claim_discovery_does_not_grant_dispatch_authority(tmp_path, guard):
+    cfg, store, ctrl, wid, worker = setup(tmp_path)
     try:
-        claim = ctrl.claim_job(worker.worker_id, ["native", "fake"])
+        claim = ctrl.claim_job(
+            worker.worker_id, ["native", "fake", "environment:local"]
+        )
         if guard == "worker":
             worker.worker_id = "different-worker"
         elif guard == "workspace":
@@ -76,7 +52,6 @@ def test_missing_checkpoint_discovery_does_not_grant_dispatch_authority(
                 worker.run_once()
         else:
             assert not worker.run_once()
-        assert not (tmp_path / "workflow").exists()
         assert len(store.query("SELECT * FROM attempts")) == 1
     finally:
         store.close()
@@ -285,7 +260,9 @@ def test_repair_requires_complete_typed_check_evidence(tmp_path, invalid):
 def test_retired_attempt_scrubs_only_declared_credentials(tmp_path, recovery):
     cfg, store, ctrl, wid, worker = setup(tmp_path)
     try:
-        claim = ctrl.claim_job(worker.worker_id, ["native", "fake"])
+        claim = ctrl.claim_job(
+            worker.worker_id, ["native", "fake", "environment:local"]
+        )
         inputs = claim["inputs"]
         inputs["route"]["harness"] = "codex"
         store.execute(

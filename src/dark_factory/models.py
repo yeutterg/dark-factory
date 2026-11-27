@@ -68,6 +68,16 @@ DISPATCHABLE_ROOT = frozenset(
 TERMINAL_ROOT = frozenset(
     {WorkStatus.ACCEPTED, WorkStatus.FAILED, WorkStatus.REJECTED, WorkStatus.CANCELLED}
 )
+# Job states from which a step can still do work.
+OPEN_JOB = frozenset(
+    {
+        JobStatus.BLOCKED,
+        JobStatus.READY,
+        JobStatus.LEASED,
+        JobStatus.RUNNING,
+        JobStatus.INTERRUPTED,
+    }
+)
 INACTIVE_REPAIR = frozenset({JobStatus.STANDBY, JobStatus.NOT_NEEDED})
 
 PRESENTATION_STAGES = ("Plan", "Build", "Check", "Review", "Done")

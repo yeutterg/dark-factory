@@ -136,7 +136,7 @@ def test_tls_peer_validation_and_project_worker_scope(tmp_path, monkeypatch):
         capture_output=True,
         timeout=15,
     )
-    server = serve(ctrl, "127.0.0.1", 0, cfg.worker_token, (str(cert), str(key)))
+    server = serve(ctrl, "127.0.0.1", 0, (str(cert), str(key)))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         url = f"https://127.0.0.1:{server.server_port}"
@@ -162,7 +162,7 @@ def test_tls_peer_validation_and_project_worker_scope(tmp_path, monkeypatch):
             wrong.request("preflight", {})
         assert caught.value.code == 401
         with pytest.raises(ControllerError):
-            serve(ctrl, "0.0.0.0", 0, cfg.worker_token)
+            serve(ctrl, "0.0.0.0", 0)
     finally:
         server.shutdown()
         server.server_close()
@@ -173,7 +173,7 @@ def test_transport_failure_retries_saved_result_without_rerunning_agent(
     tmp_path, monkeypatch
 ):
     cfg, store, ctrl, service, _ = prepared(tmp_path, monkeypatch)
-    server = serve(ctrl, "127.0.0.1", 0, cfg.worker_token)
+    server = serve(ctrl, "127.0.0.1", 0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     client = WorkerClient(
         f"http://127.0.0.1:{server.server_port}",

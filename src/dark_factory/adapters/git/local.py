@@ -9,6 +9,8 @@ import platform
 import subprocess
 from pathlib import Path
 
+from dark_factory.protected import protected_paths
+
 
 @functools.cache
 def git_binary() -> str:
@@ -98,7 +100,11 @@ def within(path: str, allowed: list[str]) -> bool:
 
 
 def capture(
-    workspace: Path, base: str, allowed: list[str], protected: list[str]
+    workspace: Path,
+    base: str,
+    allowed: list[str],
+    protected: list[str],
+    limits: dict | None = None,
 ) -> dict:
     # Capture all files, including ignored files: unknown generated output is not silently lost.
     git(workspace, "add", "--all", "--force", ".")
@@ -107,10 +113,22 @@ def capture(
     flags = [
         name
         for name in names
-        if not within(name, allowed)
-        or within(name, protected)
-        or within(name, [".github", ".gitmodules", ".pi", ".agents"])
+        if not within(name, allowed) or within(name, protected_paths(protected))
     ]
+    if limits:
+        # A diff beyond the approved size is a scope violation: no repair is offered.
+        if len(names) > limits["max_files"]:
+            flags.append(f"diff-size: {len(names)} files exceeds {limits['max_files']}")
+        changed = 0
+        for line in git(workspace, "diff", "--cached", "--numstat", base).splitlines():
+            added, removed, _ = (line.split("\t") + ["0", "0", ""])[:3]
+            changed += (int(added) if added.isdigit() else 0) + (
+                int(removed) if removed.isdigit() else 0
+            )
+        if changed > limits["max_changed_lines"]:
+            flags.append(
+                f"diff-size: {changed} changed lines exceeds {limits['max_changed_lines']}"
+            )
     # Symlinks are preserved in archives but cannot become accepted candidate input.
     for entry in git(workspace, "ls-files", "--stage").splitlines():
         if entry.startswith("120000 "):

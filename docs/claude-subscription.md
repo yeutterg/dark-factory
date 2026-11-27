@@ -16,19 +16,29 @@ Add a route like this to a profile with its own approved source, checks, budgets
 
 ```toml
 [execution]
-profile = "macos-sandbox"
-claude_binary = "/absolute/path/to/claude"
 max_seconds = 900
 
+# The environment the route runs in; pin the CLI path there.
+[environments.macos]
+kind = "macos-sandbox"
+harness_binaries = { claude-code = "/absolute/path/to/claude" }
+
+[role_routes]
+planner = "claude-planner"
+# critic, coder and reviewer name their own qualified routes.
+
 [routes.claude-planner]
+project_id = "REPLACE_WITH_PROJECT_ID"
+account_kind = "subscription"
+environment = "macos"
 harness = "claude-code"
-harness_version = "2.1.301 (Claude Code)"
+harness_version = "2.1.310 (Claude Code)"
 model = "REPLACE_WITH_PINNED_CLAUDE_MODEL_ID"
 effort = "xhigh"
 provider = "claude-subscription"
 endpoint = "https://api.anthropic.com"
 billing_account = "REPLACE_WITH_SUBSCRIPTION_ACCOUNT_REFERENCE"
-auth_env = "FACTORY_CLAUDE_OAUTH_TOKEN"
+auth_env = "REPLACE_WITH_PROJECT_ID_PREFIXED_CLAUDE_TOKEN"
 region = "UNKNOWN"
 geography_evidence = "REPLACE_WITH_VERIFIED_PROCESSING_POLICY"
 evidence_kind = "live"

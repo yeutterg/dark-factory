@@ -42,9 +42,17 @@ The live worker broker drops all capabilities except `SYS_ADMIN`, `NET_ADMIN`, `
 
 The live profile asserts that this operator-controlled execution host is in the US. The image installs a root-owned `/etc/codex/requirements.toml` requiring US data residency, which ordinary config and prompts cannot relax. Confirm the host and account policy before approving work. A passing preflight verifies bindings and credential presence, not token validity, subscription entitlement, model quality or a completed factory outcome.
 
+### Hardening options
+
+- **Resource limits.** Every service has `mem_limit`, `pids_limit` and `cpus`. The live overlay raises the worker to the limits its environment recipe declares. Inside the worker, the Bubblewrap driver also bounds the sandbox's process count, turns core dumps off and gives it a sized scratch `/tmp`.
+- **Credential files.** Any credential reference `NAME` can be supplied as `NAME_FILE`, the path of a mounted file (for example a Compose secret), so the value stays out of the service environment. The file must be an absolute path to a small regular file.
+- **Supervisor mount.** The live overlay mounts only the checkout's `.git` directory read-only. A revision is pinned and cloned from it; the working tree, `.env` and local profiles are never mounted.
+- **Image base.** Debian trixie, which ships Bubblewrap 0.12. The bookworm package (0.8.0) has an unfixed CVE.
+- **Non-root worker (opt-in).** `compose.live-hardened.yaml` runs the worker as uid 10001 with every capability dropped and a written seccomp profile instead of `seccomp=unconfined`. A spike on this image showed the factory's sandbox driver, and a Bubblewrap nested inside it, both work this way. It needs `systempaths=unconfined`, because the `/proc` mount is refused otherwise. It has not been qualified with a live Codex run, so it is not the default. Regenerate the profile with `scripts/make-seccomp-profile`; it is Docker's default profile plus the namespace and mount syscalls.
+
 ## Boundaries
 
-- The image is built from digest-pinned Python and Node base images. It builds the wheel from the checked-out source, installs the exact Pi Durable lock, checksum-pins GitHub CLI, and installs exact Codex, Pi and Claude Code versions during the image build.
+- The image is built from digest-pinned Python and Node base images. It builds the wheel from the checked-out source, checksum-pins GitHub CLI, and installs exact Codex, Pi and Claude Code versions during the image build.
 - `.env` is generated with mode `0600`, a unique Compose project/image name and independent random tokens, and is gitignored. This prevents volumes and containers from colliding when several project forks run on one machine. The public `.env.example` contains no usable credentials.
 - The server binds only inside its container. The client and fixture worker share the server container's loopback network, so no unauthenticated or plaintext controller port is published on the host.
 - Server and worker use separate named state volumes. The worker never opens the supervisor database. Compose injects only the operator token into the client and only the worker token into the worker; the client receives neither worker credentials nor state volumes.

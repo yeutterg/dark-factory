@@ -201,7 +201,10 @@ def test_stored_child_cannot_progress(controller, boundary):
         "UPDATE work_items SET parent_id='alt:root', status=? WHERE id=?", (status, wid)
     )
     if boundary == "dispatch":
-        assert controller.claim_job("worker", ["native", "fake"]) is None
+        assert (
+            controller.claim_job("worker", ["native", "fake", "environment:local"])
+            is None
+        )
         assert (
             controller.store.one("SELECT status FROM work_items WHERE id=?", (wid,))[0]
             == "failed"

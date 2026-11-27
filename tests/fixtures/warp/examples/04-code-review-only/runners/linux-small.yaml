@@ -1,0 +1,11 @@
+description: >-
+  This small runner supports code review. The agent reads code and writes
+  findings, so it doesn't need an image with a language toolchain.
+instanceShape:
+  vcpus: 2
+  memoryGb: 4
+platform:
+  os: linux
+  arch: x86_64
+  linux:
+    dockerImage: ubuntu:24.04

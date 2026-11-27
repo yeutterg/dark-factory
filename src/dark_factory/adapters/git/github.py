@@ -33,6 +33,70 @@ def api(path, method="GET", payload=None):
     return json.loads(out) if out.strip() else {}
 
 
+BRANCH = re.compile(r"dark-factory/[a-z0-9][a-z0-9._/-]{2,100}")
+
+
+def push_branch(op, repo, payload, result):
+    """Publish one exact commit as a new branch. Never overwrites, never forces.
+
+    Only branches under ``dark-factory/`` are accepted, so the default branch and
+    anyone's work are out of reach. An existing branch at the same commit counts
+    as already done; at another commit it is refused.
+    """
+    branch, expected = payload.get("branch"), payload.get("head_sha")
+    if not isinstance(branch, str) or not BRANCH.fullmatch(branch) or ".." in branch:
+        raise ContractError("branch must be a new dark-factory/ branch")
+    if not isinstance(expected, str) or not re.fullmatch("[0-9a-f]{40}", expected):
+        raise ContractError("exact head SHA required")
+    ref = f"repos/{repo}/git/ref/heads/{quote(branch, safe='/')}"
+    try:
+        existing = api(ref).get("object", {}).get("sha")
+    except ContractError:
+        existing = None
+    if existing:
+        if existing != expected:
+            raise ContractError(
+                "branch exists at a different commit; refusing to overwrite"
+            )
+        result["evidence"] = {"observed": True, "branch": branch, "head_sha": expected}
+        return
+    if op == "reconcile_push_branch":
+        result["evidence"] = {
+            "observed": False,
+            "safe_to_retry": True,
+            "head_sha": expected,
+        }
+        return
+    source = payload.get("source_path")
+    if not isinstance(source, str) or not Path(source).is_dir():
+        raise ContractError("source_path must be the candidate checkout")
+    import os
+
+    runner = CommandRunner(Path(source))
+    code, _, err = runner.supervise(
+        [
+            "git",
+            "-c",
+            "credential.helper=",
+            "-c",
+            "credential.helper=!gh auth git-credential",
+            "push",
+            f"https://github.com/{repo}.git",
+            f"{expected}:refs/heads/{branch}",
+        ],
+        b"",
+        120,
+        Path(source),
+        dict(os.environ),
+    )
+    if code:
+        raise ContractError(f"push failed: {err.decode(errors='replace')[-500:]}")
+    observed = api(ref).get("object", {}).get("sha")
+    if observed != expected:
+        raise ContractError("branch read-back did not match the pushed commit")
+    result["evidence"] = {"observed": True, "branch": branch, "head_sha": expected}
+
+
 def repository(value):
     if not isinstance(value, str) or not re.fullmatch(
         r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value
@@ -107,6 +171,105 @@ def handle(request):
             ],
             "required_check_policy": "unknown; GitHub branch/ruleset requirements must be checked by the human merger",
         }
+    elif op == "list_open_prs":
+        prs = api(f"repos/{repo}/pulls?state=open&per_page=100")
+        if len(prs) >= 100:
+            raise ContractError(
+                "more open pull requests than one page; gate incomplete"
+            )
+        result["evidence"] = {
+            "prs": [
+                {
+                    "number": pr["number"],
+                    "head_sha": pr["head"]["sha"],
+                    "head_ref": pr["head"]["ref"],
+                    "title": pr.get("title", ""),
+                    "url": pr["html_url"],
+                    "body": pr.get("body") or "",
+                }
+                for pr in prs
+            ]
+        }
+    elif op == "dispatch_workflow":
+        workflow, ref = payload.get("workflow"), payload.get("ref")
+        inputs = payload.get("inputs")
+        if not isinstance(workflow, str) or not re.fullmatch(
+            r"[A-Za-z0-9_.-]+\.ya?ml", workflow
+        ):
+            raise ContractError("workflow must be a workflow file name")
+        if not isinstance(ref, str) or not ref or ref.startswith("-"):
+            raise ContractError("ref required")
+        if not isinstance(inputs, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in inputs.items()
+        ):
+            raise ContractError("workflow inputs must be strings")
+        api(
+            f"repos/{repo}/actions/workflows/{workflow}/dispatches",
+            "POST",
+            {"ref": ref, "inputs": inputs},
+        )
+        result["evidence"] = {"observed": True, "request_id": inputs.get("request_id")}
+    elif op == "find_run":
+        marker = payload.get("request_id")
+        if not isinstance(marker, str) or not marker:
+            raise ContractError("request_id required")
+        runs = api(f"repos/{repo}/actions/runs?event=workflow_dispatch&per_page=50")
+        matches = [
+            r
+            for r in runs.get("workflow_runs", [])
+            if marker in (r.get("name") or r.get("display_title") or "")
+        ]
+        result["evidence"] = {"run_id": matches[0]["id"] if len(matches) == 1 else None}
+    elif op == "get_run":
+        run = api(f"repos/{repo}/actions/runs/{int(payload['run_id'])}")
+        result["evidence"] = {
+            "status": run["status"],
+            "conclusion": run.get("conclusion") or "",
+            "url": run["html_url"],
+            "head_sha": run["head_sha"],
+        }
+    elif op == "list_run_artifacts":
+        listing = api(f"repos/{repo}/actions/runs/{int(payload['run_id'])}/artifacts")
+        # Only artifacts GitHub attributes to this exact run, with the digest GitHub
+        # computed, are evidence; a forged upload elsewhere is never listed here.
+        result["evidence"] = {
+            "artifacts": [
+                {
+                    "name": a["name"],
+                    "size": a["size_in_bytes"],
+                    "digest": a.get("digest") or "",
+                    "id": a["id"],
+                }
+                for a in listing.get("artifacts", [])
+                if not a.get("expired")
+            ]
+        }
+    elif op == "set_status":
+        sha, state = payload.get("sha"), payload.get("state")
+        context = payload.get("context")
+        if not isinstance(sha, str) or not re.fullmatch("[0-9a-f]{40}", sha):
+            raise ContractError("exact commit SHA required")
+        if state not in {"success", "pending", "failure", "error"}:
+            raise ContractError("invalid status state")
+        if not isinstance(context, str) or not context.startswith("dark-factory/"):
+            raise ContractError("status context must start with dark-factory/")
+        api(
+            f"repos/{repo}/statuses/{sha}",
+            "POST",
+            {
+                "state": state,
+                "context": context,
+                "description": str(payload.get("description", ""))[:140],
+                **(
+                    {"target_url": payload["target_url"]}
+                    if isinstance(payload.get("target_url"), str)
+                    else {}
+                ),
+            },
+        )
+        result["evidence"] = {"observed": True, "sha": sha, "state": state}
+    elif op in {"push_branch", "reconcile_push_branch"}:
+        push_branch(op, repo, payload, result)
     elif op in {"create_pr", "reconcile_create_pr"}:
         head = payload.get("head")
         base = payload.get("base")
