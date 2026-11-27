@@ -257,26 +257,92 @@ def read_pipeline(
     return parse_pipeline(_git(repo, "show", f"{commit}:{path}")), commit
 
 
-def unprotected_steps(
-    pipeline_stages: dict[str, Stage], protected: list[str]
-) -> list[str]:
-    """Repository-relative step executables an agent could change.
+# Tools that run files from the repository without naming them on the command line.
+IMPLICIT_INPUTS: dict[str, tuple[str, ...]] = {
+    "make": ("Makefile", "makefile", "GNUmakefile"),
+    "pytest": ("conftest.py", "pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg"),
+    "tox": ("tox.ini", "pyproject.toml"),
+    "nox": ("noxfile.py",),
+    "npm": ("package.json",),
+    "yarn": ("package.json",),
+    "pnpm": ("package.json",),
+    "cargo": ("Cargo.toml", "build.rs"),
+    "go": ("go.mod",),
+    "mvn": ("pom.xml",),
+    "gradle": ("build.gradle", "build.gradle.kts", "settings.gradle"),
+    "just": ("justfile",),
+    "rake": ("Rakefile",),
+}
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+INLINE_FLAGS = {"-c", "-e", "-p", "--eval", "-m"}
+SCRIPT_SUFFIXES = (
+    ".py",
+    ".sh",
+    ".bash",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".rb",
+    ".pl",
+    ".ps1",
+)
+PATH_TOKEN = re.compile(
+    r"(?:\./|[\w.-]+/)[\w./-]+|[\w.-]+\.(?:py|sh|bash|js|mjs|cjs|ts|rb|pl|ps1)"
+)
 
-    A step that runs a file from the repository is only trustworthy if that file is
-    a protected path, so the change being judged cannot rewrite what judges it.
+
+def _covered(path: str, protected: list[str]) -> bool:
+    clean = PurePosixPath(path).as_posix().removeprefix("./")
+    return any(clean == p or clean.startswith(p.rstrip("/") + "/") for p in protected)
+
+
+def unprotected_steps(
+    pipeline_stages: dict[str, Stage],
+    protected: list[str],
+    tracked: set[str] | None = None,
+) -> list[str]:
+    """Repository files a step would run that an agent could change.
+
+    A stage is only trustworthy if everything it executes from the repository is a
+    protected path, so the change being judged cannot rewrite what judges it. That
+    covers the executable, every script-like argument, the configuration files of
+    tools that read them implicitly (a Makefile, conftest.py, package.json), and any
+    path named inside a shell command. `tracked` is the repository's file list at the
+    base commit, used to find implicit inputs that actually exist.
     """
-    problems = []
+    problems: set[str] = set()
+
+    def need(path: str) -> None:
+        if not _covered(path, protected):
+            problems.add(PurePosixPath(path).as_posix().removeprefix("./"))
+
     for stage in pipeline_stages.values():
         for argv in stage.steps:
-            head = argv[0]
-            if "/" not in head or head.startswith("/"):
-                continue  # a command found on PATH, or an absolute system path
-            clean = PurePosixPath(head).as_posix().removeprefix("./")
-            if not any(
-                clean == p or clean.startswith(p.rstrip("/") + "/") for p in protected
-            ):
-                problems.append(clean)
-    return sorted(set(problems))
+            head = PurePosixPath(argv[0]).name
+            if "/" in argv[0] and not argv[0].startswith("/"):
+                need(argv[0])
+            if head in SHELLS and "-c" in argv:
+                for token in PATH_TOKEN.findall(argv[argv.index("-c") + 1]):
+                    if not token.startswith("/"):
+                        need(token)
+            for before, element in zip(argv, argv[1:], strict=False):
+                if before in INLINE_FLAGS:
+                    continue  # inline code or a module name, not a file; the shell case is scanned above
+                if element.startswith(("-", "/")) or "://" in element:
+                    continue
+                if "/" in element or element.endswith(SCRIPT_SUFFIXES):
+                    need(element)
+            tool = head
+            if head.startswith("python") and len(argv) > 2 and argv[1] == "-m":
+                tool = argv[2]
+            for name in IMPLICIT_INPUTS.get(tool, ()):
+                for path in sorted(tracked or ()):
+                    if path == name or (
+                        name == "conftest.py" and path.endswith("/conftest.py")
+                    ):
+                        need(path)
+    return sorted(problems)
 
 
 def dumps(pipeline: Pipeline) -> str:

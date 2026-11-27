@@ -70,7 +70,13 @@ class ImprovementMixin(ControllerCore):
         root = self.cfg.definition.get("root")
         checkout = Path(source["path"]).resolve()
         if root and Path(root).resolve().is_relative_to(checkout):
-            return [str(Path(root).resolve().relative_to(checkout)) or "."]
+            relative = Path(root).resolve().relative_to(checkout)
+            if str(relative) != ".":
+                return [str(relative)]
+            # The definition is the whole repository: only its prompts and skills.
+            narrow = [d for d in ("agents", "skills") if (Path(root) / d).is_dir()]
+            if narrow:
+                return narrow
         return ["src/dark_factory/agents/prompts", "src/dark_factory/agents/skills"]
 
     # ---- signals -------------------------------------------------------------
@@ -200,7 +206,17 @@ class ImprovementMixin(ControllerCore):
                 "improvement.created",
                 {"root": wid, "signal": signal, "evidence_roots": len(evidence)},
             )
-        self.start_planning(wid, actor)
+        try:
+            self.start_planning(wid, actor)
+        except Exception as exc:
+            # A root that cannot even be planned must not hold the only slot forever.
+            self.store.execute(
+                "UPDATE work_items SET status='failed' WHERE id=?", (wid,)
+            )
+            self.store.audit(
+                actor, "improvement.error", {"root": wid, "error": str(exc)[:300]}
+            )
+            return None
         return wid
 
     def _advance_improvement(self, root):

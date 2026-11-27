@@ -190,6 +190,7 @@ class FactoryConfig:
         return {
             "enabled": table.get("enabled", False),
             "repositories": list(table.get("repositories", [])),
+            "interval_seconds": table.get("interval_seconds", 60),
         }
 
     @property
@@ -1078,7 +1079,8 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     gate = raw.get("gate", {})
     if not isinstance(gate, dict):
         raise ConfigError("gate must be a table")
-    _fields(gate, {"enabled", "repositories"}, "gate")
+    _fields(gate, {"enabled", "repositories", "interval_seconds"}, "gate")
+    _integer(gate, "interval_seconds", 60, 10)
     if "enabled" in gate:
         _require(gate, "enabled", bool)
     for name in gate.get("repositories", []):

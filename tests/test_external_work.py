@@ -180,3 +180,37 @@ def test_a_contributor_credential_runs_work_commands_and_nothing_else(
         server.shutdown()
         server.server_close()
         store.close()
+
+
+def test_a_contributor_cannot_take_over_a_root_it_did_not_start(tmp_path):
+    cfg, store, ctrl = build(tmp_path)
+    try:
+        # An operator started this root and a person rejected its plan.
+        wid = ctrl.intake_issues(
+            [
+                {
+                    "repo": cfg.repositories[0],
+                    "number": 7,
+                    "title": "Make it ready",
+                    "body": "",
+                }
+            ]
+        )[0]
+        with pytest.raises(ControllerError, match="did not start for you"):
+            ctrl.work_start(
+                cfg.repositories[0], 7, "contributor:agent-1", "Make it ready"
+            )
+        assert ctrl._external_row(wid) is None
+    finally:
+        store.close()
+
+
+def test_status_is_visible_only_to_the_contributor_who_owns_the_work(tmp_path):
+    cfg, store, ctrl = build(tmp_path)
+    try:
+        wid = start(ctrl, cfg, "contributor:agent-1")
+        assert ctrl.work_status(wid, "contributor:agent-1")["work_item_id"] == wid
+        with pytest.raises(ControllerError, match="another contributor"):
+            ctrl.work_status(wid, "contributor:agent-2")
+    finally:
+        store.close()

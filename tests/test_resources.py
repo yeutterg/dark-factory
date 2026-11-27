@@ -136,6 +136,11 @@ def test_a_killed_build_leaves_nothing_after_restart_sweep(tmp_path):
         "UPDATE attempts SET ended_at='2020-01-01T00:00:00+00:00' WHERE id=?",
         (claimed["attempt_id"],),
     )
+    # The root could still be resumed or inspected: unarchived work is the only copy.
+    ctrl.sweep_resources()
+    assert workspace.exists(), "unarchived work of a live root must survive any age"
+    # Once the root is finished, nothing needs it any more.
+    store.execute("UPDATE work_items SET status='cancelled' WHERE id=?", (wid,))
     ctrl.sweep_resources()
     assert not workspace.exists()
 

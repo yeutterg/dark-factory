@@ -13,6 +13,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -22,7 +23,7 @@ from dark_factory.adapters.git.local import clone, git
 from dark_factory.control.base import ControllerCore, ControllerError
 from dark_factory.pipeline import Pipeline, PipelineError, read_pipeline
 from dark_factory.runner import CommandRunner
-from dark_factory.runners import HostedRunner, RunnerError
+from dark_factory.runners import HostedRunner, RunnerError, check_grants
 from dark_factory.secrets import secret
 from dark_factory.store import new_id, now_iso
 
@@ -37,8 +38,34 @@ def package_digest(artifacts: list[dict]) -> str:
     return hashlib.sha256(json.dumps(listing).encode()).hexdigest()
 
 
+def tree_digest(directory: Path) -> str:
+    """The package digest recomputed from the files on disk."""
+    found = [
+        {
+            "name": path.relative_to(directory).as_posix(),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+        for path in sorted(directory.rglob("*"))
+        if path.is_file() and not path.is_symlink()
+    ]
+    return package_digest(found)
+
+
 class ReleaseMixin(ControllerCore):
     _release_threads: dict[str, threading.Thread] = {}
+    _release_locks: dict[str, threading.RLock] = {}
+
+    def _lock(self, rid):
+        return self._release_locks.setdefault(rid, threading.RLock())
+
+    def _verify_package(self, release):
+        """What is deployed is what was approved: re-hash the stored package first."""
+        directory = self._artifact_dir(release["id"])
+        if release["package_digest"] and directory.is_dir():
+            if tree_digest(directory) != release["package_digest"]:
+                raise ControllerError(
+                    "the stored package no longer matches its approved digest"
+                )
 
     # ---- records -----------------------------------------------------------------
 
@@ -181,15 +208,37 @@ class ReleaseMixin(ControllerCore):
 
     def release_run_stage(self, rid, actor="controller"):
         """Run the next automatic stage to completion. Returns the stage run, or None."""
+        lock = self._lock(rid)
+        if not lock.acquire(blocking=False):
+            return None  # another thread is already running a stage of this release
+        try:
+            return self._run_next_stage(rid, actor)
+        finally:
+            lock.release()
+
+    def _run_next_stage(self, rid, actor):
         release = self._release(rid)
         stage_name = self._next_automatic(release)
         if stage_name is None:
             return None
         if stage_name == "close":
             return self._close(release)
+        if stage_name in AFTER_PACKAGE_APPROVAL:
+            self._verify_package(release)
         pipeline = self._pipeline_of(release)
         stage = pipeline.releases[release["kind"]].stages[stage_name]
         if not stage.applicable:
+            if stage_name == "package":
+                # Nothing is built, so the decision is bound to the exact commit.
+                self.store.execute(
+                    "UPDATE releases SET package_digest=? WHERE id=?",
+                    (
+                        hashlib.sha256(
+                            f"commit:{release['commit_sha']}".encode()
+                        ).hexdigest(),
+                        rid,
+                    ),
+                )
             self._set_stage(
                 rid,
                 stage_name,
@@ -284,6 +333,16 @@ class ReleaseMixin(ControllerCore):
         if runner_cfg["kind"] != "local":
             return self._execute_hosted(release, stage_name, stage, runner_cfg)
         rid = release["id"]
+        try:
+            check_grants({stage_name: stage}, self.cfg.runners, "release")
+        except RunnerError as exc:
+            raise ControllerError(str(exc)) from exc
+        values = {}
+        for name in stage.secrets:
+            key = name.upper().replace("-", "_")
+            values[key] = secret(SECRET_PREFIX + key)
+            if not values[key]:
+                raise ControllerError(f"secret {name} is not provided to the factory")
         base = self.cfg.state_dir / "releases" / rid / stage_name
         shutil.rmtree(base, ignore_errors=True)
         checkout, out = base / "checkout", base / "out"
@@ -301,12 +360,12 @@ class ReleaseMixin(ControllerCore):
             "FACTORY_COMMIT": release["commit_sha"],
             "FACTORY_OUT": str(out),
             # Only the secrets this stage asked for and the profile granted.
-            **{
-                name.upper().replace("-", "_"): secret(
-                    SECRET_PREFIX + name.upper().replace("-", "_")
-                )
-                for name in stage.secrets
-            },
+            **values,
+            **(
+                {"FACTORY_PACKAGE": str(self._artifact_dir(rid))}
+                if self._artifact_dir(rid).is_dir()
+                else {}
+            ),
         }
         (base / "home").mkdir()
         steps = []
@@ -378,7 +437,13 @@ class ReleaseMixin(ControllerCore):
             release["repo"],
             runner_cfg,
             f"{release['id']}-{stage_name}",
-        ).run(stage, "release", release["commit_sha"], stage.timeout_seconds)
+        ).run(
+            stage,
+            "release",
+            release["commit_sha"],
+            stage.timeout_seconds,
+            branch=release["branch"],
+        )
         evidence = {
             "ok": result.ok,
             "runner": runner_cfg["kind"],
@@ -394,7 +459,12 @@ class ReleaseMixin(ControllerCore):
                 }
                 for a in result.artifacts
             ]
-            if not found:
+            if any(not re.fullmatch("[0-9a-f]{64}", a["sha256"]) for a in found):
+                evidence["ok"] = False
+                evidence["error"] = (
+                    "the code host did not report a digest for every artifact"
+                )
+            elif not found:
                 evidence["ok"] = False
                 evidence["error"] = "the hosted package stage produced no artifacts"
             else:
@@ -446,7 +516,19 @@ class ReleaseMixin(ControllerCore):
         return self.release_status(rid)
 
     def _run_promote(self, rid):
+        with self._lock(rid):
+            return self._promote_locked(rid)
+
+    def _promote_locked(self, rid):
         release = self._release(rid)
+        try:
+            self._verify_package(release)
+        except ControllerError as exc:
+            self.store.execute(
+                "UPDATE releases SET status='failed',reason=? WHERE id=?",
+                (str(exc), rid),
+            )
+            return self.release_status(rid)
         stage = self._pipeline_of(release).releases[release["kind"]].stages["promote"]
         if not stage.applicable:
             self._set_stage(
@@ -541,6 +623,7 @@ class ReleaseMixin(ControllerCore):
         )
         if not previous or not self._artifact_dir(previous["id"]).is_dir():
             raise ControllerError("no earlier kept package to roll back to")
+        self._verify_package(previous)
         new = new_id("rel")
         self.store.execute(
             "INSERT INTO releases(id,repo,kind,branch,commit_sha,status,pipeline_json,roots_json,"
@@ -618,9 +701,64 @@ class ReleaseMixin(ControllerCore):
             "awaiting_package_approval": "A person approves the exact package digest: release-approve <id> package",
             "awaiting_promotion_approval": "A person approves promotion: release-approve <id> promote",
             "verifying": "A person confirms the manual verification items: release-confirm <id> --item ...",
-            "failed": "Inspect the failed stage's evidence; start a new release or retry with release-run",
+            "failed": "Inspect the failed stage's evidence, then a person retries (release-retry) or cancels (release-cancel)",
         }
         return text.get(release["status"], "The factory runs the next stage.")
+
+    def release_retry(self, rid, actor):
+        """A person retries a failed release from the stage that failed."""
+        self._require_human(actor, {"snapshot_json": json.dumps({"simulation": False})})
+        release = self._release(rid)
+        if release["status"] != "failed":
+            raise ControllerError(f"release is {release['status']}, not failed")
+        failed = self.store.one(
+            "SELECT stage FROM release_stages WHERE release_id=? AND status='failed' "
+            "ORDER BY rowid DESC LIMIT 1",
+            (rid,),
+        )
+        if failed is None:
+            raise ControllerError("no failed stage to retry")
+        stage = failed["stage"]
+        order = ("build", "test", "package", "stage", "verify", "promote", "close")
+        for later in order[order.index(stage) :]:
+            self.store.execute(
+                "DELETE FROM release_stages WHERE release_id=? AND stage=?",
+                (rid, later),
+            )
+        if stage in AUTOMATIC_FIRST:
+            status = "assembled"
+            self.store.execute(
+                "UPDATE releases SET package_digest=NULL WHERE id=?", (rid,)
+            )
+            self.store.execute(
+                "DELETE FROM release_approvals WHERE release_id=?", (rid,)
+            )
+        elif stage in AFTER_PACKAGE_APPROVAL:
+            status = "package_approved"
+        else:
+            status = "awaiting_promotion_approval"  # promotion needs a fresh decision
+            self.store.execute(
+                "DELETE FROM release_approvals WHERE release_id=? AND gate='promote'",
+                (rid,),
+            )
+        self.store.execute(
+            "UPDATE releases SET status=?,reason='' WHERE id=?", (status, rid)
+        )
+        self.store.audit(actor, "release.retry", {"release": rid, "stage": stage})
+        return self.release_status(rid)
+
+    def release_cancel(self, rid, actor):
+        self._require_human(actor, {"snapshot_json": json.dumps({"simulation": False})})
+        release = self._release(rid)
+        if release["status"] in {"released", "cancelled"}:
+            raise ControllerError(f"release is already {release['status']}")
+        self.store.execute(
+            "UPDATE releases SET status='cancelled',reason='cancelled by a person' WHERE id=?",
+            (rid,),
+        )
+        shutil.rmtree(self._artifact_dir(rid), ignore_errors=True)
+        self.store.audit(actor, "release.cancel", {"release": rid})
+        return self.release_status(rid)
 
     def release_list(self):
         return [
@@ -656,6 +794,17 @@ class ReleaseMixin(ControllerCore):
 
     def recover_releases(self):
         """After a restart no stage thread is alive: running stages did not finish."""
+        for stuck in self.store.query(
+            "SELECT id FROM releases WHERE status='promoting'"
+        ):
+            promote = self._stage_row(stuck["id"], "promote")
+            if (promote is None or promote["status"] != "passed") and not (
+                self._release_threads.get(stuck["id"]) or threading.Thread()
+            ).is_alive():
+                self.store.execute(
+                    "UPDATE releases SET status='failed',reason=? WHERE id=?",
+                    ("promote was interrupted by a restart", stuck["id"]),
+                )
         for row in self.store.query(
             "SELECT release_id,stage FROM release_stages WHERE status='running'"
         ):

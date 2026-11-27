@@ -240,3 +240,39 @@ def test_target_cannot_be_the_running_installation_or_hold_the_state_dir(tmp_pat
         validate_raw(raw, path, "digest")
     raw["project"]["state_dir"] = str(tmp_path / "elsewhere")
     validate_raw(raw, path, "digest")
+
+
+def test_a_root_that_cannot_be_planned_does_not_hold_the_only_slot(
+    tmp_path, monkeypatch
+):
+    cfg, store, ctrl = build(tmp_path)
+    try:
+        seed_rejections(store)
+        monkeypatch.setattr(
+            type(ctrl),
+            "start_planning",
+            lambda self, *a, **k: (_ for _ in ()).throw(ValueError("source error")),
+        )
+        assert ctrl.improvement_tick()["created"] is None
+        root = store.one(
+            "SELECT status FROM work_items WHERE origin LIKE 'improvement:%'"
+        )
+        assert root["status"] == "failed"
+        assert store.one("SELECT 1 FROM audit WHERE action='improvement.error'")
+        assert not ctrl._open_roots()  # the slot is free again
+    finally:
+        store.close()
+
+
+def test_a_definition_at_the_repository_root_does_not_widen_the_scope(tmp_path):
+    cfg, store, ctrl = build(tmp_path)
+    try:
+        checkout = tmp_path / "checkout"
+        (checkout / "agents").mkdir(parents=True)
+        (checkout / "src").mkdir()
+        cfg.raw["improvement"] = {}
+        cfg.definition = {"root": str(checkout)}
+        paths = ctrl._default_improvement_paths({"path": str(checkout)})
+        assert paths == ["agents"] and "." not in paths
+    finally:
+        store.close()

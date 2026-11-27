@@ -186,6 +186,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_rb.add_argument("release_id")
     p_rb.add_argument("--actor", required=True)
     for name, text in (
+        ("release-retry", "A person retries a failed release from the failed stage"),
+        ("release-cancel", "A person cancels a release"),
+    ):
+        p_h = sub.add_parser(name, help=text)
+        p_h.add_argument("release_id")
+        p_h.add_argument("--actor", required=True)
+    for name, text in (
         ("release-run", "Run the next automatic stage of a release"),
         ("release-status", "Show a release's stages, approvals and next step"),
     ):

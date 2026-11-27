@@ -140,3 +140,36 @@ def test_validate_and_init_commands(repo, tmp_path, capsys):
     assert init_repository(fresh) == []  # never overwrites
     parse_pipeline((fresh / PIPELINE_PATH).read_text())
     assert "dark-factory work-start" in (fresh / "AGENTS.md").read_text()
+
+
+def stages(*argvs):
+    from dark_factory.pipeline import Stage
+
+    return {"x": Stage(name="x", steps=[list(a) for a in argvs])}
+
+
+def test_every_file_a_step_runs_must_be_protected_not_just_the_executable():
+    protected = ["factory"]
+    # An interpreter running an unprotected script is as bad as an unprotected executable.
+    assert unprotected_steps(stages(["python", "scripts/check.py"]), protected) == [
+        "scripts/check.py"
+    ]
+    assert unprotected_steps(stages(["node", "run.js"]), protected) == ["run.js"]
+    assert unprotected_steps(stages(["sh", "-c", "./x && echo ok"]), protected) == ["x"]
+    # Tools that read project files implicitly: only files that exist matter.
+    tracked = {"Makefile", "src/a.py", "tests/conftest.py"}
+    assert unprotected_steps(stages(["make"]), protected, tracked) == ["Makefile"]
+    assert unprotected_steps(
+        stages(["python", "-m", "pytest"]), protected, tracked
+    ) == ["tests/conftest.py"]
+    assert unprotected_steps(stages(["pytest"]), protected, {"src/a.py"}) == []
+    # Once protected they are fine.
+    assert unprotected_steps(stages(["make"]), ["Makefile"], tracked) == []
+    assert (
+        unprotected_steps(stages(["python", "-m", "pytest"]), ["tests"], tracked) == []
+    )
+    # Plain commands and flags are not paths.
+    assert (
+        unprotected_steps(stages(["git", "diff", "--check"], ["echo", "hi"]), protected)
+        == []
+    )

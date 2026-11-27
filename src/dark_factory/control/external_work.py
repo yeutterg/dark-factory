@@ -62,6 +62,7 @@ class ExternalWorkMixin(ControllerCore):
     # ---- the contributor's commands ----------------------------------------------
 
     def work_start(self, repo, number, actor, title="", body=""):
+        known = {r["id"] for r in self.store.query("SELECT id FROM work_items")}
         wid = self.intake_issues(
             [
                 {
@@ -74,6 +75,13 @@ class ExternalWorkMixin(ControllerCore):
             ],
             actor,
         )[0]
+        if wid in known and not self._external_row(wid):
+            # A contributor may not take over work an operator started or a person
+            # already decided on; only a root it created is its own.
+            raise ControllerError(
+                "that issue already has a root the factory did not start for you; "
+                "ask an operator"
+            )
         self.store.execute(
             "INSERT OR IGNORE INTO external_work(root_id,actor,created_at) VALUES (?,?,?)",
             (wid, actor, now_iso()),
@@ -146,6 +154,8 @@ class ExternalWorkMixin(ControllerCore):
         if not root:
             raise ControllerError("work item not found")
         ext = self._external_row(wid)
+        if actor is not None and ext and ext["actor"] != actor:
+            raise ControllerError("this work belongs to another contributor")
         view = self.continuation(wid)
         candidate = json.loads(root["candidate_commits"] or "{}").get(root["repo"], {})
         return {
