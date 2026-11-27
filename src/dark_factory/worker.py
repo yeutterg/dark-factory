@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -177,6 +178,7 @@ class Worker:
                         == common["candidate"]
                     ):
                         common["check_evidence"].append(json.loads(att["result_json"]))
+            common["review_rubrics"] = claimed["snapshot"].get("rubrics", [])
         # Preserve repository instructions as labeled source material; never merge
         # project-local executable extensions or settings into the harness environment.
         instructions = {}
@@ -645,7 +647,41 @@ class Worker:
                             }
                         )
                         continue
+                    if stage.get("network") and not claimed["inputs"].get(
+                        "runner_policy", {}
+                    ).get("allow_network", False):
+                        raise RuntimeError(
+                            f"{stage_name} requests network the runner does not grant"
+                        )
+                    stage_prefix = prefix
+                    if live:
+                        stage_prefix = self.env.prefix(
+                            prepared,
+                            runtime / f"{stage_name}-sandbox",
+                            network=bool(stage.get("network")),
+                            writable=["."],
+                            protected=snapshot["source"].get("protected_paths", []),
+                        )
+                    cache_root = Path(
+                        os.environ.get(
+                            "DARK_FACTORY_CACHE_ROOT",
+                            str(self.cfg.state_dir / "caches"),
+                        )
+                    )
+                    cache_env = {}
+                    for cache in stage.get("caches", []):
+                        cache_path = (
+                            cache_root
+                            / claimed["work_item"]["repo"].replace("/", "__")
+                            / cache
+                        )
+                        cache_path.mkdir(parents=True, exist_ok=True)
+                        cache_env[
+                            "FACTORY_CACHE_" + cache.upper().replace("-", "_")
+                        ] = str(cache_path)
                     for argv in stage["steps"]:
+                        metrics_path = out_dir / "metrics.json"
+                        metrics_path.unlink(missing_ok=True)
                         left = remaining()
                         if left <= 0:
                             raise RunnerTimeout("check step ran out of time")
@@ -653,7 +689,7 @@ class Worker:
                         code, stdout, stderr = CommandRunner(
                             prepared.workspace, self.cfg.max_output_bytes
                         ).supervise(
-                            prefix + argv,
+                            stage_prefix + argv,
                             b"",
                             max(
                                 1,
@@ -670,6 +706,7 @@ class Worker:
                                 "FACTORY_KIND": "change",
                                 "FACTORY_COMMIT": candidate["commit"],
                                 "FACTORY_OUT": str(out_dir),
+                                **cache_env,
                             },
                             should_stop=stopped,
                             on_start=on_start,
@@ -686,6 +723,11 @@ class Worker:
                                 "pipeline_digest": pipeline.get("digest"),
                                 "stdout": stdout.decode(errors="replace"),
                                 "stderr": stderr.decode(errors="replace"),
+                                "metrics": (
+                                    json.loads(metrics_path.read_text())
+                                    if metrics_path.is_file()
+                                    else {}
+                                ),
                             }
                         )
                         if code:

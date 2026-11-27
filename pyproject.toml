@@ -10,10 +10,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Greg Yeutter" }]
 license = "MIT"
-dependencies = ["PyYAML>=6.0,<7", "textual>=8.2,<9"]
+dependencies = ["PyYAML>=6.0,<7"]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.1", "pytest-xdist==3.8.0", "ruff==0.17.5", "mypy==2.4.1", "jsonschema>=4.23"]
+tui = ["textual>=8.2,<9"]
+dev = ["textual>=8.2,<9", "pytest>=9.1", "pytest-xdist==3.8.0", "ruff==0.17.5", "mypy==2.4.1", "jsonschema>=4.23"]
 
 [project.scripts]
 dark-factory = "dark_factory.cli:main"
@@ -26,6 +27,9 @@ dark_factory = [
   "agents/prompts/*.md",
   "agents/skills/*/SKILL.md",
   "ui/*.tcss",
+  "ui/static/*.html",
+  "ui/static/*.css",
+  "ui/static/*.js",
 ]
 
 [tool.pytest.ini_options]

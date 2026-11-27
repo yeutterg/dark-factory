@@ -74,18 +74,27 @@ class Controller(
     ) -> None:
         self.cfg, self.store, self.packaged_prompts = cfg, store, packaged_prompts
         self._decision_scope = threading.local()
+        self._release_threads: dict[str, threading.Thread] = {}
+        self._release_locks: dict[str, threading.RLock] = {}
         identity = json.dumps(
-            {
-                "project_id": cfg.project_id,
-                "project_name": cfg.project_name,
-                "repositories": sorted(cfg.repositories),
-            },
+            {"project_id": cfg.project_id, "project_name": cfg.project_name},
             sort_keys=True,
         )
         with store.transaction():
             owner = store.one("SELECT value FROM meta WHERE key='project_identity'")
             if owner and owner["value"] != identity:
-                raise ControllerError("state belongs to a different project")
+                try:
+                    previous = json.loads(owner["value"])
+                except ValueError:
+                    previous = {}
+                if (
+                    previous.get("project_id") != cfg.project_id
+                    or previous.get("project_name") != cfg.project_name
+                ):
+                    raise ControllerError("state belongs to a different project")
+                store.execute(
+                    "UPDATE meta SET value=? WHERE key='project_identity'", (identity,)
+                )
             if not owner and store.one("SELECT id FROM work_items LIMIT 1"):
                 raise ControllerError(
                     "project-scoped deployment requires fresh state; legacy adoption is not implicit"
@@ -95,6 +104,9 @@ class Controller(
                 (identity,),
             )
         self.runner = CommandRunner(cfg.source_path.parent, cfg.max_output_bytes)
+        from dark_factory.mirrors import sync_all
+
+        sync_all(cfg)
         self._save_config()
         self.scrub_retired_credentials()
         self.recover_completeness()

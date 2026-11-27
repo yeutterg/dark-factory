@@ -303,7 +303,7 @@ class ImprovementMixin(ControllerCore):
             blockers.append("the improvement scope has no allowed paths")
         if snapshot["source"].get("diff_limits") is None:
             blockers.append("the diff limits are missing")
-        if snapshot["policy"] != self._policy():
+        if snapshot["policy"] != self._policy(root["repo"]):
             blockers.append("the profile changed since planning")
         return blockers
 

@@ -80,6 +80,7 @@ class ResourcesMixin(ControllerCore):
                 "checkpoints",
                 "artifacts",
                 "work-items",
+                "caches",
             )
         }
         roots = {}
@@ -162,6 +163,16 @@ class ResourcesMixin(ControllerCore):
             size = tree_size(path)
             shutil.rmtree(path, ignore_errors=True)
             freed[area] = freed.get(area, 0) + size
+
+        cache_budget = self.cfg.disk.get("max_cache_gb", 0) * 1024**3
+        cache_root = state / "caches"
+        if cache_budget and tree_size(cache_root) > cache_budget:
+            entries = sorted(
+                (path for path in cache_root.rglob("*") if path.is_dir()),
+                key=lambda path: path.stat().st_mtime,
+            )
+            while entries and tree_size(cache_root) > cache_budget:
+                remove("caches", entries.pop(0))
 
         for area in ATTEMPT_AREAS:
             base = state / area

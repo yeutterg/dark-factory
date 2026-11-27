@@ -26,6 +26,7 @@ DEFAULT_RUNNER = {
     "min_free_gb": 2,
     "workflow": "dark-factory-stage.yml",
     "runs_on": "",
+    "gh_environment": "",
     "allow_signing": False,
 }
 
@@ -39,6 +40,8 @@ def runner_table(raw: dict[str, Any]) -> dict[str, dict[str, Any]]:
     runners = {"local": dict(DEFAULT_RUNNER)}
     for name, item in raw.get("runners", {}).items():
         runners[name] = {**DEFAULT_RUNNER, **item}
+        if runners[name]["kind"] == "blacksmith" and not runners[name]["runs_on"]:
+            runners[name]["runs_on"] = "blacksmith-4vcpu-ubuntu-2404"
     return runners
 
 
@@ -58,6 +61,9 @@ def validate_runner_table(raw: dict[str, Any]) -> None:
         for key in ("labels", "secrets"):
             if not isinstance(item.get(key, []), list):
                 raise ConfigError(f"runner {name} {key} must be a list")
+        for key in ("workflow", "runs_on", "gh_environment"):
+            if key in item and not isinstance(item[key], str):
+                raise ConfigError(f"runner {name} {key} must be a string")
         merged = {**DEFAULT_RUNNER, **item}
         for secret_name in merged["secrets"]:
             if (
@@ -124,6 +130,7 @@ class HostedResult:
     url: str = ""
     conclusion: str = ""
     artifacts: list[dict[str, Any]] = field(default_factory=list)
+    run_id: int | None = None
 
 
 class HostedRunner:
@@ -154,6 +161,7 @@ class HostedRunner:
         sleep=time.sleep,
         poll_seconds: float = 10.0,
         branch: str = "main",
+        extra_inputs: dict[str, str] | None = None,
     ) -> HostedResult:
         self._call(
             "dispatch_workflow",
@@ -173,6 +181,8 @@ class HostedRunner:
                         if self.runner["kind"] == "blacksmith"
                         else "ubuntu-24.04"
                     ),
+                    "gh_environment": self.runner.get("gh_environment", ""),
+                    **(extra_inputs or {}),
                 },
             },
         )
@@ -195,7 +205,18 @@ class HostedRunner:
                         else []
                     )
                     return HostedResult(
-                        ok, state["url"], state["conclusion"], artifacts
+                        ok, state["url"], state["conclusion"], artifacts, run_id
                     )
             sleep(poll_seconds)
         raise RunnerError("hosted stage did not finish within its time limit")
+
+    def download(self, run_id, artifact, destination):
+        return self._call(
+            "download_run_artifact",
+            {
+                "run_id": run_id,
+                "artifact_id": artifact["id"],
+                "expected_digest": artifact["digest"],
+                "destination_path": str(destination),
+            },
+        )

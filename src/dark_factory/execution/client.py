@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -163,7 +164,10 @@ class WorkerClient:
             ):
                 self._preflight(info)
                 self._preflighted = (key, now)
-            assignment = self.request("claim", {"request_id": item["request_id"]})
+            assignment = self.request(
+                "claim",
+                {"request_id": item["request_id"], "capacity": self._capacity()},
+            )
             if assignment is None:
                 journal.unlink()
                 return False
@@ -207,6 +211,7 @@ class WorkerClient:
                 "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                 "LANG": "en_US.UTF-8",
                 "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+                "DARK_FACTORY_CACHE_ROOT": str(self.state / "caches"),
             }
             if route and route["harness"] != "fake":
                 binding = self.accounts.get(route["billing_account"])
@@ -318,6 +323,18 @@ class WorkerClient:
         self._cleanup(item)
         journal.unlink()
         return True
+
+    def _capacity(self):
+        """Report normalized host pressure; the controller applies its policy."""
+        try:
+            load = os.getloadavg()[0] / max(1, os.cpu_count() or 1)
+        except OSError:
+            load = 0.0
+        return {
+            "load": round(load, 4),
+            "free_gb": round(shutil.disk_usage(self.state).free / 1024**3, 3),
+            "slots": 1,
+        }
 
     def _upload_checkpoints(self, directory, aid):
         """Upload complete checkpoint archives; retry transport failures later."""

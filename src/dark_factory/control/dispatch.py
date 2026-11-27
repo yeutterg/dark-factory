@@ -96,6 +96,29 @@ class DispatchMixin(ControllerCore):
         )["n"]
         return capacity_blocker(self.cfg.runners["local"], running, self.cfg.state_dir)
 
+    def _worker_parallel_blocked(self, worker_id):
+        settings = self.cfg.workers.get(worker_id, {})
+        limit = settings.get("max_parallel", 1)
+        running = self.store.one(
+            f"SELECT COUNT(*) n FROM attempts WHERE worker_id=? AND status IN {sql_set(ACTIVE_ATTEMPT)}",
+            (worker_id,),
+        )["n"]
+        return running >= limit
+
+    def _exclusive_labels_blocked(self, worker_id, requested):
+        exclusive = set(self.cfg.workers.get(worker_id, {}).get("exclusive_labels", []))
+        held = exclusive & set(requested)
+        if not held:
+            return False
+        for attempt in self.store.query(
+            f"SELECT inputs_json FROM attempts WHERE status IN {sql_set(ACTIVE_ATTEMPT)}"
+        ):
+            if held & set(
+                json.loads(attempt["inputs_json"] or "{}").get("requested_labels", [])
+            ):
+                return True
+        return False
+
     def unresolved_action(self, wid):
         """The pending or ambiguous external action that holds this root, if any."""
         return self.store.one(
@@ -127,13 +150,17 @@ class DispatchMixin(ControllerCore):
         blocked: list[str] = []
         if not self.dispatch_allowed()[0]:
             return None, blocked
-        if self.store.one(
-            f"SELECT id FROM attempts WHERE status IN {sql_set(ACTIVE_ATTEMPT)}"
-        ):
+        if self._worker_parallel_blocked(worker_id):
             return None, blocked
         for root in self.store.query(
             f"SELECT * FROM work_items WHERE status IN {sql_set(DISPATCHABLE_ROOT)} ORDER BY created_at,rowid"
         ):
+            if self.store.one(
+                f"""SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id
+                WHERE j.work_item_id=? AND a.status IN {sql_set(ACTIVE_ATTEMPT)} LIMIT 1""",
+                (root["id"],),
+            ):
+                continue
             try:
                 self._require_root_scope(root)
             except ControllerError as exc:
@@ -169,7 +196,7 @@ class DispatchMixin(ControllerCore):
                             "approved inputs changed; dispatch requires a new decision"
                         )
                         break
-                elif snapshot["policy"] != self._policy():
+                elif snapshot["policy"] != self._policy(root["repo"]):
                     blocked.append("planning inputs changed; replan")
                     break
                 spec = json.loads(job["spec_json"])
@@ -196,7 +223,24 @@ class DispatchMixin(ControllerCore):
                         for label in stage["labels"]
                     }
                     required |= wanted
-                    if pipeline and self._local_runner_blocker(worker_id):
+                    if any(
+                        stage.get("environment") and stage["environment"] != environment
+                        for stage in pipeline.get("change", {}).values()
+                        if not stage.get("not_applicable")
+                    ):
+                        continue
+                    if any(
+                        stage.get("network")
+                        for stage in pipeline.get("change", {}).values()
+                    ) and not self.cfg.workers.get(worker_id, {}).get(
+                        "allow_network", False
+                    ):
+                        continue
+                    if (
+                        pipeline
+                        and worker_id not in self.cfg.workers
+                        and self._local_runner_blocker(worker_id)
+                    ):
                         continue
                 external = self._external_dispatch(root, job, spec)
                 if external == "wait":
@@ -205,6 +249,13 @@ class DispatchMixin(ControllerCore):
                     # The agent is outside; no harness binary is needed to run its work.
                     required.discard(route.harness if route else "")
                 if not required.issubset(set(capabilities)):
+                    continue
+                requested_labels = sorted(
+                    value.removeprefix("label:")
+                    for value in required
+                    if value.startswith("label:")
+                )
+                if self._exclusive_labels_blocked(worker_id, requested_labels):
                     continue
                 need = spec["budget_cents"]
                 if self._budget_blocker(root, job, spec, route):
@@ -225,6 +276,12 @@ class DispatchMixin(ControllerCore):
                     "project_id": self.cfg.project_id,
                     "lease_seconds": self.cfg.lease_seconds(worker_id),
                     "environment": self.cfg.environments.get(environment),
+                    "requested_labels": requested_labels,
+                    "runner_policy": {
+                        "allow_network": self.cfg.workers.get(worker_id, {}).get(
+                            "allow_network", worker_id not in self.cfg.workers
+                        )
+                    },
                 }
                 if external:
                     inputs["external"] = external
@@ -386,7 +443,7 @@ class DispatchMixin(ControllerCore):
                 datetime.fromisoformat(job["lease_until"]),
             ) <= datetime.now(UTC):
                 return None
-            if snapshot["policy"] != self._policy():
+            if snapshot["policy"] != self._policy(root["repo"]):
                 raise ControllerError("resumed dispatch policy changed; replan")
             if job["kind"] not in {"plan", "critique"} and not self._approval_current(
                 root

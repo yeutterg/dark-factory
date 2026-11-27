@@ -183,6 +183,15 @@ class ExternalMixin(ControllerCore):
                 json.dumps(evidence),
             ),
         )
+        if evidence.get("merged") and evidence.get("merge_commit_sha"):
+            self.store.execute(
+                "UPDATE work_items SET merge_commit_sha=?,merged_at=? WHERE id=?",
+                (
+                    evidence["merge_commit_sha"],
+                    evidence.get("merged_at") or now_iso(),
+                    wid,
+                ),
+            )
         external = self._external(wid, root)
         self.store.audit(
             actor,

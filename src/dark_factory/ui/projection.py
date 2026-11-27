@@ -14,6 +14,28 @@ TERMINAL = frozenset({"accepted", "cancelled", "failed", "rejected"})
 NEEDS_HUMAN = frozenset(
     {"selected", "awaiting_approval", "awaiting_review", "rejected", "interrupted"}
 )
+PIPELINE_STAGES = (
+    "intake",
+    "plan",
+    "critique",
+    "approve",
+    "implement",
+    "build",
+    "test",
+    "review",
+    "accept",
+)
+RELEASE_STAGES = (
+    "assemble",
+    "build",
+    "test",
+    "package",
+    "stage",
+    "verify",
+    "promote",
+    "rollback",
+    "close",
+)
 
 
 def _json(value: str | None, default: Any) -> Any:
@@ -299,6 +321,42 @@ def _work_item(
         FROM supervisor_calls WHERE root_id=?""",
         (row["id"],),
     )
+    by_kind = {step["kind"]: step for step in steps}
+    pipeline_stages = []
+    for name in PIPELINE_STAGES:
+        step = by_kind.get(name)
+        if name == "intake":
+            stage_status = "passed"
+        elif name == "approve":
+            stage_status = "passed" if row["approved_at"] else "awaiting_human"
+        elif name == "accept":
+            stage_status = "passed" if status == "accepted" else "pending"
+        elif step:
+            stage_status = step["status"]
+        else:
+            stage_status = "not_applicable"
+        pipeline_stages.append(
+            {
+                "name": name,
+                "status": stage_status,
+                "runner": step.get("route_id") if step else None,
+                "worker_id": step.get("worker_id") if step else None,
+                "started_at": step.get("started_at") if step else None,
+                "ended_at": step.get("ended_at") if step else None,
+                "seconds": None,
+                "cost_cents": step.get("spent_cents", 0) if step else 0,
+                "summary": step.get("error") if step else "",
+                "blocking_reason": (
+                    next_action.get("reason", "")
+                    if stage_status in {"blocked", "awaiting_human", "failed"}
+                    else ""
+                ),
+            }
+        )
+    external = controller.store.one(
+        "SELECT url,payload_json FROM external_reviews WHERE root_id=? ORDER BY at DESC LIMIT 1",
+        (row["id"],),
+    )
     return {
         "id": row["id"],
         "number": _external_number(row["external_id"]),
@@ -308,6 +366,7 @@ def _work_item(
         "body": row["body"],
         "repo": row["repo"],
         "status": status,
+        "origin": row["origin"],
         "stage": row["presentation_stage"],
         "spent_cents": row["spent_cents"],
         "reserved_cents": row["reserved_cents"],
@@ -322,6 +381,17 @@ def _work_item(
         "plan_version": row["plan_version"],
         "approved_at": row["approved_at"],
         "steps": steps,
+        "pipeline_stages": pipeline_stages,
+        "pull_request": (
+            {
+                "url": external["url"],
+                "number": _json(external["payload_json"], {}).get("number"),
+                "gate_status": _json(external["payload_json"], {}).get("gate"),
+            }
+            if external
+            else None
+        ),
+        "evals": {},
         "summary": _summary(row, steps, next_action, interruption),
         "interruption": interruption,
         "acceptance": controller.coverage(row["id"])
@@ -363,7 +433,9 @@ def _work_item(
 
 
 def controller_projection(
-    controller: Controller, detail_id: str | None = None
+    controller: Controller,
+    detail_id: str | None = None,
+    release_id: str | None = None,
 ) -> dict[str, Any]:
     """Return one consistent, secret-free snapshot of operator-visible facts."""
 
@@ -381,7 +453,7 @@ def controller_projection(
         observed = {
             row["id"]: row
             for row in controller.store.query(
-                "SELECT id,capabilities,last_heartbeat,busy FROM workers ORDER BY id"
+                "SELECT id,capabilities,last_heartbeat,busy,telemetry_json FROM workers ORDER BY id"
             )
         }
         for worker_id in sorted(set(registered) | set(observed)):
@@ -460,6 +532,23 @@ def controller_projection(
                     "last_heartbeat": last_heartbeat,
                     "age": _age(last_heartbeat),
                     "capabilities": capabilities,
+                    "labels": configured.get("labels", []),
+                    "exclusive_labels": configured.get("exclusive_labels", []),
+                    "max_parallel": configured.get("max_parallel", 1),
+                    "active_count": (
+                        controller.store.one(
+                            """SELECT COUNT(*) n FROM attempts WHERE worker_id=?
+                        AND status IN ('leased','running','cancelling')""",
+                            (worker_id,),
+                        )
+                        or {"n": 0}
+                    )["n"],
+                    "load": _json(row["telemetry_json"], {}).get("load")
+                    if row
+                    else None,
+                    "free_gb": _json(row["telemetry_json"], {}).get("free_gb")
+                    if row
+                    else None,
                     "environments": configured.get("environments", []),
                     "lease_seconds": lease_seconds,
                     "active": active_view,
@@ -480,6 +569,65 @@ def controller_projection(
         timezone = ZoneInfo(
             controller.cfg.windows[0].timezone if controller.cfg.windows else "UTC"
         )
+        releases = []
+        for release in controller.store.query(
+            "SELECT * FROM releases ORDER BY created_at DESC LIMIT 50"
+        ):
+            stages = {
+                stage["stage"]: stage
+                for stage in controller.store.query(
+                    "SELECT * FROM release_stages WHERE release_id=? ORDER BY rowid",
+                    (release["id"],),
+                )
+            }
+            stage_views = []
+            for name in RELEASE_STAGES:
+                stage = stages.get(name)
+                stage_views.append(
+                    {
+                        "name": name,
+                        "status": stage["status"] if stage else "not_applicable",
+                        "runner": stage["runner"] if stage else None,
+                        "started_at": stage["started_at"] if stage else None,
+                        "ended_at": stage["ended_at"] if stage else None,
+                        "seconds": stage["seconds"] if stage else None,
+                        "evidence": _json(stage["evidence_json"], {})
+                        if stage and release["id"] == release_id
+                        else {},
+                    }
+                )
+            releases.append(
+                {
+                    "id": release["id"],
+                    "repo": release["repo"],
+                    "kind": release["kind"],
+                    "version": release["version"],
+                    "status": release["status"],
+                    "commit_sha": release["commit_sha"],
+                    "package_digest": release["package_digest"],
+                    "roots": _json(release["roots_json"], []),
+                    "rollback_of": release["rollback_of"],
+                    "can_rollback": release["status"] == "released",
+                    "stages": stage_views,
+                    "approvals": [
+                        dict(item)
+                        for item in controller.store.query(
+                            "SELECT gate,actor,at,digest FROM release_approvals WHERE release_id=?",
+                            (release["id"],),
+                        )
+                    ],
+                    "confirmations": [
+                        dict(item)
+                        for item in controller.store.query(
+                            "SELECT item,actor,at,evidence FROM release_confirmations WHERE release_id=?",
+                            (release["id"],),
+                        )
+                    ],
+                    "next": controller._next_step_text(release),
+                }
+            )
+        disk = controller.disk_usage()
+        disk["blocker"] = controller.disk_blocker()
         return {
             "schema": 1,
             "generated_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
@@ -497,12 +645,23 @@ def controller_projection(
                 "drain": controller.store.get_op("drain"),
             },
             "items": items,
+            "releases": releases,
             "done_today": sum(
                 item["status"] == "accepted"
                 and _accepted_today(item["accepted_at"], timezone)
                 for item in items
             ),
             "workers": workers,
+            "hosted_runners": [
+                {"id": name, **runner}
+                for name, runner in sorted(controller.cfg.runners.items())
+                if runner.get("kind") in {"gha", "blacksmith"}
+            ],
+            "disk": disk,
+            "metrics": {
+                "spent_cents": sum(item["spent_cents"] for item in items),
+                "active_runs": sum(item["lane"] == "running" for item in items),
+            },
             "settings": {
                 "routes": routes,
                 "role_routes": controller.cfg.role_routes,

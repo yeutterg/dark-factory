@@ -52,7 +52,7 @@ class ResultsMixin(ControllerCore):
             "SELECT * FROM work_items WHERE id=?", (job["work_item_id"],)
         )
         try:
-            self._policy()
+            self._policy(root["repo"])
         except Exception as exc:
             # An active attempt must always be settleable, even when the
             # approved inputs cannot be evaluated right now.
@@ -146,6 +146,58 @@ class ResultsMixin(ControllerCore):
                         root["id"],
                     ),
                 )
+        if job["kind"] == "check":
+            metrics = {}
+            for stage in result.get("stages", []):
+                for name, value in stage.get("metrics", {}).items():
+                    if not isinstance(name, str) or type(value) not in {int, float}:
+                        ok = False
+                        error = "metrics.json must be a numeric map"
+                        continue
+                    metrics[(stage.get("stage", "check"), name)] = float(value)
+            candidate_info = json.loads(root["candidate_commits"] or "{}").get(
+                root["repo"], {}
+            )
+            commit = candidate_info.get("commit")
+            budgets = (snapshot.get("pipeline") or {}).get("budgets", {})
+            violations = []
+            if commit:
+                for (stage_name, name), value in metrics.items():
+                    baseline = self.store.one(
+                        """SELECT value FROM commit_metrics WHERE repo=? AND commit_sha=?
+                        AND name=? ORDER BY recorded_at DESC LIMIT 1""",
+                        (root["repo"], snapshot["base"], name),
+                    )
+                    limits = budgets.get(name, {})
+                    if "max" in limits and value > limits["max"]:
+                        violations.append(f"{name} {value:g} exceeds {limits['max']:g}")
+                    if (
+                        "max_delta" in limits
+                        and baseline
+                        and value - baseline["value"] > limits["max_delta"]
+                    ):
+                        violations.append(
+                            f"{name} delta {value - baseline['value']:g} exceeds {limits['max_delta']:g}"
+                        )
+                    self.store.execute(
+                        """INSERT OR REPLACE INTO commit_metrics
+                        (repo,commit_sha,stage,name,value,attempt_id,recorded_at)
+                        VALUES (?,?,?,?,?,?,?)""",
+                        (
+                            root["repo"],
+                            commit,
+                            stage_name,
+                            name,
+                            value,
+                            attempt_id,
+                            now_iso(),
+                        ),
+                    )
+            if violations:
+                ok = False
+                error = "metric budget failed: " + "; ".join(violations)
+                result["failure_kind"] = "metric-budget"
+                result["metric_violations"] = violations
         status = (
             "cancelled"
             if cancelled
@@ -205,7 +257,11 @@ class ResultsMixin(ControllerCore):
             ),
         )
         self.store.execute(
-            "UPDATE workers SET busy=0 WHERE id=?", (attempt["worker_id"],)
+            """UPDATE workers SET busy=CASE WHEN EXISTS(
+            SELECT 1 FROM attempts WHERE worker_id=?
+            AND status IN ('leased','running','cancelling')) THEN 1 ELSE 0 END
+            WHERE id=?""",
+            (attempt["worker_id"], attempt["worker_id"]),
         )
         if ok and job["kind"] == "plan":
             packet = json.loads(root["plan_json"])

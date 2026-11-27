@@ -21,6 +21,7 @@ SCHEMA_VERSION = 1
 DEFAULT_DISK = {
     "min_free_gb": 2,
     "max_state_gb": 0,
+    "max_cache_gb": 0,
     "keep_finished_days": 7,
     "keep_audit_days": 90,
 }
@@ -209,6 +210,7 @@ class FactoryConfig:
         return {
             "min_free_gb": table.get("min_free_gb", DEFAULT_DISK["min_free_gb"]),
             "max_state_gb": table.get("max_state_gb", DEFAULT_DISK["max_state_gb"]),
+            "max_cache_gb": table.get("max_cache_gb", DEFAULT_DISK["max_cache_gb"]),
             "keep_finished_days": table.get(
                 "keep_finished_days", DEFAULT_DISK["keep_finished_days"]
             ),
@@ -655,6 +657,8 @@ def _normalize_sources(
             source,
             {
                 "path",
+                "remote",
+                "trusted_adoption_commit",
                 "revision",
                 "checks",
                 "allowed_paths",
@@ -673,8 +677,37 @@ def _normalize_sources(
             raise ConfigError("source target_branch must be a branch name")
         if "require_live_evidence" in source:
             _require(source, "require_live_evidence", bool)
-        path = Path(_resolve(source_path.parent, _require(source, "path", str)))
-        if not path.is_dir():
+        remote = source.get("remote")
+        local_path = source.get("path")
+        if bool(remote) == bool(local_path):
+            raise ConfigError("source requires exactly one of path or remote")
+        if remote:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(remote)
+            if (
+                not isinstance(remote, str)
+                or parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ConfigError("source remote must be an HTTPS repository URL")
+            safe = repo.replace("/", "__").replace(".", "_")
+            state_dir = Path(_resolve(source_path.parent, raw["project"]["state_dir"]))
+            path = state_dir / "mirrors" / f"{safe}.git"
+            trusted = source.get("trusted_adoption_commit")
+            if trusted is not None and (
+                not isinstance(trusted, str)
+                or not re.fullmatch(r"[a-fA-F0-9]{40,64}", trusted)
+            ):
+                raise ConfigError("trusted_adoption_commit must be a full commit id")
+        else:
+            assert isinstance(local_path, str)
+            path = Path(_resolve(source_path.parent, local_path))
+        if not remote and not path.is_dir():
             raise ConfigError(f"source repository does not exist: {path}")
         revision = _require(source, "revision", str)
         if not revision or revision.startswith("-"):
@@ -703,10 +736,30 @@ def _normalize_sources(
             raise ConfigError(
                 "sources must explicitly pin protected verification definitions"
             )
-        if not source.get("checks") or not source.get("allowed_paths"):
-            raise ConfigError(
-                "source needs canonical checks and explicit allowed_paths"
-            )
+        if not source.get("allowed_paths"):
+            raise ConfigError("source needs explicit allowed_paths")
+        if not source.get("checks"):
+            pipeline_has_checks = bool(remote)
+            if not remote:
+                try:
+                    from dark_factory.pipeline import read_pipeline
+
+                    pipeline, _ = read_pipeline(
+                        path, source.get("pipeline_ref", "main")
+                    )
+                    pipeline_has_checks = bool(
+                        pipeline
+                        and any(
+                            pipeline.change[name].applicable
+                            for name in ("build", "test")
+                        )
+                    )
+                except Exception:
+                    pipeline_has_checks = False
+            if not pipeline_has_checks:
+                raise ConfigError(
+                    "source needs canonical checks or pipeline build/test steps"
+                )
         for cid in source["checks"]:
             if cid not in commands:
                 raise ConfigError(f"unknown verification command {cid}")
@@ -883,7 +936,18 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     operators = raw.get("operators", {})
     if not isinstance(operators, dict):
         raise ConfigError("operators must be a table")
-    _fields(operators, {"humans"}, "operators")
+    _fields(
+        operators,
+        {
+            "humans",
+            "require_distinct_approvers",
+            "require_distinct_reviewer_model",
+        },
+        "operators",
+    )
+    for key in ("require_distinct_approvers", "require_distinct_reviewer_model"):
+        if key in operators and type(operators[key]) is not bool:
+            raise ConfigError(f"operators.{key} must be a boolean")
     humans = operators.get("humans", [])
     if (
         not isinstance(humans, list)
@@ -1120,11 +1184,18 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         raise ConfigError("disk must be a table")
     _fields(
         disk,
-        {"min_free_gb", "max_state_gb", "keep_finished_days", "keep_audit_days"},
+        {
+            "min_free_gb",
+            "max_state_gb",
+            "max_cache_gb",
+            "keep_finished_days",
+            "keep_audit_days",
+        },
         "disk",
     )
     _integer(disk, "min_free_gb", DEFAULT_DISK["min_free_gb"], 0)
     _integer(disk, "max_state_gb", DEFAULT_DISK["max_state_gb"], 0)
+    _integer(disk, "max_cache_gb", DEFAULT_DISK["max_cache_gb"], 0)
     _integer(disk, "keep_finished_days", DEFAULT_DISK["keep_finished_days"], 1)
     _integer(disk, "keep_audit_days", DEFAULT_DISK["keep_audit_days"], 1)
     _validate_improvement(raw, repositories, normalized_sources, state_dir)

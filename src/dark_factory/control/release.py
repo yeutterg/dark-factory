@@ -17,9 +17,11 @@ import re
 import shutil
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from dark_factory.adapters.git.local import clone, git
+from dark_factory.artifact_store import ArtifactStore
 from dark_factory.control.base import ControllerCore, ControllerError
 from dark_factory.pipeline import Pipeline, PipelineError, read_pipeline
 from dark_factory.runner import CommandRunner
@@ -52,16 +54,23 @@ def tree_digest(directory: Path) -> str:
 
 
 class ReleaseMixin(ControllerCore):
-    _release_threads: dict[str, threading.Thread] = {}
-    _release_locks: dict[str, threading.RLock] = {}
-
     def _lock(self, rid):
         return self._release_locks.setdefault(rid, threading.RLock())
 
     def _verify_package(self, release):
         """What is deployed is what was approved: re-hash the stored package first."""
+        package = self._pipeline_of(release).releases[release["kind"]].stages["package"]
+        if not package.applicable:
+            expected = hashlib.sha256(
+                f"commit:{release['commit_sha']}".encode()
+            ).hexdigest()
+            if release["package_digest"] != expected:
+                raise ControllerError("the commit-bound release digest changed")
+            return
         directory = self._artifact_dir(release["id"])
-        if release["package_digest"] and directory.is_dir():
+        if release["package_digest"]:
+            if not directory.is_dir():
+                raise ControllerError("the verified release package is missing")
             if tree_digest(directory) != release["package_digest"]:
                 raise ControllerError(
                     "the stored package no longer matches its approved digest"
@@ -96,15 +105,23 @@ class ReleaseMixin(ControllerCore):
             )
 
     def _artifact_dir(self, rid):
-        return self.cfg.state_dir / "release-artifacts" / rid
+        return self._artifact_store().path(rid)
+
+    def _artifact_store(self):
+        return ArtifactStore(self.cfg.state_dir / "release-artifacts")
 
     # ---- assemble ------------------------------------------------------------------
 
-    def release_start(self, repo, kind, actor, ref=None):
+    def release_start(self, repo, kind, actor, ref=None, version=None):
         """Operator-created only: the factory never originates a release."""
         source = self.cfg.sources.get(repo)
         if source is None:
             raise ControllerError("the release repository has no configured source")
+        if version is not None and (
+            not isinstance(version, str)
+            or not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,63}", version)
+        ):
+            raise ControllerError("release version is invalid")
         path = Path(source["path"])
         try:
             pipeline, _ = read_pipeline(path, source.get("pipeline_ref", "main"))
@@ -132,15 +149,29 @@ class ReleaseMixin(ControllerCore):
             (repo, kind),
         )
         included = []
+        history = git(
+            path,
+            "log",
+            "--format=%H%x00%B%x00%x00",
+            f"{previous['commit_sha']}..{commit}" if previous else commit,
+        )
         for root in self.store.query(
-            "SELECT id,title,candidate_commits FROM work_items WHERE repo=? AND status='accepted' "
+            "SELECT id,title,candidate_commits,merge_commit_sha FROM work_items WHERE repo=? AND status='accepted' "
             "ORDER BY accepted_at,rowid",
             (repo,),
         ):
             sha = json.loads(root["candidate_commits"]).get(repo, {}).get("commit")
             if not sha:
                 continue
-            reachable = self._contained(path, sha, commit)
+            reachable = bool(
+                root["merge_commit_sha"]
+                and self._contained(path, root["merge_commit_sha"], commit)
+            ) or self._contained(path, sha, commit)
+            if not reachable:
+                pr_number = self._created_pr(root["id"], repo)
+                reachable = f"Dark-Factory-Root: {root['id']}" in history or bool(
+                    pr_number and f"(#{pr_number})" in history
+                )
             if reachable and (
                 previous is None
                 or not self._contained(path, sha, previous["commit_sha"])
@@ -149,7 +180,7 @@ class ReleaseMixin(ControllerCore):
         rid = new_id("rel")
         self.store.execute(
             "INSERT INTO releases(id,repo,kind,branch,commit_sha,status,pipeline_json,"
-            "roots_json,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "roots_json,created_by,created_at,version) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 rid,
                 repo,
@@ -161,8 +192,23 @@ class ReleaseMixin(ControllerCore):
                 json.dumps(included),
                 actor,
                 now_iso(),
+                version,
             ),
         )
+        for item in included:
+            root = self.store.one(
+                "SELECT candidate_commits,merge_commit_sha FROM work_items WHERE id=?",
+                (item["root"],),
+            )
+            attributed = (
+                root["merge_commit_sha"]
+                or json.loads(root["candidate_commits"])[repo]["commit"]
+            )
+            self.store.execute(
+                """INSERT INTO release_items(release_id,work_item_id,commit_sha,
+                included,added_by,added_at) VALUES (?,?,?,?,?,?)""",
+                (rid, item["root"], attributed, 1, actor, now_iso()),
+            )
         self._set_stage(
             rid,
             "assemble",
@@ -235,6 +281,11 @@ class ReleaseMixin(ControllerCore):
                 return {"stage": stage_name, "ok": False}
         pipeline = self._pipeline_of(release)
         stage = pipeline.releases[release["kind"]].stages[stage_name]
+        if stage_name == "verify" and release["verify_next_poll_at"]:
+            if datetime.fromisoformat(release["verify_next_poll_at"]) > datetime.now(
+                UTC
+            ):
+                return None
         if not stage.applicable:
             if stage_name == "package":
                 # Nothing is built, so the decision is bound to the exact commit.
@@ -270,6 +321,73 @@ class ReleaseMixin(ControllerCore):
         except Exception as exc:
             evidence, ok = {"ok": False, "error": str(exc)[:500]}, False
         seconds = round(time.monotonic() - began, 3)
+        if stage_name == "verify" and evidence.get("pending"):
+            started = release["verify_started_at"] or now_iso()
+            elapsed = (
+                datetime.now(UTC) - datetime.fromisoformat(started)
+            ).total_seconds()
+            if stage.max_wait_seconds and elapsed >= stage.max_wait_seconds:
+                evidence = {
+                    **evidence,
+                    "pending": False,
+                    "ok": False,
+                    "error": "verify polling timed out",
+                }
+                ok = False
+            else:
+                next_poll = datetime.now(UTC) + timedelta(
+                    seconds=max(1, stage.poll_interval_seconds)
+                )
+                self.store.execute(
+                    """UPDATE releases SET verify_started_at=?,verify_next_poll_at=?
+                    WHERE id=?""",
+                    (started, next_poll.isoformat(), rid),
+                )
+                self._set_stage(
+                    rid,
+                    stage_name,
+                    "pending",
+                    ended_at=now_iso(),
+                    seconds=seconds,
+                    evidence_json=json.dumps(evidence),
+                )
+                return {
+                    "release": rid,
+                    "status": "pending",
+                    "next_poll_at": next_poll.isoformat(),
+                }
+        if stage_name == "verify" and ok and stage.min_soak_seconds:
+            started = release["verify_started_at"] or now_iso()
+            elapsed = (
+                datetime.now(UTC) - datetime.fromisoformat(started)
+            ).total_seconds()
+            if elapsed < stage.min_soak_seconds:
+                next_poll = datetime.now(UTC) + timedelta(
+                    seconds=max(1, stage.poll_interval_seconds)
+                )
+                self.store.execute(
+                    "UPDATE releases SET verify_started_at=?,verify_next_poll_at=? WHERE id=?",
+                    (started, next_poll.isoformat(), rid),
+                )
+                self._set_stage(
+                    rid,
+                    stage_name,
+                    "pending",
+                    ended_at=now_iso(),
+                    seconds=seconds,
+                    evidence_json=json.dumps(
+                        {
+                            **evidence,
+                            "pending": True,
+                            "summary": "minimum soak not reached",
+                        }
+                    ),
+                )
+                return {
+                    "release": rid,
+                    "status": "pending",
+                    "next_poll_at": next_poll.isoformat(),
+                }
         self._set_stage(
             rid,
             stage_name,
@@ -370,7 +488,10 @@ class ReleaseMixin(ControllerCore):
             # Only the secrets this stage asked for and the profile granted.
             **values,
             **(
-                {"FACTORY_PACKAGE": str(self._artifact_dir(rid))}
+                {
+                    "FACTORY_PACKAGE": str(self._artifact_dir(rid)),
+                    "FACTORY_PACKAGE_DIGEST": release["package_digest"] or "",
+                }
                 if self._artifact_dir(rid).is_dir()
                 else {}
             ),
@@ -394,6 +515,13 @@ class ReleaseMixin(ControllerCore):
                     }
                 )
                 if code:
+                    if stage_name == "verify" and code == 75:
+                        return {
+                            "ok": False,
+                            "pending": True,
+                            "runner": "local",
+                            "steps": steps,
+                        }
                     ok = False
                     break
             evidence = {"ok": ok, "runner": "local", "steps": steps}
@@ -415,9 +543,8 @@ class ReleaseMixin(ControllerCore):
                     pass
 
     def _store_artifacts(self, rid, out, patterns):
-        destination = self._artifact_dir(rid)
-        shutil.rmtree(destination, ignore_errors=True)
-        destination.mkdir(parents=True)
+        store = self._artifact_store()
+        store.reset(rid)
         found = []
         for path in sorted(
             p for p in out.rglob("*") if p.is_file() and not p.is_symlink()
@@ -425,38 +552,45 @@ class ReleaseMixin(ControllerCore):
             relative = path.relative_to(out).as_posix()
             if any(fnmatch.fnmatch(relative, pattern) for pattern in patterns):
                 data = path.read_bytes()
-                target = destination / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(data)
-                found.append(
-                    {
-                        "name": relative,
-                        "size": len(data),
-                        "sha256": hashlib.sha256(data).hexdigest(),
-                    }
-                )
+                found.append(store.put(rid, relative, data))
         return {"artifacts": found, "package_digest": package_digest(found)}
 
     def _execute_hosted(self, release, stage_name, stage, runner_cfg):
         command = self.cfg.commands["code_host"]
-        result = HostedRunner(
+        hosted = HostedRunner(
             self.runner.run_json,
             command,
             release["repo"],
             runner_cfg,
             f"{release['id']}-{stage_name}",
-        ).run(
+        )
+        package_inputs = {}
+        if stage_name in {"stage", "verify", "promote"}:
+            package_stage = self._stage_row(release["id"], "package")
+            package_evidence = (
+                json.loads(package_stage["evidence_json"]) if package_stage else {}
+            )
+            artifacts = package_evidence.get("hosted_artifacts", [])
+            if artifacts:
+                package_inputs = {
+                    "package_run_id": str(package_evidence.get("run_id") or ""),
+                    "package_artifact_id": str(artifacts[0]["id"]),
+                    "package_digest": artifacts[0]["digest"],
+                }
+        result = hosted.run(
             stage,
             "release",
             release["commit_sha"],
             stage.timeout_seconds,
             branch=release["branch"],
+            extra_inputs=package_inputs,
         )
         evidence = {
             "ok": result.ok,
             "runner": runner_cfg["kind"],
             "url": result.url,
             "conclusion": result.conclusion,
+            "run_id": result.run_id,
         }
         if result.ok and stage_name == "package":
             found = [
@@ -476,14 +610,31 @@ class ReleaseMixin(ControllerCore):
                 evidence["ok"] = False
                 evidence["error"] = "the hosted package stage produced no artifacts"
             else:
-                evidence.update(
-                    {"artifacts": found, "package_digest": package_digest(found)}
-                )
+                evidence["hosted_artifacts"] = result.artifacts
+                destination = self._artifact_store().reset(release["id"])
+                downloaded = []
+                for artifact in result.artifacts:
+                    item = hosted.download(
+                        result.run_id,
+                        artifact,
+                        destination / str(artifact["id"]),
+                    )
+                    downloaded.extend(item.get("files", []))
+                if not downloaded:
+                    evidence["ok"] = False
+                    evidence["error"] = "the hosted package download was empty"
+                else:
+                    evidence.update(
+                        {
+                            "artifacts": downloaded,
+                            "package_digest": package_digest(downloaded),
+                        }
+                    )
         return evidence
 
     # ---- the two human decisions ---------------------------------------------------------
 
-    def release_approve(self, rid, gate, actor):
+    def release_approve(self, rid, gate, actor, asynchronous=False):
         if gate not in {"package", "promote"}:
             raise ControllerError("gate must be package or promote")
         release = self._release(rid)
@@ -501,12 +652,21 @@ class ReleaseMixin(ControllerCore):
             raise ControllerError("there is no package to approve")
         if gate == "promote":
             approved = self.store.one(
-                "SELECT digest FROM release_approvals WHERE release_id=? AND gate='package'",
+                "SELECT digest,actor FROM release_approvals WHERE release_id=? AND gate='package'",
                 (rid,),
             )
             if not approved or approved["digest"] != digest:
                 raise ControllerError(
                     "the package approval no longer covers this package"
+                )
+            if (
+                self.cfg.raw.get("operators", {}).get(
+                    "require_distinct_approvers", False
+                )
+                and approved["actor"] == actor
+            ):
+                raise ControllerError(
+                    "promotion approval requires a different operator"
                 )
         self.store.execute(
             "INSERT OR REPLACE INTO release_approvals(release_id,gate,actor,at,digest) VALUES (?,?,?,?,?)",
@@ -514,17 +674,24 @@ class ReleaseMixin(ControllerCore):
         )
         self.store.execute(
             "UPDATE releases SET status=? WHERE id=?",
-            ("package_approved" if gate == "package" else "promoting", rid),
+            (
+                "package_approved" if gate == "package" else "promotion_approved",
+                rid,
+            ),
         )
         self.store.audit(
             actor, "release.approve", {"release": rid, "gate": gate, "digest": digest}
         )
-        if gate == "promote":
+        if gate == "promote" and not asynchronous:
             return self._run_promote(rid)
         return self.release_status(rid)
 
     def _run_promote(self, rid):
         with self._lock(rid):
+            if self._release(rid)["status"] == "promotion_approved":
+                self.store.execute(
+                    "UPDATE releases SET status='promoting' WHERE id=?", (rid,)
+                )
             return self._promote_locked(rid)
 
     def _promote_locked(self, rid):
@@ -677,6 +844,7 @@ class ReleaseMixin(ControllerCore):
             "release": rid,
             "repo": release["repo"],
             "kind": release["kind"],
+            "version": release["version"],
             "commit": release["commit_sha"],
             "status": release["status"],
             "reason": release["reason"],
@@ -708,6 +876,7 @@ class ReleaseMixin(ControllerCore):
         text = {
             "awaiting_package_approval": "A person approves the exact package digest: release-approve <id> package",
             "awaiting_promotion_approval": "A person approves promotion: release-approve <id> promote",
+            "promotion_approved": "Promotion is queued on the approved runner.",
             "verifying": "A person confirms the manual verification items: release-confirm <id> --item ...",
             "failed": "Inspect the failed stage's evidence, then a person retries (release-retry) or cancels (release-cancel)",
         }
@@ -784,16 +953,19 @@ class ReleaseMixin(ControllerCore):
         started = []
         for release in self.store.query(
             "SELECT * FROM releases WHERE status IN "
-            "('assembled','building','package_approved','staging','promoted')"
+            "('assembled','building','package_approved','staging','promoted','promotion_approved')"
         ):
             rid = release["id"]
             thread = self._release_threads.get(rid)
             if thread and thread.is_alive():
                 continue
-            if self._next_automatic(release) is None:
+            promote = release["status"] == "promotion_approved"
+            if not promote and self._next_automatic(release) is None:
                 continue
             thread = threading.Thread(
-                target=self.release_run_stage, args=(rid,), daemon=True
+                target=self._run_promote if promote else self.release_run_stage,
+                args=(rid,),
+                daemon=True,
             )
             self._release_threads[rid] = thread
             thread.start()

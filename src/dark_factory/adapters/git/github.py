@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
+import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
@@ -31,6 +33,71 @@ def api(path, method="GET", payload=None):
             f"GitHub request failed ({code}): {err.decode(errors='replace')[-1000:]}"
         )
     return json.loads(out) if out.strip() else {}
+
+
+def download_artifact(repo, payload):
+    import os
+
+    artifact_id = payload.get("artifact_id")
+    expected = str(payload.get("expected_digest", "")).removeprefix("sha256:")
+    destination = Path(str(payload.get("destination_path", "")))
+    if type(artifact_id) is not int or artifact_id <= 0:
+        raise ContractError("positive artifact id required")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ContractError("artifact SHA-256 digest required")
+    if not destination.is_absolute() or destination.exists():
+        raise ContractError("destination must be a new absolute path")
+    runner = CommandRunner(Path.cwd())
+    code, archive, err = runner.supervise(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/actions/artifacts/{artifact_id}/zip",
+            "-H",
+            "Accept: application/vnd.github+json",
+        ],
+        b"",
+        120,
+        Path.cwd(),
+        dict(os.environ),
+    )
+    if code:
+        raise ContractError(
+            "GitHub artifact download failed: " + err.decode(errors="replace")[-500:]
+        )
+    if hashlib.sha256(archive).hexdigest() != expected:
+        raise ContractError("downloaded artifact digest did not match code host")
+    destination.mkdir(parents=True, mode=0o700)
+    files = []
+    import io
+
+    with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+        for member in bundle.infolist():
+            relative = Path(member.filename)
+            mode = member.external_attr >> 16
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or member.is_dir()
+                or mode & 0o170000 == 0o120000
+            ):
+                if member.is_dir():
+                    continue
+                raise ContractError("artifact contains an unsafe path or symlink")
+            data = bundle.read(member)
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            files.append(
+                {
+                    "name": f"{destination.name}/{relative.as_posix()}",
+                    "size": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
+    if not files:
+        raise ContractError("artifact archive was empty")
+    return {"files": files, "archive_sha256": expected}
 
 
 BRANCH = re.compile(r"dark-factory/[a-z0-9][a-z0-9._/-]{2,100}")
@@ -153,7 +220,9 @@ def handle(request):
         "operation": op,
         "ok": True,
     }
-    if op == "inspect_pr":
+    if op == "download_run_artifact":
+        result["evidence"] = download_artifact(repo, payload)
+    elif op == "inspect_pr":
         number = payload.get("number")
         if type(number) is not int or number <= 0:
             raise ContractError("positive PR number required")
@@ -180,6 +249,8 @@ def handle(request):
             "base_ref": pr["base"]["ref"],
             "state": pr["state"],
             "merged": pr["merged"],
+            "merge_commit_sha": pr.get("merge_commit_sha"),
+            "merged_at": pr.get("merged_at"),
             "mergeable": pr["mergeable"],
             "checks": checks["check_runs"],
             "statuses": statuses["statuses"],

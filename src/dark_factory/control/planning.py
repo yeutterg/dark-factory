@@ -22,6 +22,7 @@ from dark_factory.pipeline import (
     Pipeline,
     PipelineError,
     read_pipeline,
+    read_rubrics,
     unprotected_steps,
 )
 from dark_factory.runners import RunnerError, check_pipeline_grants
@@ -289,6 +290,7 @@ class PlanningMixin(ControllerCore):
             }
         version = row["plan_version"] + 1
         base = pin(Path(source["path"]), source["revision"])
+        rubrics = read_rubrics(Path(source["path"]), base)
         if pipeline:
             tracked = set(
                 git(
@@ -368,7 +370,8 @@ class PlanningMixin(ControllerCore):
             "base": base,
             "input_repo": str(inputs / "repo"),
             "bindings": bindings,
-            "policy": self._policy(),
+            "policy": self._policy(row["repo"]),
+            "rubrics": rubrics,
             "simulation": simulation,
             "manual_acceptance": source.get("manual_acceptance", []),
             "external_acceptance": source.get("external_acceptance", []),
@@ -487,7 +490,7 @@ class PlanningMixin(ControllerCore):
         if not json.loads(row["critique_json"])["passed"]:
             raise ControllerError("blocking critique requires a new proposal")
         snapshot = json.loads(row["snapshot_json"])
-        if snapshot["policy"] != self._policy():
+        if snapshot["policy"] != self._policy(row["repo"]):
             raise ControllerError("planning inputs changed; replan before approval")
         if snapshot["source"].get("require_live_evidence") and snapshot["simulation"]:
             raise ControllerError(

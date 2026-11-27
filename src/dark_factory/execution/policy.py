@@ -198,7 +198,19 @@ def validate_deployment(raw, routes):
             not re.fullmatch(r"[a-zA-Z0-9_-]+", name)
             or not isinstance(item, dict)
             or not {"token_env", "environments"} <= set(item)
-            or set(item) - {"token_env", "environments", "lease_seconds"}
+            or set(item)
+            - {
+                "token_env",
+                "environments",
+                "lease_seconds",
+                "labels",
+                "exclusive_labels",
+                "max_parallel",
+                "max_load",
+                "min_free_gb",
+                "secrets",
+                "allow_network",
+            }
         ):
             raise ConfigError("worker requires token_env and environments")
         ref = item["token_env"]
@@ -209,6 +221,38 @@ def validate_deployment(raw, routes):
         ):
             raise ConfigError("workers require distinct external credentials")
         refs.add(ref)
+        for key in ("labels", "exclusive_labels", "secrets"):
+            values = item.get(key, [])
+            if not isinstance(values, list) or not all(
+                isinstance(value, str) and value for value in values
+            ):
+                raise ConfigError(f"worker {name} {key} must be a list of names")
+        if not set(item.get("exclusive_labels", [])) <= set(item.get("labels", [])):
+            raise ConfigError("worker exclusive_labels must also be advertised labels")
+        if "allow_network" in item and type(item["allow_network"]) is not bool:
+            raise ConfigError("worker allow_network must be a boolean")
+        if (
+            type(item.get("max_parallel", 1)) is not int
+            or not 1 <= item.get("max_parallel", 1) <= 32
+        ):
+            raise ConfigError("worker max_parallel must be between 1 and 32")
+        if (
+            type(item.get("max_load", 0.8)) not in {int, float}
+            or not 0 < item.get("max_load", 0.8) <= 4
+        ):
+            raise ConfigError("worker max_load must be between 0 and 4")
+        if (
+            type(item.get("min_free_gb", 2)) not in {int, float}
+            or item.get("min_free_gb", 2) < 0
+        ):
+            raise ConfigError("worker min_free_gb must be non-negative")
+        secret_classes = raw.get("secret_classes", {})
+        if any(
+            secret_classes.get(value) == "signing" for value in item.get("secrets", [])
+        ):
+            raise ConfigError(
+                "signing secrets are stage-only and cannot be granted to coding workers"
+            )
         if (
             type(item.get("lease_seconds", 30)) is not int
             or not 30 <= item.get("lease_seconds", 30) <= 300

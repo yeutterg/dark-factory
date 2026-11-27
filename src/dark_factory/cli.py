@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -18,6 +19,24 @@ from dark_factory.controller import Controller, ControllerError
 from dark_factory.secrets import secret
 from dark_factory.store import Store
 from dark_factory.worker import Worker
+
+
+def _housekeeping_loop(ctrl, store, stop, interval=1.0):
+    """Fence and reconcile continuously, even with no execution worker polling."""
+    last_error = None
+    while not stop.is_set():
+        try:
+            ctrl.recover("housekeeping")
+            ctrl.settle_interruptions("housekeeping")
+            ctrl.completeness_tick()
+            last_error = None
+        except Exception as exc:
+            if str(exc) != last_error:
+                store.audit(
+                    "housekeeping", "controller.error", {"error": str(exc)[:500]}
+                )
+            last_error = str(exc)
+        stop.wait(interval)
 
 
 def packaged_prompts() -> Path:
@@ -63,11 +82,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the pipeline skeleton and agent instructions into a repository",
     )
     p_init.add_argument("repository", type=Path)
+    p_mcp = sub.add_parser("mcp", help="Run the contributor-scoped stdio MCP server")
+    p_mcp.add_argument("--actor", default="mcp")
     p_improve = sub.add_parser(
         "improve",
         help="Report recurring failure patterns as inert improvement proposals",
     )
     p_improve.add_argument("--minimum-occurrences", type=int, default=3)
+    p_eval_capture = sub.add_parser("eval-capture")
+    p_eval_capture.add_argument("work_item_id")
+    p_eval_capture.add_argument(
+        "--label",
+        required=True,
+        choices=["escaped_bug", "human_rejection", "clean_accept"],
+    )
+    p_eval_run = sub.add_parser("eval-run")
+    p_eval_run.add_argument("--suite", default="reviewer")
+    p_eval_run.add_argument("--route")
+    p_eval_report = sub.add_parser("eval-report")
+    p_eval_report.add_argument("--run-id")
     p_intake = sub.add_parser("intake")
     p_intake.add_argument(
         "--issues-json", required=True, help="JSON file of selected issues"
@@ -168,10 +201,13 @@ def build_parser() -> argparse.ArgumentParser:
         p_w = sub.add_parser(name, help=text)
         p_w.add_argument("work_item_id")
         p_w.add_argument("--actor", default="contributor")
+        if name == "work-submit":
+            p_w.add_argument("--bundle", type=Path)
     p_rs = sub.add_parser("release-start", help="Assemble a release from a branch head")
     p_rs.add_argument("repo")
     p_rs.add_argument("kind")
     p_rs.add_argument("--ref", default=None)
+    p_rs.add_argument("--version")
     p_rs.add_argument("--actor", default="operator")
     p_ra = sub.add_parser("release-approve", help="A person approves a release gate")
     p_ra.add_argument("release_id")
@@ -238,11 +274,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run-worker")
     p_run.add_argument("--max-jobs", type=int, default=0)
     p_run.add_argument("--worker-id", default="local")
-    p_remote = sub.add_parser(
-        "execution-worker", help="Run a project-scoped outbound execution worker"
-    )
-    p_remote.add_argument("--profile", required=True, type=Path)
-    p_remote.add_argument("--max-jobs", type=int, default=0)
+    for name in ("execution-worker", "runner"):
+        p_remote = sub.add_parser(
+            name, help="Run a project-scoped outbound execution runner"
+        )
+        p_remote.add_argument("--profile", required=True, type=Path)
+        p_remote.add_argument("--max-jobs", type=int, default=0)
     p_accept = sub.add_parser("accept")
     p_accept.add_argument("work_item_id")
     p_accept.add_argument("--actor", default="operator")
@@ -339,7 +376,21 @@ def _dispatch(args: argparse.Namespace) -> int:
 
         print(json.dumps({"written": init_repository(args.repository)}, indent=2))
         return 0
-    if args.cmd == "execution-worker":
+    if args.cmd == "mcp":
+        if not args.config:
+            raise ConfigError("--config is required for mcp")
+        from dark_factory.mcp import serve as serve_mcp
+        from dark_factory.ui.transport import RemoteTransport
+
+        endpoint = args.api_url or os.environ.get("DARK_FACTORY_URL")
+        if not endpoint:
+            endpoint = load_operator_endpoint(args.config)
+        cfg = load_config(args.config)
+        if not cfg.contributor_token:
+            raise ConfigError("mcp requires a configured contributor token")
+        serve_mcp(RemoteTransport(endpoint, cfg.contributor_token), args.actor)
+        return 0
+    if args.cmd in {"execution-worker", "runner"}:
         import tomllib
 
         from dark_factory.execution.client import WorkerClient
@@ -353,21 +404,47 @@ def _dispatch(args: argparse.Namespace) -> int:
             "state_dir",
             "accounts",
             "ca_file",
+            "max_parallel",
         }:
             raise ConfigError("unknown execution worker profile fields")
-        client = WorkerClient(
-            data["url"],
-            data["project_id"],
-            data["worker_id"],
-            secret(data["token_env"]),
-            args.profile.parent / data["state_dir"],
-            data.get("accounts", {}),
-            args.profile.parent / data["ca_file"] if data.get("ca_file") else None,
-        )
+        slots = data.get("max_parallel", 1)
+        if type(slots) is not int or not 1 <= slots <= 32:
+            raise ConfigError("runner max_parallel must be between 1 and 32")
+        state = args.profile.parent / data["state_dir"]
+
+        def make_client(slot):
+            slot_state = state if slots == 1 else state / f"slot-{slot}"
+            return WorkerClient(
+                data["url"],
+                data["project_id"],
+                data["worker_id"],
+                secret(data["token_env"]),
+                slot_state,
+                data.get("accounts", {}),
+                args.profile.parent / data["ca_file"] if data.get("ca_file") else None,
+            )
+
         from dark_factory import log
 
         log.configure()
-        count = client.serve(args.max_jobs)
+        clients = [make_client(slot) for slot in range(slots)]
+        if args.max_jobs or slots == 1:
+            count = clients[0].serve(args.max_jobs)
+        else:
+            import threading
+
+            threads = [
+                threading.Thread(
+                    target=item.serve,
+                    name=f"dark-factory-runner-{slot}",
+                )
+                for slot, item in enumerate(clients)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            count = 0
         print(json.dumps({"jobs_run": count}))
         return 0
     if args.cmd == "adapter":
@@ -431,19 +508,29 @@ def _dispatch(args: argparse.Namespace) -> int:
                 f"'dark-factory --config {args.config} serve --worker'"
             ) from exc
     command = operator_commands.COMMANDS.get(args.cmd)
-    if args.api_url:
+    api_url = args.api_url or os.environ.get("DARK_FACTORY_URL")
+
+    def run_remote(endpoint):
         from dark_factory.ui.transport import RemoteTransport
 
         if command is None or not command.api:
             raise ControllerError(f"{args.cmd} runs locally; omit --api-url")
-        transport = RemoteTransport(args.api_url, load_operator_token(args.config))
+        transport = RemoteTransport(endpoint, load_operator_token(args.config))
         result = transport.command(args.cmd, _params(args, command), _actor(args))
         text, code = command.render(result)
         # Same output and exit status as the local command.
         if text is not None:
             print(text)
         return code
-    ctrl, store = build_controller(args.config)
+
+    if api_url:
+        return run_remote(api_url)
+    try:
+        ctrl, store = build_controller(args.config)
+    except RuntimeError as exc:
+        if command is None or not command.api or "controller owner" not in str(exc):
+            raise
+        return run_remote(load_operator_endpoint(args.config))
     try:
         if ctrl.cfg.workers and (
             args.cmd == "run-worker" or args.cmd == "serve" and args.worker
@@ -474,6 +561,17 @@ def _dispatch(args: argparse.Namespace) -> int:
                 )
             )
             return 0
+        if args.cmd in {"eval-capture", "eval-run", "eval-report"}:
+            from dark_factory.evals import capture, report, run
+
+            if args.cmd == "eval-capture":
+                result = capture(ctrl, args.work_item_id, args.label)
+            elif args.cmd == "eval-run":
+                result = run(ctrl, args.suite, args.route)
+            else:
+                result = report(ctrl, args.run_id)
+            print(json.dumps(result, indent=2))
+            return 0
         if args.cmd == "run-worker":
             worker = Worker(ctrl.cfg, store, ctrl, args.worker_id)
             n = worker.run_loop(args.max_jobs)
@@ -501,7 +599,6 @@ def _dispatch(args: argparse.Namespace) -> int:
                 last_error = None
                 while not stop.is_set():
                     try:
-                        ctrl.recover("local-recovery")
                         Worker(ctrl.cfg, store, ctrl, "local").run_loop()
                         last_error = None
                     except Exception as exc:
@@ -511,13 +608,20 @@ def _dispatch(args: argparse.Namespace) -> int:
                         last_error = str(exc)
                     stop.wait(1)
 
-            thread = (
+            worker_thread = (
                 threading.Thread(target=local_worker, daemon=True)
                 if args.worker
                 else None
             )
-            if thread:
-                thread.start()
+            housekeeping_thread = threading.Thread(
+                target=_housekeeping_loop,
+                args=(ctrl, store, stop),
+                name="dark-factory-housekeeping",
+                daemon=True,
+            )
+            housekeeping_thread.start()
+            if worker_thread:
+                worker_thread.start()
             import signal
 
             from dark_factory import log
@@ -540,8 +644,9 @@ def _dispatch(args: argparse.Namespace) -> int:
                 stop.set()
                 ctrl.drain("shutdown")
                 ctrl.stop_active_processes(reason[0])
-                if thread:
-                    thread.join(timeout=15)
+                housekeeping_thread.join(timeout=15)
+                if worker_thread:
+                    worker_thread.join(timeout=15)
                 server.server_close()
             return 0
         if args.cmd == "demo":
@@ -567,6 +672,14 @@ def _params(
         elif name == "payload":
             params[name] = json.loads(
                 Path(args.payload_json).read_text(encoding="utf-8")
+            )
+        elif name == "bundle":
+            import base64
+
+            params[name] = (
+                base64.b64encode(args.bundle.read_bytes()).decode()
+                if args.bundle
+                else None
             )
         else:
             params[name] = getattr(args, name)
