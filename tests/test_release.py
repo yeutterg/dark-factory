@@ -241,3 +241,123 @@ def test_one_report_covers_both_loops(world):
     assert stages[("release", "package")]["runner"] == "local"
     assert stages[("release", "package")]["passed"] == 1
     assert report["slowest"] and report["slowest"][0]["loop"] == "release"
+
+
+def test_two_threads_never_run_the_same_stage(world):
+    import threading
+
+    cfg, store, ctrl, repo, name = world
+    rid = ctrl.release_start(name, "prod", "operator")["release"]
+    lock = ctrl._lock(rid)
+    held = threading.Event()
+    release_it = threading.Event()
+
+    def hold():
+        with lock:
+            held.set()
+            release_it.wait(10)
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    held.wait(5)
+    try:
+        assert ctrl.release_run_stage(rid) is None  # another thread owns this release
+    finally:
+        release_it.set()
+        thread.join()
+    assert ctrl.release_run_stage(rid) is not None
+
+
+def test_a_package_changed_after_approval_is_never_deployed(world):
+    cfg, store, ctrl, repo, name = world
+    rid = ctrl.release_start(name, "prod", "operator")["release"]
+    run_automatic(ctrl, rid)
+    ctrl.release_approve(rid, "package", "greg")
+    (cfg.state_dir / "release-artifacts" / rid / "app.bin").write_text("swapped")
+    status = run_automatic(ctrl, rid)
+    assert status["status"] == "failed" and "no longer matches" in status["reason"]
+    assert not store.query(
+        "SELECT 1 FROM release_stages WHERE stage IN ('stage','promote')"
+    )
+
+
+def test_stage_and_promote_steps_are_told_where_the_verified_package_is(world):
+    cfg, store, ctrl, repo, name = world
+    rid = ctrl.release_start(name, "prod", "operator")["release"]
+    run_automatic(ctrl, rid)
+    stage = ctrl._pipeline_of(ctrl._release(rid)).releases["prod"].stages["stage"]
+    probe = type(stage)(
+        name="stage",
+        steps=[
+            [
+                "python",
+                "-c",
+                "import os; assert os.path.isfile(os.environ['FACTORY_PACKAGE'] + '/app.bin')",
+            ]
+        ],
+    )
+    assert ctrl._execute(ctrl._release(rid), "stage", probe)["ok"]
+
+
+def test_a_failed_release_can_be_retried_or_cancelled_by_a_person_only(world):
+    cfg, store, ctrl, repo, name = world
+    (repo / PIPELINE_PATH).write_text(
+        PIPELINE.replace(
+            'test: {steps: [["python", "-c", "pass"]]}',
+            'test: {steps: [["python", "-c", "raise SystemExit(4)"]]}',
+            1,
+        )
+    )
+    git(repo, "commit", "-am", "failing test stage")
+    rid = ctrl.release_start(name, "prod", "operator")["release"]
+    assert run_automatic(ctrl, rid)["status"] == "failed"
+    with pytest.raises(ControllerError):
+        ctrl.release_retry(rid, "contributor:agent")
+    # The same commit would fail again; retry puts it back at the failed stage.
+    retried = ctrl.release_retry(rid, "greg")
+    assert retried["status"] == "assembled" and retried["reason"] == ""
+    assert [s["stage"] for s in retried["stages"]] == ["assemble", "build"]
+    cancelled = ctrl.release_cancel(rid, "greg")
+    assert cancelled["status"] == "cancelled"
+    assert not (cfg.state_dir / "release-artifacts" / rid).exists()
+    with pytest.raises(ControllerError, match="already"):
+        ctrl.release_cancel(rid, "greg")
+
+
+def test_a_release_without_a_package_stage_is_approved_against_its_commit(world):
+    cfg, store, ctrl, repo, name = world
+    text = PIPELINE.replace(
+        PIPELINE[PIPELINE.index("    package:") : PIPELINE.index("    stage:")],
+        '    package: {not_applicable: "a server deploy has no artifact"}\n',
+    )
+    (repo / PIPELINE_PATH).write_text(text)
+    git(repo, "commit", "-am", "no package")
+    rid = ctrl.release_start(name, "prod", "operator")["release"]
+    status = run_automatic(ctrl, rid)
+    assert (
+        status["status"] == "awaiting_package_approval"
+        and len(status["package_digest"]) == 64
+    )
+    ctrl.release_approve(rid, "package", "greg")  # no longer "there is no package"
+
+
+def test_a_missing_secret_value_fails_the_stage_instead_of_running_with_nothing(
+    world, monkeypatch
+):
+    cfg, store, ctrl, repo, name = world
+    monkeypatch.delenv("DARK_FACTORY_SECRET_SIGNING_KEY")
+    rid = ctrl.release_start(name, "prod", "operator")["release"]
+    status = run_automatic(ctrl, rid)
+    assert status["status"] == "failed"
+    evidence = store.one(
+        "SELECT evidence_json FROM release_stages WHERE stage='package'"
+    )[0]
+    assert "is not provided" in evidence
+
+
+def test_a_promotion_interrupted_by_a_restart_is_failed_not_stuck(world):
+    cfg, store, ctrl, repo, name = world
+    rid = ctrl.release_start(name, "prod", "operator")["release"]
+    store.execute("UPDATE releases SET status='promoting' WHERE id=?", (rid,))
+    ctrl.recover_releases()
+    assert ctrl.release_status(rid)["status"] == "failed"

@@ -190,6 +190,7 @@ class FactoryConfig:
         return {
             "enabled": table.get("enabled", False),
             "repositories": list(table.get("repositories", [])),
+            "interval_seconds": table.get("interval_seconds", 60),
         }
 
     @property
@@ -638,9 +639,13 @@ def _normalize_sources(
                 "require_live_evidence",
                 "ephemeral_paths",
                 "pipeline_ref",
+                "target_branch",
             },
             "source",
         )
+        target = source.get("target_branch", "main")
+        if not isinstance(target, str) or not target or target.startswith("-"):
+            raise ConfigError("source target_branch must be a branch name")
         if "require_live_evidence" in source:
             _require(source, "require_live_evidence", bool)
         path = Path(_resolve(source_path.parent, _require(source, "path", str)))
@@ -1078,7 +1083,8 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     gate = raw.get("gate", {})
     if not isinstance(gate, dict):
         raise ConfigError("gate must be a table")
-    _fields(gate, {"enabled", "repositories"}, "gate")
+    _fields(gate, {"enabled", "repositories", "interval_seconds"}, "gate")
+    _integer(gate, "interval_seconds", 60, 10)
     if "enabled" in gate:
         _require(gate, "enabled", bool)
     for name in gate.get("repositories", []):

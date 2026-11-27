@@ -137,6 +137,14 @@ class ResourcesMixin(ControllerCore):
             return False
         return True
 
+    def _root_finished(self, attempt):
+        row = self.store.one(
+            "SELECT w.status FROM work_items w JOIN jobs j ON j.work_item_id=w.id "
+            "WHERE j.id=?",
+            (attempt["job_id"],),
+        )
+        return row is None or row["status"] in TERMINAL_ROOT
+
     def _finished_before(self, attempt, cutoff):
         stamp = attempt["ended_at"]
         return bool(stamp) and datetime.fromisoformat(stamp) < cutoff
@@ -167,8 +175,13 @@ class ResourcesMixin(ControllerCore):
                 if attempt is not None:
                     if not (
                         self._verified(attempt)
-                        or self._finished_before(attempt, cutoff)
+                        or (
+                            self._finished_before(attempt, cutoff)
+                            and self._root_finished(attempt)
+                        )
                     ):
+                        # Unarchived work is the only copy: never removed while its
+                        # root could still be resumed or inspected by a person.
                         kept.append(f"{area}/{entry.name}")
                         continue
                     if area == "workspaces" and attempt["workspace"]:

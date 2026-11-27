@@ -10,6 +10,7 @@ candidate, so the old evidence stops counting at once.
 from __future__ import annotations
 
 import json
+import time
 
 from dark_factory.control.base import ControllerCore
 from dark_factory.store import new_id
@@ -57,6 +58,12 @@ class GateMixin(ControllerCore):
         settings = self.cfg.gate
         if not settings["enabled"]:
             return []
+        # Recovery runs about once a second; the code host's rate limit is shared with
+        # everything else the factory does there, so the gate polls on its own clock.
+        last = float(self.store.get_op("gate:last", "0") or 0)
+        if time.time() - last < settings["interval_seconds"]:
+            return []
+        self.store.set_op("gate:last", str(time.time()), "controller")
         command = self.cfg.commands["code_host"]
         posted = []
         for repo in settings["repositories"] or self.cfg.repositories:
@@ -73,19 +80,28 @@ class GateMixin(ControllerCore):
                 marker = f"{state}:{pr['head_sha']}"
                 if self.store.get_op(key, "") == marker:
                     continue
-                self.runner.run_json(
-                    command.command,
-                    "set_status",
-                    {
-                        "repo": repo,
-                        "sha": pr["head_sha"],
-                        "state": state,
-                        "context": CONTEXT,
-                        "description": description,
-                    },
-                    new_id("req"),
-                    command.timeout_seconds,
-                )
+                try:
+                    self.runner.run_json(
+                        command.command,
+                        "set_status",
+                        {
+                            "repo": repo,
+                            "sha": pr["head_sha"],
+                            "state": state,
+                            "context": CONTEXT,
+                            "description": description,
+                        },
+                        new_id("req"),
+                        command.timeout_seconds,
+                    )
+                except Exception as exc:
+                    # One pull request failing must not starve the others.
+                    self.store.audit(
+                        "controller",
+                        "gate.error",
+                        {"repo": repo, "pr": pr["number"], "error": str(exc)[:300]},
+                    )
+                    continue
                 self.store.set_op(key, marker, "controller")
                 self.store.audit(
                     "controller",

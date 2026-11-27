@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from dark_factory.adapters.git.local import clone, fixture, pin
+from dark_factory.adapters.git.local import clone, fixture, git, pin
 from dark_factory.control.base import ControllerCore, ControllerError, _digest, atomic
 from dark_factory.control.graph import default_bootstrap_graph, validate_graph
 from dark_factory.models import (
@@ -266,6 +266,7 @@ class PlanningMixin(ControllerCore):
                 "reconcile outstanding reservations before replanning"
             )
         source = self.cfg.sources.get(row["repo"])
+        fixture_source = False
         simulation = any(
             route.evidence_kind == "simulation" for route in self.cfg.routes.values()
         )
@@ -273,9 +274,10 @@ class PlanningMixin(ControllerCore):
             if not simulation:
                 raise ControllerError("source repository configuration required")
             source = fixture(self.cfg.state_dir)
+            fixture_source = True
         improving = row["origin"].startswith("improvement:")
         if improving:
-            source = self.improvement_scope(source)
+            source = self.improvement_scope(source, fixture_source)
         pipeline = self._pin_pipeline(source)
         if pipeline:
             # The pipeline file is part of what judges a change, so a change cannot edit it.
@@ -285,16 +287,22 @@ class PlanningMixin(ControllerCore):
                     dict.fromkeys([*source.get("protected_paths", []), PIPELINE_PATH])
                 ),
             }
+        version = row["plan_version"] + 1
+        base = pin(Path(source["path"]), source["revision"])
+        if pipeline:
+            tracked = set(
+                git(
+                    Path(source["path"]), "ls-tree", "-r", "--name-only", base
+                ).splitlines()
+            )
             loose = unprotected_steps(
-                Pipeline.from_dict(pipeline).change, source["protected_paths"]
+                Pipeline.from_dict(pipeline).change, source["protected_paths"], tracked
             )
             if loose:
                 raise ControllerError(
                     "pipeline steps run repository files that are not protected paths: "
                     + ", ".join(loose)
                 )
-        version = row["plan_version"] + 1
-        base = pin(Path(source["path"]), source["revision"])
         inputs = self.cfg.state_dir / "inputs" / work_item_id / str(version)
         # The version only advances on success, so a directory already here is the
         # remains of a failed earlier attempt; it is never referenced by any record.
@@ -348,6 +356,14 @@ class PlanningMixin(ControllerCore):
                 )
             ],
             "source": dict(source),
+            # The branch a pull request for this work targets, fixed with the approved
+            # base commit: an improvement root uses the improvement table's branch,
+            # anything else the repository's own `target_branch`.
+            "target_branch": (
+                self.cfg.improvement["base_branch"]
+                if improving
+                else source.get("target_branch", "main")
+            ),
             "pipeline": pipeline,
             "base": base,
             "input_repo": str(inputs / "repo"),

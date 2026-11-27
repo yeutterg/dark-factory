@@ -54,12 +54,16 @@ credential can run only the `work-*` commands.
 2. `dark-factory work-plan <id> [--proposal '<json>']`: submit a plan draft, or let the factory plan.
    The critic reviews it and a person approves it before any code exists.
 3. `dark-factory work-checkout <id>`: a worktree the factory owns.
-4. `dark-factory work-submit <id>`: hand it over. The factory captures the diff under the same scope,
-   protected-path and size rules, then builds, tests and independently reviews the exact commit.
+4. `dark-factory work-submit <id>`: hand it over. The factory freezes a copy of the worktree, bound to
+   the approved plan and base commit with a digest; edits made afterwards change nothing it builds. It then
+   captures the diff under the same scope, protected-path and size rules, and builds, tests and
+   independently reviews the exact commit. A frozen copy that no longer matches its digest is refused.
 5. `dark-factory work-status <id>`: stage and what blocks it.
 
 After review the factory pushes the reviewed commit to a new `dark-factory/work/...` branch and opens a
-draft pull request. With `[gate] enabled = true` it also sets a required status, `dark-factory/gate`,
+draft pull request against the `target_branch` pinned in the plan (a repository source setting, default
+`main`; an improvement root uses `[improvement] base_branch`). A later profile edit invalidates the
+approval instead of redirecting the pull request. With `[gate] enabled = true` it also sets a required status, `dark-factory/gate`,
 on every open pull request: green only for the exact commit it reviewed under an approved plan.
 
 ## Releases
@@ -71,6 +75,26 @@ manual verification items need a person (`release-confirm`); a second decision p
 only the newest `keep` packages (default 2); `release-rollback` redeploys the previous kept one.
 Local release stages run in a fresh checkout as the factory's user with only the secrets they were
 granted; use a hosted runner or an isolated environment where that is not enough.
+
+## Cleanup of contributed work
+
+Worktrees and frozen submissions of finished roots are removed by the sweep. Before a worktree goes, edits
+that were never submitted are saved as a patch in `external-recovery/` (and a submission nobody built as a
+tarball); they are pruned after `keep_finished_days`. `work-start` sends only the repository and the issue
+number when the tracker is live, so the tracker returns the real issue and its parent; fixture titles are
+accepted only in simulation.
+
+## Notes on trust
+
+- Contributor names are asserted, like operator names: anyone holding the contributor credential can
+  name any contributor, so work is protected from *other work*, not from other holders of the credential.
+  Give each agent its own deployment, or wait for per-agent credentials.
+- A release's package is re-hashed before stage, verify and promote, and `FACTORY_PACKAGE` tells those
+  steps where the verified copy is. A package that changed after approval fails the release; it is never
+  deployed. Failed releases are retried or cancelled by a person (`release-retry`, `release-cancel`).
+- Hosted runs are dispatched on the release branch, found by request id *and* commit, and their artifacts
+  are accepted only with the digest the code host computed.
+- `[gate] interval_seconds` (default 60) sets how often pull requests are polled.
 
 ## Cleanup
 

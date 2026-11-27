@@ -41,7 +41,7 @@ class Host:
 def world(tmp_path, monkeypatch):
     cfg = cfg_for(tmp_path / "state")
     cfg.windows = []
-    cfg.raw["gate"] = {"enabled": True}
+    cfg.raw["gate"] = {"enabled": True, "interval_seconds": 0}
     store = Store(cfg.state_dir)
     ctrl = Controller(cfg, store, PROMPTS)
     host = Host(ctrl.runner.run_json)
@@ -122,3 +122,30 @@ def test_the_status_operation_is_restricted_to_the_gate_context(monkeypatch):
         make_request("set_status", {**base, "context": "dark-factory/gate"}, "r")
     )
     assert ok["evidence"]["observed"]
+
+
+def test_the_gate_polls_on_its_own_clock_and_one_failure_does_not_starve_the_rest(
+    world,
+):
+    cfg, store, ctrl, host = world
+    cfg.raw["gate"] = {"enabled": True, "interval_seconds": 3600}
+    host.prs = [pr(SHA, 1), pr("b" * 40, 2)]
+    assert len(ctrl.gate_tick()) == 2
+    host.prs = [pr("c" * 40, 3)]
+    assert ctrl.gate_tick() == []  # not due again for an hour: no API storm
+    cfg.raw["gate"] = {"enabled": True, "interval_seconds": 0}
+    real = host.__call__
+    calls = {"n": 0}
+
+    def flaky(command, operation, payload, request_id, timeout):
+        if operation == "set_status":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("rate limited")
+        return real(command, operation, payload, request_id, timeout)
+
+    ctrl.runner.run_json = flaky
+    host.prs = [pr("d" * 40, 4), pr("e" * 40, 5)]
+    assert [n for _, n, _ in ctrl.gate_tick()] == [
+        5
+    ]  # PR 4 failed, PR 5 still got its status

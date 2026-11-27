@@ -10,14 +10,18 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 
-from dark_factory.adapters.git.local import clone
+from dark_factory.adapters.git.local import clone, git
+from dark_factory.adapters.harness.external import tree_fingerprint
 from dark_factory.control.base import ControllerCore, ControllerError, atomic
 from dark_factory.models import TERMINAL_ROOT
 from dark_factory.store import now_iso
 
 EXTERNAL_DIR = "external"
+SUBMISSION_DIR = "external-submissions"
+RECOVERY_DIR = "external-recovery"
 
 
 class ExternalWorkMixin(ControllerCore):
@@ -44,9 +48,48 @@ class ExternalWorkMixin(ControllerCore):
                 return {"actor": ext["actor"], "proposal_json": ext["proposal_json"]}
             return None  # The factory's planner drafts the plan.
         if job["kind"] == "implement":
-            if ext["submitted"] <= ext["consumed"]:
+            submission = self._next_submission(root, ext)
+            if submission is None:
                 return "wait"
-            return {"actor": ext["actor"], "worktree": ext["worktree"]}
+            return {
+                "actor": ext["actor"],
+                "worktree": submission["path"],
+                "submission": {
+                    "seq": submission["seq"],
+                    "digest": submission["digest"],
+                },
+            }
+        return None
+
+    def _next_submission(self, root, ext):
+        """The oldest captured submission still bound to the approved plan, verified."""
+        snapshot = json.loads(root["snapshot_json"])
+        for row in self.store.query(
+            "SELECT * FROM external_submissions WHERE root_id=? AND consumed=0 ORDER BY seq",
+            (root["id"],),
+        ):
+            reason = None
+            if (
+                row["plan_digest"] != root["approved_digest"]
+                or row["base"] != snapshot["base"]
+            ):
+                reason = "stale: the plan or base changed after it was submitted"
+            elif (
+                not Path(row["path"]).is_dir()
+                or tree_fingerprint(Path(row["path"])) != row["digest"]
+            ):
+                reason = "tampered: the captured tree no longer matches its digest"
+            if reason is None:
+                return row
+            self.store.execute(
+                "UPDATE external_submissions SET consumed=2 WHERE root_id=? AND seq=?",
+                (root["id"], row["seq"]),
+            )
+            self.store.audit(
+                ext["actor"],
+                "work.submission_refused",
+                {"root": root["id"], "seq": row["seq"], "reason": reason},
+            )
         return None
 
     def _external_consume(self, wid, spec):
@@ -55,25 +98,36 @@ class ExternalWorkMixin(ControllerCore):
                 "UPDATE external_work SET proposal_json=NULL WHERE root_id=?", (wid,)
             )
         else:
+            seq = self.store.one(
+                "SELECT MIN(seq) s FROM external_submissions WHERE root_id=? AND consumed=0",
+                (wid,),
+            )["s"]
             self.store.execute(
-                "UPDATE external_work SET consumed=consumed+1 WHERE root_id=?", (wid,)
+                "UPDATE external_submissions SET consumed=1 WHERE root_id=? AND seq=?",
+                (wid, seq),
             )
 
     # ---- the contributor's commands ----------------------------------------------
 
     def work_start(self, repo, number, actor, title="", body=""):
-        wid = self.intake_issues(
-            [
-                {
-                    "repo": repo,
-                    "number": number,
-                    "title": title,
-                    "body": body,
-                    "is_root": True,
-                }
-            ],
-            actor,
-        )[0]
+        known = {r["id"] for r in self.store.query("SELECT id FROM work_items")}
+        # Tracker-backed intake names only the repository and the issue number: a
+        # title in the request makes the tracker treat it as fixture data, which live
+        # routes refuse. Fixtures are built explicitly, and only in simulation.
+        issue: dict = {"repo": repo, "number": number}
+        simulation_only = all(
+            route.evidence_kind == "simulation" for route in self.cfg.routes.values()
+        )
+        if simulation_only and (title or body):
+            issue.update(title=title, body=body, is_root=True)
+        wid = self.intake_issues([issue], actor)[0]
+        if wid in known and not self._external_row(wid):
+            # A contributor may not take over work an operator started or a person
+            # already decided on; only a root it created is its own.
+            raise ControllerError(
+                "that issue already has a root the factory did not start for you; "
+                "ask an operator"
+            )
         self.store.execute(
             "INSERT OR IGNORE INTO external_work(root_id,actor,created_at) VALUES (?,?,?)",
             (wid, actor, now_iso()),
@@ -124,21 +178,51 @@ class ExternalWorkMixin(ControllerCore):
 
     @atomic
     def work_submit(self, wid, actor):
-        """Hand the worktree to the factory as a candidate. It is judged like any other."""
-        ext = self._owned(wid, actor)
+        """Capture the worktree as an immutable submission. Edits made afterwards, by
+        the agent or anyone, cannot change what the factory builds and reviews."""
+        self._owned(wid, actor)
         root = self.store.one("SELECT * FROM work_items WHERE id=?", (wid,))
         if root["status"] not in {"approved", "running"}:
             raise ControllerError(
                 f"nothing to submit to (status: {root['status']}); get the plan approved"
             )
+        ext = self._external_row(wid)
         if not ext["worktree"] or not Path(ext["worktree"]).is_dir():
             raise ControllerError("run work-checkout first")
-        if ext["submitted"] > ext["consumed"]:
+        if self.store.one(
+            "SELECT 1 FROM external_submissions WHERE root_id=? AND consumed=0", (wid,)
+        ):
             raise ControllerError("a candidate is already waiting to be checked")
-        self.store.execute(
-            "UPDATE external_work SET submitted=submitted+1 WHERE root_id=?", (wid,)
+        seq = (
+            self.store.one(
+                "SELECT COALESCE(MAX(seq),0) n FROM external_submissions WHERE root_id=?",
+                (wid,),
+            )["n"]
+            + 1
         )
-        self.store.audit(actor, "work.submit", {"root": wid})
+        captured = self.cfg.state_dir / SUBMISSION_DIR / wid / str(seq)
+        captured.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(
+            ext["worktree"],
+            captured,
+            symlinks=True,
+            ignore=shutil.ignore_patterns(".git"),
+        )
+        snapshot = json.loads(root["snapshot_json"])
+        self.store.execute(
+            "INSERT INTO external_submissions(root_id,seq,path,digest,plan_digest,base,created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (
+                wid,
+                seq,
+                str(captured),
+                tree_fingerprint(captured),
+                root["approved_digest"],
+                snapshot["base"],
+                now_iso(),
+            ),
+        )
+        self.store.audit(actor, "work.submit", {"root": wid, "seq": seq})
         return self.work_status(wid, actor)
 
     def work_status(self, wid, actor=None):
@@ -146,6 +230,8 @@ class ExternalWorkMixin(ControllerCore):
         if not root:
             raise ControllerError("work item not found")
         ext = self._external_row(wid)
+        if actor is not None and ext and ext["actor"] != actor:
+            raise ControllerError("this work belongs to another contributor")
         view = self.continuation(wid)
         candidate = json.loads(root["candidate_commits"] or "{}").get(root["repo"], {})
         return {
@@ -156,7 +242,13 @@ class ExternalWorkMixin(ControllerCore):
             "candidate": candidate.get("commit"),
             "pull_request": self._created_pr(wid, root["repo"]),
             "contributor": ext["actor"] if ext else None,
-            "awaiting_submission": bool(ext and ext["submitted"] <= ext["consumed"]),
+            "awaiting_submission": bool(
+                ext
+                and not self.store.one(
+                    "SELECT 1 FROM external_submissions WHERE root_id=? AND consumed=0",
+                    (wid,),
+                )
+            ),
         }
 
     # ---- after review: the draft pull request --------------------------------------
@@ -169,7 +261,9 @@ class ExternalWorkMixin(ControllerCore):
         if snapshot["simulation"]:
             self.store.set_op(marker, "skipped: simulation", "controller")
             self.store.audit(
-                actor, "publish.skipped", {"root": root["id"], "why": "simulation"}
+                actor,
+                "publish.skipped",
+                {"root": root["id"], "origin": root["origin"], "reason": "simulation"},
             )
             return {"root": root["id"], "published": "skipped: simulation"}
         candidate = json.loads(root["candidate_commits"])[root["repo"]]
@@ -191,7 +285,9 @@ class ExternalWorkMixin(ControllerCore):
             {
                 "repo": root["repo"],
                 "head": branch,
-                "base": self.cfg.improvement["base_branch"],
+                # Pinned when the plan was approved: a later profile edit, or another
+                # repository's setting, cannot redirect this pull request or its retries.
+                "base": snapshot.get("target_branch") or "main",
                 "head_sha": candidate["commit"],
                 "title": title,
                 "body": body,
@@ -224,19 +320,92 @@ class ExternalWorkMixin(ControllerCore):
                 published.append(result)
         return published
 
+    def _preserve_unique_work(self, wid, tree):
+        """Keep edits that were never submitted before their checkout is removed."""
+        last = self.store.one(
+            "SELECT digest FROM external_submissions WHERE root_id=? ORDER BY seq DESC LIMIT 1",
+            (wid,),
+        )
+        if last and last["digest"] == tree_fingerprint(tree):
+            return None  # Everything in it was submitted, and is evidence.
+        try:
+            git(tree, "add", "-A")
+            patch = git(tree, "diff", "--cached", "--binary", "HEAD")
+        except Exception as exc:
+            self.store.audit(
+                "controller",
+                "external.preserve_failed",
+                {"root": wid, "error": str(exc)[:300]},
+            )
+            raise
+        if not patch.strip():
+            return None
+        target = self.cfg.state_dir / RECOVERY_DIR
+        target.mkdir(parents=True, exist_ok=True)
+        path = target / f"{wid}-{int(time.time())}.patch"
+        path.write_text(patch + "\n")
+        self.store.audit(
+            "controller",
+            "external.preserved",
+            {"root": wid, "path": str(path), "bytes": path.stat().st_size},
+        )
+        return path
+
     def sweep_external_worktrees(self):
-        """Worktrees of finished or replaced work are removed; returns bytes freed."""
+        """Worktrees and captured submissions of finished work are removed; unique
+        unsubmitted edits are saved as a patch first. Returns bytes freed."""
         from dark_factory.control.resources import tree_size
 
-        base = self.cfg.state_dir / EXTERNAL_DIR
         freed = 0
-        if not base.is_dir():
-            return 0
-        for entry in sorted(base.iterdir()):
-            root = self.store.one(
-                "SELECT status FROM work_items WHERE id=?", (entry.name,)
-            )
-            if root is None or root["status"] in TERMINAL_ROOT:
+        base = self.cfg.state_dir / EXTERNAL_DIR
+        if base.is_dir():
+            for entry in sorted(base.iterdir()):
+                root = self.store.one(
+                    "SELECT status FROM work_items WHERE id=?", (entry.name,)
+                )
+                if root is not None and root["status"] not in TERMINAL_ROOT:
+                    continue
+                try:
+                    self._preserve_unique_work(entry.name, entry)
+                except Exception:
+                    continue  # Could not save it: the checkout stays until it can be.
                 freed += tree_size(entry)
                 shutil.rmtree(entry, ignore_errors=True)
+        submissions = self.cfg.state_dir / SUBMISSION_DIR
+        if submissions.is_dir():
+            for entry in sorted(submissions.iterdir()):
+                root = self.store.one(
+                    "SELECT status FROM work_items WHERE id=?", (entry.name,)
+                )
+                if root is not None and root["status"] not in TERMINAL_ROOT:
+                    continue
+                if self.store.one(
+                    "SELECT 1 FROM external_submissions WHERE root_id=? AND consumed=0",
+                    (entry.name,),
+                ):
+                    self._save_unconsumed(entry)
+                freed += tree_size(entry)
+                shutil.rmtree(entry, ignore_errors=True)
+        days = self.cfg.disk["keep_finished_days"]
+        recovery = self.cfg.state_dir / RECOVERY_DIR
+        if recovery.is_dir():
+            for patch in recovery.glob("*.patch"):
+                if time.time() - patch.stat().st_mtime > days * 86400:
+                    freed += patch.stat().st_size
+                    patch.unlink()
         return freed
+
+    def _save_unconsumed(self, directory):
+        """A submission nobody built is unique work too: keep it as a tarball."""
+        import tarfile
+
+        target = self.cfg.state_dir / RECOVERY_DIR
+        target.mkdir(parents=True, exist_ok=True)
+        path = target / f"{directory.name}-submitted-{int(time.time())}.tar.gz"
+        with tarfile.open(path, "w:gz") as archive:
+            archive.add(directory, arcname=directory.name)
+        self.store.audit(
+            "controller",
+            "external.preserved",
+            {"root": directory.name, "path": str(path), "bytes": path.stat().st_size},
+        )

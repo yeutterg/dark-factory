@@ -72,6 +72,11 @@ class ExecutionService:
         if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
             raise ValueError("bounded request_id required")
         key = "dispatch:" + worker + ":" + request_id
+        if not self.store.get_op(key, ""):
+            # Housekeeping can wait on the code host or the decision agent, so it runs
+            # before the claim's write transaction opens, never inside it.
+            self.ctrl.recover("execution-supervisor")
+            self.ctrl.settle_interruptions("execution-supervisor")
         with self.store.transaction():
             caps = self._capabilities(worker)
             # An authenticated worker polling for work is online even when no
@@ -93,8 +98,6 @@ class ExecutionService:
                     raise ControllerError("replayed assignment is fenced")
                 path = self.store.state_dir / "dispatch" / previous / "assignment.json"
                 return json.loads(path.read_text())
-            self.ctrl.recover("execution-supervisor")
-            self.ctrl.settle_interruptions("execution-supervisor")
             claimed = self.ctrl.claim_job(worker, caps)
             if claimed is None:
                 return None

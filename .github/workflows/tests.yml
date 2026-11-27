@@ -38,6 +38,21 @@ jobs:
       - run: pip install . pip-audit
       - run: pip freeze --exclude dark-factory > audited-requirements.txt
       - run: pip-audit -r audited-requirements.txt --no-deps --disable-pip --strict
+  image-scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: docker build --tag dark-factory:scan .
+      # Fails on a fixed HIGH or CRITICAL vulnerability in the image's operating system
+      # or language packages; unfixed ones are reported by Dependabot and the audit job.
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: dark-factory:scan
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          vuln-type: os,library
   compose:
     runs-on: ubuntu-24.04
     timeout-minutes: 30

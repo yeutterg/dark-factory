@@ -88,6 +88,7 @@ class FakeCodeHost:
             "number": len(self.prs.get(repo, [])) + 1,
             "head_sha": sha,
             "head_ref": head,
+            "base": p["base"],
             "title": p["title"],
             "url": f"https://fake.test/{repo}/pull/{len(self.prs.get(repo, [])) + 1}",
             "body": p.get("body", ""),

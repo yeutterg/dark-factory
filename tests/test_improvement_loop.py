@@ -144,18 +144,21 @@ def test_the_loop_is_off_when_disabled_and_needs_a_threshold(tmp_path):
         store.close()
 
 
-def test_an_out_of_scope_edit_is_refused(tmp_path):
+def test_an_empty_intersection_with_the_allowlist_idles_the_loop_with_a_reason(
+    tmp_path,
+):
     cfg, store, ctrl = build(tmp_path, allowed_paths=["docs"])
     try:
         seed_rejections(store)
         ctrl.improvement_tick()
-        run_to_review(ctrl, cfg, store)
-        root = store.one("SELECT * FROM work_items WHERE origin LIKE 'improvement:%'")
-        assert root["status"] == "failed"
-        attempt = store.one(
-            "SELECT error FROM attempts WHERE status='failed' ORDER BY started_at DESC"
+        root = store.one(
+            "SELECT status FROM work_items WHERE origin LIKE 'improvement:%'"
         )
-        assert "out-of-scope" in attempt["error"]
+        assert root["status"] == "failed"
+        error = store.one(
+            "SELECT payload_json FROM audit WHERE action='improvement.error'"
+        )
+        assert "no eligible prompt or skill path" in error[0]
     finally:
         store.close()
 
@@ -240,3 +243,159 @@ def test_target_cannot_be_the_running_installation_or_hold_the_state_dir(tmp_pat
         validate_raw(raw, path, "digest")
     raw["project"]["state_dir"] = str(tmp_path / "elsewhere")
     validate_raw(raw, path, "digest")
+
+
+def test_a_root_that_cannot_be_planned_does_not_hold_the_only_slot(
+    tmp_path, monkeypatch
+):
+    cfg, store, ctrl = build(tmp_path)
+    try:
+        seed_rejections(store)
+        monkeypatch.setattr(
+            type(ctrl),
+            "start_planning",
+            lambda self, *a, **k: (_ for _ in ()).throw(ValueError("source error")),
+        )
+        assert ctrl.improvement_tick()["created"] is None
+        root = store.one(
+            "SELECT status FROM work_items WHERE origin LIKE 'improvement:%'"
+        )
+        assert root["status"] == "failed"
+        assert store.one("SELECT 1 FROM audit WHERE action='improvement.error'")
+        assert not ctrl._open_roots()  # the slot is free again
+    finally:
+        store.close()
+
+
+def checkout_with_definition(tmp_path, where):
+    """A target checkout holding a definition at `where` ('' means the repository root)."""
+    checkout = tmp_path / "checkout"
+    root = checkout / where if where else checkout
+    for sub in ("agents/spec/skills/s", "agents/implement", "runners", "automations/a"):
+        (root / sub).mkdir(parents=True)
+    (root / "agents/spec/agent.md").write_text("x")
+    (root / "agents/spec/skills/s/SKILL.md").write_text("x")
+    (root / "agents/implement/agent.md").write_text("x")
+    (root / "runners/linux.yaml").write_text("x")
+    definition = {
+        "root": str(root),
+        "agents": [
+            {"selected": True, "role": "planner", "prompt": "agents/spec/agent.md"},
+            {"selected": True, "role": "coder", "prompt": "agents/implement/agent.md"},
+            {"selected": False, "role": None, "prompt": "agents/foreman/agent.md"},
+        ],
+        "shared_skills": [],
+        "role_skills": {"planner": [str(root / "agents/spec/skills/s")]},
+    }
+    return checkout, root, definition
+
+
+def test_standing_scope_is_prompts_and_skills_only_for_a_definition_in_a_subdirectory(
+    tmp_path,
+):
+    cfg, store, ctrl = build(tmp_path, allowed_paths=[])
+    try:
+        checkout, root, definition = checkout_with_definition(tmp_path, "factory")
+        cfg.definition = definition
+        source = {
+            "path": str(checkout),
+            "allowed_paths": ["factory"],
+            "protected_paths": ["tests"],
+        }
+        scope = ctrl.improvement_scope(source)
+        assert scope["allowed_paths"] == [
+            "factory/agents/spec/agent.md",
+            "factory/agents/implement/agent.md",
+            "factory/agents/spec/skills/s",
+        ]
+        assert not any(
+            "runners" in p or "automations" in p for p in scope["allowed_paths"]
+        )
+        assert "tests" in scope["protected_paths"]
+        assert (
+            "src/dark_factory/agents/prompts/coder.contract.md"
+            in scope["protected_paths"]
+        )
+    finally:
+        store.close()
+
+
+def test_standing_scope_for_a_definition_at_the_repository_root_is_still_narrow(
+    tmp_path,
+):
+    cfg, store, ctrl = build(tmp_path, allowed_paths=[])
+    try:
+        checkout, root, definition = checkout_with_definition(tmp_path, "")
+        cfg.definition = definition
+        wide = {
+            "path": str(checkout),
+            "allowed_paths": ["agents", "runners", "automations"],
+            "protected_paths": [],
+        }
+        # A repository that lets agents edit runners still gives the policy only
+        # prompts and skills.
+        paths = ctrl.improvement_scope(wide)["allowed_paths"]
+        assert "runners" not in paths and "automations" not in paths
+        assert set(paths) == {
+            "agents/spec/agent.md",
+            "agents/implement/agent.md",
+            "agents/spec/skills/s",
+        }
+        # The repository's allowlist can narrow it; it can never widen it.
+        narrow = {**wide, "allowed_paths": ["agents/spec"]}
+        assert ctrl.improvement_scope(narrow)["allowed_paths"] == [
+            "agents/spec/agent.md",
+            "agents/spec/skills/s",
+        ]
+        # An operator restriction narrows further.
+        cfg.raw["improvement"] = {"allowed_paths": ["agents/implement"]}
+        assert ctrl.improvement_scope(wide)["allowed_paths"] == [
+            "agents/implement/agent.md"
+        ]
+        # Nothing in common: no scope, and a reason rather than silence.
+        with pytest.raises(ControllerError, match="no eligible"):
+            ctrl.improvement_scope({**wide, "allowed_paths": ["src"]})
+    finally:
+        store.close()
+
+
+def test_the_packaged_definition_is_eligible_when_the_target_has_no_definition(
+    tmp_path,
+):
+    cfg, store, ctrl = build(tmp_path, allowed_paths=[])
+    try:
+        checkout = tmp_path / "checkout"
+        checkout.mkdir()
+        scope = ctrl.improvement_scope(
+            {"path": str(checkout), "allowed_paths": ["src"], "protected_paths": []}
+        )
+        assert scope["allowed_paths"] == [
+            "src/dark_factory/agents/prompts",
+            "src/dark_factory/agents/skills",
+        ]
+        assert (
+            "src/dark_factory/agents/prompts/planner.contract.md"
+            in scope["protected_paths"]
+        )
+    finally:
+        store.close()
+
+
+def test_an_empty_intersection_is_surfaced_as_the_loops_idle_reason(tmp_path):
+    cfg, store, ctrl = build(tmp_path, allowed_paths=[])
+    try:
+        checkout, root, definition = checkout_with_definition(tmp_path, "factory")
+        cfg.definition = definition
+        cfg.sources = {
+            cfg.repositories[0]: {
+                "path": str(checkout),
+                "allowed_paths": ["src"],
+                "protected_paths": [],
+            }
+        }
+        repo, reason = ctrl._improvement_target()
+        assert repo is None and "no eligible prompt or skill path" in reason
+        assert ctrl.improvement_tick() == {"state": reason}
+        assert ctrl.improvement_status()["state"] == reason
+    finally:
+        store.close()

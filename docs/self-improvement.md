@@ -31,7 +31,7 @@ It covers improvement roots only, and never covers merge, acceptance or installa
 enabled = true
 repository = "owner/name"          # the checkout it may change (default: the only repository)
 base_branch = "main"
-allowed_paths = ["factory"]         # default: the definition tree, else the packaged prompts and skills
+allowed_paths = []                  # optional restriction; it can only narrow the eligible set
 protected_paths = []                # added to the repository's own protected paths
 max_files = 3                       # a larger diff is a scope violation; no repair is offered
 max_changed_lines = 80
@@ -42,9 +42,12 @@ threshold = 3
 ```
 
 The target must be a separate checkout: the profile is refused if it names the
-running installation or a directory that holds the controller's state. Protected
-paths (checks, CI, routes, budgets, permissions, profiles) are enforced in every
-sandbox and when the candidate is captured.
+running installation or a directory that holds the controller's state. What the standing policy may change is **only prompts and skills**: the selected Warp agents' prompt
+files and skill directories (or the packaged prompts and skills when the target has no definition),
+intersected with the repository's own allowlist and with `allowed_paths` here. It never covers runner,
+automation or router definitions, and the code-owned output contracts are protected. If the intersection
+is empty the loop idles and `status` says why. Protected paths (checks, CI, routes, budgets, permissions,
+profiles) are enforced in every sandbox and when the candidate is captured.
 
 ## Where it ends
 

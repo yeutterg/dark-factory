@@ -273,6 +273,18 @@ COMMANDS: dict[str, OperatorCommand] = {
             render=_pretty,
         ),
         OperatorCommand(
+            "release-retry",
+            lambda c, p, a: c.release_retry(p["release_id"], a),
+            ("release_id",),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "release-cancel",
+            lambda c, p, a: c.release_cancel(p["release_id"], a),
+            ("release_id",),
+            render=_pretty,
+        ),
+        OperatorCommand(
             "release-status",
             lambda c, p, a: c.release_status(p["release_id"]),
             ("release_id",),
