@@ -393,12 +393,62 @@ def controller_projection(
             busy = bool(row["busy"]) if row else False
             fresh = _recent(last_heartbeat, max(30, lease_seconds * 2))
             active = controller.store.one(
-                """SELECT a.id attempt_id,a.status,j.kind,j.work_item_id,a.started_at,
-                a.deadline,a.route_id,a.workspace FROM attempts a JOIN jobs j ON j.id=a.job_id
+                """SELECT a.id attempt_id,a.status,a.job_id,j.kind,j.work_item_id,a.started_at,
+                a.deadline,a.route_id,a.workspace,w.spent_cents,w.reserved_cents,
+                w.spending_ceiling_cents FROM attempts a JOIN jobs j ON j.id=a.job_id
+                JOIN work_items w ON w.id=j.work_item_id
                 WHERE a.worker_id=? AND a.status IN ('leased','running','cancelling')
                 ORDER BY a.started_at DESC LIMIT 1""",
                 (worker_id,),
             )
+            active_view = dict(active) if active else None
+            if active_view:
+                assert active is not None
+                checkpoint = controller.store.one(
+                    "SELECT id,created_at,detail_json FROM attempt_checkpoints "
+                    "WHERE attempt_id=? ORDER BY sequence DESC LIMIT 1",
+                    (active["attempt_id"],),
+                )
+                progress = controller.store.one(
+                    "SELECT created_at,payload_json FROM task_events WHERE attempt_id=? "
+                    "ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                    (active["attempt_id"],),
+                )
+                last_check = controller.store.one(
+                    """SELECT a.ended_at,a.status FROM attempts a JOIN jobs j ON j.id=a.job_id
+                    WHERE j.work_item_id=? AND j.kind='check' AND a.ended_at IS NOT NULL
+                    ORDER BY a.ended_at DESC LIMIT 1""",
+                    (active["work_item_id"],),
+                )
+                active_view.update(
+                    current_task=_json(progress["payload_json"], {})
+                    if progress
+                    else {},
+                    last_progress_at=progress["created_at"] if progress else None,
+                    last_checkpoint={
+                        "id": checkpoint["id"],
+                        "at": checkpoint["created_at"],
+                        "detail": _json(checkpoint["detail_json"], {}),
+                    }
+                    if checkpoint
+                    else None,
+                    last_completed_check=dict(last_check) if last_check else None,
+                    remaining_seconds=max(
+                        0,
+                        int(
+                            (
+                                datetime.fromisoformat(active["deadline"])
+                                - datetime.now(UTC)
+                            ).total_seconds()
+                        ),
+                    ),
+                    remaining_cents=max(
+                        0,
+                        active["spending_ceiling_cents"]
+                        - active["spent_cents"]
+                        - active["reserved_cents"],
+                    ),
+                )
             workers.append(
                 {
                     "id": worker_id,
@@ -412,7 +462,7 @@ def controller_projection(
                     "capabilities": capabilities,
                     "environments": configured.get("environments", []),
                     "lease_seconds": lease_seconds,
-                    "active": dict(active) if active else None,
+                    "active": active_view,
                     "recent": [
                         dict(recent)
                         for recent in controller.store.query(

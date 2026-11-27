@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
+from dark_factory import artifacts
 from dark_factory.control.base import ControllerCore, ControllerError, atomic
+from dark_factory.execution.packages import identity
 from dark_factory.resume_policy import CATEGORY_TEXT, Verdict, categorize, decide
 from dark_factory.store import new_id, now_iso
 
@@ -300,30 +302,70 @@ class InterruptionMixin(ControllerCore):
         )
         if not row:
             return None
-        # Prefer the interrupted attempt; if it saved nothing, fall back to the
-        # newest earlier attempt of this step that did.
+        root = self.store.one(
+            "SELECT w.* FROM work_items w JOIN jobs j ON j.work_item_id=w.id WHERE j.id=?",
+            (job_id,),
+        )
+        candidate_digest = identity(json.loads(root["candidate_commits"] or "{}"))
         previous = self.store.one(
-            "SELECT id,archive_path,result_json FROM attempts WHERE job_id=? "
-            "AND archive_path IS NOT NULL AND id<>? ORDER BY "
-            "(id=?) DESC,started_at DESC LIMIT 1",
-            (job_id, attempt_id, row["attempt_id"]),
-        ) or self.store.one(
             "SELECT id,archive_path,result_json FROM attempts WHERE id=?",
             (row["attempt_id"],),
         )
         result = json.loads(previous["result_json"] or "{}")
-        archive = previous["archive_path"]
-        if archive:
-            try:
-                self._verified_archive(previous["id"], archive)
-            except Exception as exc:
-                # A tampered or damaged archive is never resumed from.
-                self.store.audit(
-                    "controller",
-                    "resume.archive_rejected",
-                    {"attempt": previous["id"], "error": str(exc)[:300]},
-                )
-                archive = None
+        archive = None
+        checkpoint_id = None
+        # Rank sources by attempt chronology. Within one attempt its verified
+        # teardown archive is fuller than any earlier milestone.
+        for source in self.store.query(
+            "SELECT id,archive_path,result_json FROM attempts WHERE job_id=? AND id<>? "
+            "ORDER BY rowid DESC",
+            (job_id, attempt_id),
+        ):
+            if source["archive_path"]:
+                try:
+                    self._verified_archive(source["id"], source["archive_path"])
+                    previous, archive = source, source["archive_path"]
+                    result = json.loads(source["result_json"] or "{}")
+                    break
+                except Exception as exc:
+                    self.store.audit(
+                        "controller",
+                        "resume.archive_rejected",
+                        {"attempt": source["id"], "error": str(exc)[:300]},
+                    )
+            checkpoint = self.store.one(
+                """SELECT * FROM attempt_checkpoints
+                WHERE attempt_id=? AND plan_digest=? AND candidate_digest=?
+                ORDER BY sequence DESC,rowid DESC LIMIT 1""",
+                (
+                    source["id"],
+                    root["approved_digest"],
+                    candidate_digest,
+                ),
+            )
+            if checkpoint:
+                try:
+                    path = self.store.resolve_path(checkpoint["path"])
+                    metadata = artifacts.verify(path)
+                    if (
+                        artifacts.digest(path / "manifest.json")
+                        != checkpoint["manifest_digest"]
+                        or metadata.get("plan_digest") != root["approved_digest"]
+                        or metadata.get("candidate_digest") != candidate_digest
+                    ):
+                        raise ValueError("checkpoint binding changed")
+                    archive = checkpoint["path"]
+                    checkpoint_id = checkpoint["id"]
+                    previous = source
+                    result = json.loads(previous["result_json"] or "{}")
+                    break
+                except Exception as exc:
+                    self.store.audit(
+                        "controller",
+                        "resume.checkpoint_rejected",
+                        {"checkpoint": checkpoint["id"], "error": str(exc)[:300]},
+                    )
+                    archive = None
         self.store.execute(
             "UPDATE interruptions SET resumed_by_attempt=? WHERE id=?",
             (attempt_id, row["id"]),
@@ -331,6 +373,7 @@ class InterruptionMixin(ControllerCore):
         return {
             "attempt": previous["id"],
             "archive": archive,
+            "checkpoint": checkpoint_id,
             "category": row["category"],
             "detail": row["detail"],
             "session_id": result.get("session_id"),

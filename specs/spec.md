@@ -32,6 +32,8 @@ Declare reasonable planning and implementation assumptions in the executive summ
 - One native dispatch path, independent of the selected CLI harness, that re-acquires unstarted claims after restart; Codex subscription adapter with live isolation qualification pending.
 - Optional original-approval-bound repair/check/review branch; no reset of root budgets or deadlines.
 - Durable task records distinct from execution jobs, with revisioned user actions, attributed progress, instruction delivery states, and a conflict-safe `tasks.md` projection.
+- Verified implementation and repair milestones stored outside an execution worker, selected only when their root, approved plan, job and starting candidate still match. Heartbeats prove liveness; task progress, checkpoints and completed checks separately describe forward motion.
+- An optional budgeted, model-pinned completeness classifier may assess criterion evidence after canonical checks. Its evidence-bound shadow records never gate review, authorize repair, waive manual gates or replace human acceptance.
 - A bounded optional structured-output task supervisor. It may interpret task text and suggest updates; code retains scope, dependency, budget, evidence and acceptance authority.
 - Task interaction in the TUI and authenticated focused browser dashboard over the shared operator projection and commands.
 - Optional Warp `v1alpha1` definition input for the fixed workflow: mapped role

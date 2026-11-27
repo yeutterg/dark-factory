@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tempfile
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dark_factory import artifacts
@@ -77,6 +78,7 @@ class ExecutionService:
             # before the claim's write transaction opens, never inside it.
             self.ctrl.recover("execution-supervisor")
             self.ctrl.settle_interruptions("execution-supervisor")
+            self.ctrl.completeness_tick()
         with self.store.transaction():
             caps = self._capabilities(worker)
             # An authenticated worker polling for work is online even when no
@@ -147,7 +149,14 @@ class ExecutionService:
             artifacts.verify(archive)
             paths[f"archives/candidate-{n}"] = archive
             references[candidate["archive"]] = f"archives/candidate-{n}"
-        # Transfer only this root's prior check/review records and required artifacts.
+        resume = claimed["inputs"].get("resume") or {}
+        if resume.get("archive") and resume["archive"] not in references:
+            archive = self.store.resolve_path(resume["archive"])
+            artifacts.verify(archive)
+            paths["archives/resume"] = archive
+            references[resume["archive"]] = "archives/resume"
+        # Transfer this root's small attempt records. Historical workspace archives
+        # stay on the controller unless the candidate or selected resume needs one.
         jobs = self.ctrl.jobs(claimed["work_item"]["id"])
         attempts = [
             dict(row)
@@ -157,13 +166,6 @@ class ExecutionService:
             )
             if row["job_id"] in {j["id"] for j in jobs}
         ]
-        for row in attempts:
-            if row["archive_path"] and row["archive_path"] not in references:
-                archive = self.store.resolve_path(row["archive_path"])
-                artifacts.verify(archive)
-                name = "archives/" + row["id"]
-                paths[name] = archive
-                references[row["archive_path"]] = name
         for cid in snapshot["source"]["checks"]:
             binding = snapshot["bindings"][cid]
             for path, digest in binding["files"].items():
@@ -175,13 +177,20 @@ class ExecutionService:
                     name = "trusted/" + identity(path)
                     paths[name] = local
                     references[path] = name
+        try:
+            package = pack(paths)
+        except ValueError as exc:
+            raise ValueError(
+                "required remote inputs exceed the transport limit: "
+                + ", ".join(sorted(paths))
+            ) from exc
         return {
             "version": 1,
             "project_id": self.cfg.project_id,
             "claim": claimed,
             "claim_digest": identity(claimed),
             "references": references,
-            "package": pack(paths),
+            "package": package,
             "jobs": [dict(j) for j in jobs],
             "attempts": attempts,
             "execution": self.cfg.execution,
@@ -247,6 +256,111 @@ class ExecutionService:
             data["attempt_id"], data["instruction_id"], worker
         )
 
+    def checkpoint(self, worker, data):
+        """Ingest one verified, approval-bound workspace checkpoint."""
+        aid = data.get("attempt_id")
+        checkpoint_id = data.get("checkpoint_id")
+        if not isinstance(checkpoint_id, str) or not re.fullmatch(
+            r"cp_[a-f0-9]{12}", checkpoint_id
+        ):
+            raise ValueError("invalid checkpoint identity")
+        row = self._owned(worker, aid)
+        if row["status"] not in ACTIVE_ATTEMPT:
+            raise ControllerError("attempt is fenced")
+        job_lease = self.store.one(
+            "SELECT lease_until FROM jobs WHERE id=?", (row["job_id"],)
+        )["lease_until"]
+        if not job_lease or datetime.fromisoformat(job_lease) <= datetime.now(UTC):
+            raise ControllerError("attempt is fenced")
+        with tempfile.TemporaryDirectory(
+            prefix="factory-checkpoint-", dir=self.store.state_dir
+        ) as temporary:
+            package = Path(temporary) / "package"
+            unpack(data.get("checkpoint"), package)
+            source = package / "checkpoint"
+            metadata = artifacts.verify(source)
+            job = self.store.one("SELECT * FROM jobs WHERE id=?", (row["job_id"],))
+            root = self.store.one(
+                "SELECT * FROM work_items WHERE id=?", (job["work_item_id"],)
+            )
+            inputs = json.loads(row["inputs_json"] or "{}")
+            expected = {
+                "checkpoint_id": checkpoint_id,
+                "root_id": root["id"],
+                "job_id": job["id"],
+                "attempt_id": aid,
+                "plan_digest": root["approved_digest"],
+                "candidate_digest": identity(inputs.get("candidate", {})),
+            }
+            if any(metadata.get(key) != value for key, value in expected.items()):
+                raise ControllerError("checkpoint approval binding changed")
+            if (
+                not isinstance(metadata.get("sequence"), int)
+                or not 1 <= metadata["sequence"] <= 5
+            ):
+                raise ValueError("checkpoint sequence exceeds limit")
+            manifest_digest = artifacts.digest(source / "manifest.json")
+            destination = self.store.state_dir / "checkpoints" / aid / checkpoint_id
+            with self.store.transaction():
+                row = self._owned(worker, aid)
+                if row["status"] not in ACTIVE_ATTEMPT:
+                    raise ControllerError("attempt is fenced")
+                existing = self.store.one(
+                    "SELECT * FROM attempt_checkpoints WHERE id=?", (checkpoint_id,)
+                )
+                if existing:
+                    if existing["manifest_digest"] != manifest_digest:
+                        raise ControllerError("conflicting checkpoint replay")
+                    return {
+                        "accepted": True,
+                        "attempt_id": aid,
+                        "checkpoint_id": checkpoint_id,
+                        "manifest_digest": manifest_digest,
+                    }
+                if self.store.one(
+                    "SELECT COUNT(*) n FROM attempt_checkpoints WHERE attempt_id=?",
+                    (aid,),
+                )["n"] >= 5 or self.store.one(
+                    "SELECT id FROM attempt_checkpoints WHERE attempt_id=? AND sequence=?",
+                    (aid, metadata["sequence"]),
+                ):
+                    raise ControllerError("checkpoint limit or sequence already used")
+                lease = self.store.one(
+                    "SELECT lease_until FROM jobs WHERE id=?", (row["job_id"],)
+                )["lease_until"]
+                if not lease or datetime.fromisoformat(lease) <= datetime.now(UTC):
+                    raise ControllerError("attempt is fenced")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(source), destination)
+                detail = json.loads((destination / "checkpoint.json").read_text())
+                self.store.execute(
+                    """INSERT INTO attempt_checkpoints
+                    (id,root_id,job_id,attempt_id,sequence,path,manifest_digest,
+                     workspace_digest,plan_digest,candidate_digest,detail_json,created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        checkpoint_id,
+                        root["id"],
+                        job["id"],
+                        aid,
+                        metadata["sequence"],
+                        str(destination),
+                        manifest_digest,
+                        metadata["workspace_digest"],
+                        metadata["plan_digest"],
+                        metadata["candidate_digest"],
+                        json.dumps(detail),
+                        now_iso(),
+                    ),
+                )
+            artifacts.sync_tree(destination.parent)
+        return {
+            "accepted": True,
+            "attempt_id": aid,
+            "checkpoint_id": checkpoint_id,
+            "manifest_digest": manifest_digest,
+        }
+
     def finish(self, worker, data):
         ack = self._finish(worker, data)
         # Settlement is committed before dropping reproducible transport copies.
@@ -261,6 +375,28 @@ class ExecutionService:
             temporary.replace(path)
             artifacts.sync_tree(path.parent)
         return ack
+
+    def finish_remote(self, worker, data):
+        """Translate a permanent fence into a terminal worker disposition."""
+        try:
+            return self.finish(worker, data)
+        except ControllerError as exc:
+            if str(exc) == "attempt lease expired before result submission":
+                self.ctrl.recover("execution-supervisor")
+                if (
+                    self._owned(worker, data.get("attempt_id"))["status"]
+                    not in ACTIVE_ATTEMPT
+                ):
+                    exc = ControllerError("attempt is fenced")
+            if str(exc) != "attempt is fenced":
+                raise
+            return {
+                "accepted": False,
+                "terminal": True,
+                "disposition": "fenced",
+                "attempt_id": data.get("attempt_id"),
+                "result_digest": identity(data),
+            }
 
     def _finish(self, worker, data):
         aid = data["attempt_id"]

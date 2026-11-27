@@ -203,6 +203,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "metrics", help="Duration and outcome of every stage, by repo and runner"
     )
+    sub.add_parser(
+        "completeness-report", help="Compare shadow completeness advice with reviews"
+    )
     sub.add_parser("disk", help="Show disk use by area and by root")
     sub.add_parser("gc", help="Remove resources whose owners are finished")
     p_abandon = sub.add_parser(

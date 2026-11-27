@@ -137,12 +137,13 @@ def new_id(prefix: str) -> str:
 
 # State schema version. Each version above MIN_SCHEMA_VERSION has one step in
 # MIGRATIONS, run in order inside a transaction; a step must be safe to repeat.
-# Version 3 added work_items.origin and the improvement_signals table, which the
-# idempotent schema above creates.
-SCHEMA_VERSION = 3
+# Version 4 added milestone checkpoints and advisory completeness assessments;
+# the idempotent schema below creates both for existing stores.
+SCHEMA_VERSION = 4
 MIN_SCHEMA_VERSION = 2
 MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     3: lambda conn: None,
+    4: lambda conn: None,
 }
 
 _OWNERS: dict[str, tuple[int, Any, int]] = {}
@@ -269,6 +270,25 @@ class Store:
             detail TEXT NOT NULL, outcome TEXT NOT NULL, verdict_json TEXT,
             actor TEXT, decided_at TEXT, resumed_by_attempt TEXT);
         CREATE INDEX IF NOT EXISTS interruptions_job ON interruptions(job_id, outcome);
+        CREATE TABLE IF NOT EXISTS attempt_checkpoints (
+            id TEXT PRIMARY KEY, root_id TEXT NOT NULL, job_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL, sequence INTEGER NOT NULL, path TEXT NOT NULL,
+            manifest_digest TEXT NOT NULL, workspace_digest TEXT NOT NULL,
+            plan_digest TEXT NOT NULL, candidate_digest TEXT NOT NULL,
+            detail_json TEXT NOT NULL, created_at TEXT NOT NULL,
+            UNIQUE(attempt_id, workspace_digest),
+            FOREIGN KEY(root_id) REFERENCES work_items(id),
+            FOREIGN KEY(job_id) REFERENCES jobs(id),
+            FOREIGN KEY(attempt_id) REFERENCES attempts(id));
+        CREATE TABLE IF NOT EXISTS completeness_assessments (
+            id TEXT PRIMARY KEY, root_id TEXT NOT NULL, candidate TEXT NOT NULL,
+            evidence_digest TEXT NOT NULL, status TEXT NOT NULL,
+            response_json TEXT, agent TEXT, model TEXT,
+            reserved_cents INTEGER NOT NULL DEFAULT 0,
+            cost_cents INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL, settled_at TEXT,
+            UNIQUE(root_id,candidate,evidence_digest),
+            FOREIGN KEY(root_id) REFERENCES work_items(id));
         CREATE TABLE IF NOT EXISTS releases (
             id TEXT PRIMARY KEY, repo TEXT NOT NULL, kind TEXT NOT NULL,
             branch TEXT NOT NULL, commit_sha TEXT NOT NULL, status TEXT NOT NULL,
@@ -381,6 +401,8 @@ class Store:
         CREATE INDEX IF NOT EXISTS tasks_state ON tasks(state);
         CREATE INDEX IF NOT EXISTS task_events_root ON task_events(root_id, created_at);
         CREATE INDEX IF NOT EXISTS task_instructions_attempt ON task_instructions(attempt_id, state);
+        CREATE INDEX IF NOT EXISTS attempt_checkpoints_job
+            ON attempt_checkpoints(job_id, sequence, created_at);
         """)
         recorded = self.conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'"

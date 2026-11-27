@@ -77,6 +77,7 @@ class ResourcesMixin(ControllerCore):
                 "dispatch",
                 "inputs",
                 "archives",
+                "checkpoints",
                 "artifacts",
                 "work-items",
             )
@@ -91,7 +92,7 @@ class ResourcesMixin(ControllerCore):
                 "WHERE j.work_item_id=?",
                 (row["id"],),
             ):
-                for area in ("archives", "workspaces", "runtime"):
+                for area in ("archives", "checkpoints", "workspaces", "runtime"):
                     size += tree_size(state / area / attempt["id"])
             if size:
                 roots[row["id"]] = {
@@ -232,6 +233,18 @@ class ResourcesMixin(ControllerCore):
                 "UPDATE attempts SET cleanup_status='archive_pruned' WHERE id=?",
                 (attempt["id"],),
             )
+
+        # Checkpoints are continuation inputs. Finished roots no longer need their
+        # copied workspaces once the ordinary retention window has elapsed.
+        for attempt in self.store.query(
+            "SELECT a.* FROM attempts a JOIN jobs j ON a.job_id=j.id "
+            "JOIN work_items w ON w.id=j.work_item_id "
+            f"WHERE w.status IN {sql_set(TERMINAL_ROOT)}"
+        ):
+            if self._finished_before(attempt, cutoff):
+                checkpoint_dir = state / "checkpoints" / attempt["id"]
+                if checkpoint_dir.is_dir():
+                    remove("checkpoints", checkpoint_dir)
 
         pruned = self.prune_audit()
         leftover = self.sweep_external_worktrees()

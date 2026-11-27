@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -19,7 +20,7 @@ from urllib.request import (
 )
 
 from dark_factory import artifacts
-from dark_factory.execution.packages import MAX_BYTES, identity
+from dark_factory.execution.packages import MAX_BYTES, identity, pack
 from dark_factory.runner import process_identity
 from dark_factory.secrets import secret
 
@@ -42,6 +43,7 @@ def write_json_atomic(path, value):
 
 STDERR_TAIL_BYTES = 2000
 PREFLIGHT_SECONDS = 300
+MAX_RETAINED_FENCED_ATTEMPTS = 20
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -96,6 +98,7 @@ class WorkerClient:
                 json.dump(expected, output)
         self.accounts = accounts or {}
         self._preflighted: tuple[str, float] | None = None
+        self._checkpoint_upload: threading.Thread | None = None
         import ssl
 
         context = ssl.create_default_context(cafile=str(ca_file) if ca_file else None)
@@ -139,6 +142,9 @@ class WorkerClient:
         if not journal.exists():
             self._write(journal, {"request_id": uuid.uuid4().hex, "phase": "claim"})
         item = json.loads(journal.read_text())
+        if item["phase"] == "fenced":
+            self._retire_fenced(journal, item)
+            return True
         if item["phase"] == "settled":
             self._cleanup(item)
             journal.unlink()
@@ -260,6 +266,7 @@ class WorkerClient:
                         cancel.touch()
                     elif alive:
                         lease.touch()
+                        self._schedule_checkpoint_upload(directory, aid)
                     # None: the controller could not be reached. The executor
                     # stops by itself if the lease file ages past the lease.
                     try:
@@ -280,7 +287,13 @@ class WorkerClient:
             if time.time() - item.get("started_at", 0) < 12:
                 return False  # The start-intent/PID-publication gap must expire conservatively.
         result = self._load_result(directory, assignment)
+        self._drain_checkpoint_upload(directory, aid)
         ack = self.request("finish", result)
+        if ack.get("terminal") and ack.get("disposition") == "fenced":
+            item.update(phase="fenced", terminal_ack=ack)
+            self._write(journal, item)
+            self._retire_fenced(journal, item)
+            return True
         if (
             not ack.get("accepted")
             or ack["attempt_id"] != aid
@@ -305,6 +318,117 @@ class WorkerClient:
         self._cleanup(item)
         journal.unlink()
         return True
+
+    def _upload_checkpoints(self, directory, aid):
+        """Upload complete checkpoint archives; retry transport failures later."""
+        base = directory / "task" / "checkpoints" / aid
+        if not base.is_dir():
+            return
+        sent = directory / "checkpoint-sent"
+        sent.mkdir(exist_ok=True, mode=0o700)
+        for checkpoint in sorted(base.iterdir()):
+            if checkpoint.name.startswith(".") or not checkpoint.is_dir():
+                continue
+            marker = sent / checkpoint.name
+            if marker.exists():
+                continue
+            try:
+                ack = self.request(
+                    "checkpoint",
+                    {
+                        "attempt_id": aid,
+                        "checkpoint_id": checkpoint.name,
+                        "checkpoint": pack({"checkpoint": checkpoint}),
+                    },
+                )
+            except Exception:
+                return
+            if (
+                not ack.get("accepted")
+                or ack.get("attempt_id") != aid
+                or ack.get("checkpoint_id") != checkpoint.name
+            ):
+                raise ValueError("controller did not verify checkpoint")
+            self._write(marker, ack)
+
+    def _schedule_checkpoint_upload(self, directory, aid):
+        """Transfer milestones off the heartbeat path."""
+        if self._checkpoint_upload and self._checkpoint_upload.is_alive():
+            return
+        self._checkpoint_upload = threading.Thread(
+            target=self._upload_checkpoints, args=(directory, aid), daemon=True
+        )
+        self._checkpoint_upload.start()
+
+    def _drain_checkpoint_upload(self, directory, aid):
+        self._schedule_checkpoint_upload(directory, aid)
+        while self._checkpoint_upload and self._checkpoint_upload.is_alive():
+            alive = self._heartbeat(aid)
+            if alive is False:
+                break
+            self._checkpoint_upload.join(timeout=1)
+
+    def _retire_fenced(self, journal, item):
+        """Preserve a late result locally and let this worker claim fresh work."""
+        directory = Path(item["directory"])
+        aid = directory.name
+        expected = {"project": self.project, "worker": self.worker, "attempt": aid}
+        if (
+            directory.parent != self.state
+            or not aid.startswith("att_")
+            or directory.is_symlink()
+            or directory.exists()
+            and (
+                not (directory / "owner.json").is_file()
+                or json.loads((directory / "owner.json").read_text()) != expected
+            )
+        ):
+            raise ValueError("refusing to retain an unowned fenced attempt")
+        retained = self.state / "retired" / aid
+        retained.parent.mkdir(exist_ok=True, mode=0o700)
+        if directory.exists() and not retained.exists():
+            directory.replace(retained)
+        receipts = self.state / "receipts"
+        receipts.mkdir(exist_ok=True, mode=0o700)
+        self._write(
+            receipts / (aid + ".fenced.json"),
+            {
+                **item.get("terminal_ack", {}),
+                "retained": str(retained),
+            },
+        )
+        journal.unlink(missing_ok=True)
+        self._prune_retired()
+
+    def _prune_retired(self):
+        """Bound inspected late results; receipts remain as durable dispositions."""
+        import shutil
+
+        retired = self.state / "retired"
+        if not retired.is_dir():
+            return
+        owned = sorted(
+            (
+                path
+                for path in retired.iterdir()
+                if path.is_dir() and not path.is_symlink()
+            ),
+            key=lambda path: path.stat().st_mtime,
+        )
+        for path in owned[:-MAX_RETAINED_FENCED_ATTEMPTS]:
+            receipt = self.state / "receipts" / (path.name + ".fenced.json")
+            owner = path / "owner.json"
+            expected = {
+                "project": self.project,
+                "worker": self.worker,
+                "attempt": path.name,
+            }
+            if (
+                receipt.is_file()
+                and owner.is_file()
+                and json.loads(owner.read_text()) == expected
+            ):
+                shutil.rmtree(path)
 
     def _heartbeat(self, aid):
         """True renewed, False refused by the controller, None unknown.
