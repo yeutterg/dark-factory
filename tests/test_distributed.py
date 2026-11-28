@@ -129,6 +129,25 @@ def test_idle_worker_poll_is_visible_as_ready(tmp_path, monkeypatch):
         store.close()
 
 
+def test_invalid_capacity_is_rejected_before_telemetry_is_stored(tmp_path, monkeypatch):
+    cfg = deployment(tmp_path, monkeypatch)
+    store = Store(cfg.state_dir)
+    try:
+        ctrl = Controller(cfg, store, Path("src/dark_factory/agents/prompts"))
+        service = ExecutionService(ctrl)
+        assert service.claim("worker1", "invalid-capacity", capacity=[]) is None
+        assert store.one("SELECT 1 FROM workers WHERE id='worker1'") is None
+        worker = next(
+            item
+            for item in controller_projection(ctrl)["workers"]
+            if item["id"] == "worker1"
+        )
+        assert worker["status"] == "offline"
+        assert worker["load"] is None and worker["free_gb"] is None
+    finally:
+        store.close()
+
+
 def test_full_portable_loop_and_idempotent_settlement(tmp_path, monkeypatch):
     cfg = deployment(tmp_path, monkeypatch)
     store = Store(cfg.state_dir)

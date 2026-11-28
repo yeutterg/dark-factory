@@ -125,7 +125,7 @@ Distinguish one-offs, common symptoms, copied existing-code patterns, and weakne
 in verification or instructions. Prefer prevention in this order: architecture,
 types/APIs, deterministic enforcement, verification workflow, agent instruction.
 Recommend only; do not modify code, rules, skills, CI, or open PRs. Return only the
-required structured object."""
+required structured object. Do not duplicate a supplied existing pattern."""
 
 
 def post_json(url: str, body: dict, key: str, timeout=45.0, retries=1):

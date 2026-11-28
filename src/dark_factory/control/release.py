@@ -254,6 +254,8 @@ class ReleaseMixin(ControllerCore):
 
     def release_run_stage(self, rid, actor="controller"):
         """Run the next automatic stage to completion. Returns the stage run, or None."""
+        if self._release(rid)["status"] == "promotion_approved":
+            return self._run_promote(rid)
         lock = self._lock(rid)
         if not lock.acquire(blocking=False):
             return None  # another thread is already running a stage of this release
@@ -571,11 +573,17 @@ class ReleaseMixin(ControllerCore):
                 json.loads(package_stage["evidence_json"]) if package_stage else {}
             )
             artifacts = package_evidence.get("hosted_artifacts", [])
-            if artifacts:
+            if len(artifacts) == 1:
                 package_inputs = {
                     "package_run_id": str(package_evidence.get("run_id") or ""),
                     "package_artifact_id": str(artifacts[0]["id"]),
                     "package_digest": artifacts[0]["digest"],
+                }
+            else:
+                return {
+                    "ok": False,
+                    "runner": runner_cfg["kind"],
+                    "error": "hosted deployment requires exactly one retained hosted package artifact",
                 }
         result = hosted.run(
             stage,
@@ -609,6 +617,11 @@ class ReleaseMixin(ControllerCore):
             elif not found:
                 evidence["ok"] = False
                 evidence["error"] = "the hosted package stage produced no artifacts"
+            elif len(found) != 1:
+                evidence["ok"] = False
+                evidence["error"] = (
+                    "hosted package stages must produce exactly one artifact"
+                )
             else:
                 evidence["hosted_artifacts"] = result.artifacts
                 destination = self._artifact_store().reset(release["id"])
@@ -688,10 +701,13 @@ class ReleaseMixin(ControllerCore):
 
     def _run_promote(self, rid):
         with self._lock(rid):
-            if self._release(rid)["status"] == "promotion_approved":
-                self.store.execute(
-                    "UPDATE releases SET status='promoting' WHERE id=?", (rid,)
-                )
+            changed = self.store.execute(
+                """UPDATE releases SET status='promoting'
+                WHERE id=? AND status='promotion_approved'""",
+                (rid,),
+            )
+            if changed.rowcount != 1:
+                return self.release_status(rid)
             return self._promote_locked(rid)
 
     def _promote_locked(self, rid):
@@ -818,14 +834,21 @@ class ReleaseMixin(ControllerCore):
                 now_iso(),
             ),
         )
+        previous_package = self._stage_row(previous["id"], "package")
+        previous_package_evidence = (
+            json.loads(previous_package["evidence_json"]) if previous_package else {}
+        )
         for stage in ("assemble", "build", "test", "package"):
+            evidence = {"reused_from": previous["id"]}
+            if stage == "package":
+                evidence.update(previous_package_evidence)
             self._set_stage(
                 new,
                 stage,
                 "passed",
                 ended_at=now_iso(),
                 seconds=0.0,
-                evidence_json=json.dumps({"reused_from": previous["id"]}),
+                evidence_json=json.dumps(evidence),
             )
         # The package is not rebuilt; its directory is shared by reference.
         shutil.copytree(self._artifact_dir(previous["id"]), self._artifact_dir(new))

@@ -431,6 +431,9 @@ class Store:
             inaccessible_json TEXT NOT NULL DEFAULT '[]',
             model TEXT, cost_cents INTEGER NOT NULL DEFAULT 0,
             error TEXT);
+        CREATE TABLE IF NOT EXISTS quality_evidence_seen (
+            repo TEXT NOT NULL, evidence_id TEXT NOT NULL, seen_at TEXT NOT NULL,
+            run_id TEXT NOT NULL, PRIMARY KEY(repo,evidence_id));
         """)
         release_columns = {
             "version": "TEXT",

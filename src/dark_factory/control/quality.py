@@ -68,6 +68,16 @@ class QualityMixin(ControllerCore):
         )
         return row["ended_at"] if row else ""
 
+    def _quality_retry_ready(self, repo, kind, now):
+        row = self.store.one(
+            """SELECT status,started_at FROM quality_runs WHERE repo=? AND kind=?
+            ORDER BY started_at DESC LIMIT 1""",
+            (repo, kind),
+        )
+        if not row or row["status"] == "complete":
+            return True
+        return now - datetime.fromisoformat(row["started_at"]).timestamp() >= 3600
+
     def recover_quality(self):
         """A provider call cannot survive controller restart; make that explicit."""
         self.store.execute(
@@ -76,28 +86,27 @@ class QualityMixin(ControllerCore):
             (now_iso(),),
         )
 
-    def _quality_evidence(self, repo, since):
+    def _quality_evidence(self, repo):
         evidence = []
         available = set()
         roots = {
             row["id"]: row
             for row in self.store.query(
-                "SELECT * FROM work_items WHERE repo=? AND origin NOT LIKE 'improvement:%'",
+                """SELECT * FROM work_items w WHERE repo=?
+                AND origin NOT LIKE 'improvement:%'""",
+                (repo,),
+            )
+        }
+        seen_candidates = {
+            row["evidence_id"]
+            for row in self.store.query(
+                """SELECT evidence_id FROM quality_evidence_seen
+                WHERE repo=? AND evidence_id LIKE 'candidate:%'""",
                 (repo,),
             )
         }
         for root in roots.values():
-            latest_attempt = self.store.one(
-                """SELECT MAX(a.ended_at) ended_at FROM attempts a
-                JOIN jobs j ON j.id=a.job_id WHERE j.work_item_id=?""",
-                (root["id"],),
-            )
-            if (
-                since
-                and (root["created_at"] or "") <= since
-                and (root["accepted_at"] or "") <= since
-                and ((latest_attempt and latest_attempt["ended_at"]) or "") <= since
-            ):
+            if "candidate:" + root["id"] in seen_candidates:
                 continue
             candidate = json.loads(root["candidate_commits"] or "{}").get(repo, {})
             if not candidate:
@@ -126,8 +135,11 @@ class QualityMixin(ControllerCore):
         for row in self.store.query(
             """SELECT e.root_id,e.pr_number,e.url,e.at,e.payload_json
             FROM external_reviews e JOIN work_items w ON w.id=e.root_id
-            WHERE w.repo=? AND (?='' OR e.at>?) ORDER BY e.at LIMIT 100""",
-            (repo, since, since),
+            WHERE w.repo=? AND NOT EXISTS (
+                SELECT 1 FROM quality_evidence_seen s WHERE s.repo=w.repo
+                AND s.evidence_id='pr:'||e.root_id||':'||e.pr_number||':'||e.at)
+            ORDER BY e.at LIMIT 100""",
+            (repo,),
         ):
             evidence.append(
                 {
@@ -143,9 +155,11 @@ class QualityMixin(ControllerCore):
             """SELECT a.id,a.ended_at,a.status,a.error,a.result_json,j.kind,j.work_item_id
             FROM attempts a JOIN jobs j ON j.id=a.job_id
             JOIN work_items w ON w.id=j.work_item_id WHERE w.repo=?
-            AND a.status IN ('failed','timed_out') AND (?='' OR a.ended_at>?)
+            AND a.status IN ('failed','timed_out') AND NOT EXISTS (
+                SELECT 1 FROM quality_evidence_seen s WHERE s.repo=w.repo
+                AND s.evidence_id='attempt:'||a.id)
             ORDER BY a.ended_at LIMIT 100""",
-            (repo, since, since),
+            (repo,),
         ):
             evidence.append(
                 {
@@ -162,8 +176,11 @@ class QualityMixin(ControllerCore):
         for row in self.store.query(
             """SELECT t.id,t.root_id,t.kind,t.payload_json,t.created_at
             FROM task_events t JOIN work_items w ON w.id=t.root_id
-            WHERE w.repo=? AND (?='' OR t.created_at>?) ORDER BY t.created_at LIMIT 100""",
-            (repo, since, since),
+            WHERE w.repo=? AND NOT EXISTS (
+                SELECT 1 FROM quality_evidence_seen s WHERE s.repo=w.repo
+                AND s.evidence_id='task-event:'||t.id)
+            ORDER BY t.created_at LIMIT 100""",
+            (repo,),
         ):
             evidence.append(
                 {
@@ -177,14 +194,19 @@ class QualityMixin(ControllerCore):
             available.add("task transcripts")
         for row in self.store.query(
             """SELECT a.id,a.at,a.action,a.payload_json FROM audit a
+            JOIN work_items w ON w.id=COALESCE(
+                json_extract(a.payload_json,'$.work_item_id'),
+                json_extract(a.payload_json,'$.root'))
             WHERE a.action IN ('reject','manual_gate','external.read')
-            AND (?='' OR a.at>?) ORDER BY a.at LIMIT 100""",
-            (since, since),
+            AND w.repo=?
+            AND NOT EXISTS (
+                SELECT 1 FROM quality_evidence_seen s WHERE s.repo=w.repo
+                AND s.evidence_id='audit:'||a.id)
+            ORDER BY a.at LIMIT 100""",
+            (repo,),
         ):
             payload = json.loads(row["payload_json"])
             root_id = payload.get("work_item_id") or payload.get("root")
-            if root_id not in roots:
-                continue
             evidence.append(
                 {
                     "id": "audit:" + row["id"],
@@ -228,11 +250,25 @@ class QualityMixin(ControllerCore):
             pr_count = self.store.one(
                 """SELECT COUNT(DISTINCT e.root_id) n FROM external_reviews e
                 JOIN work_items w ON w.id=e.root_id
-                WHERE w.repo=? AND (?='' OR e.at>?)""",
-                (repo, last_observer, last_observer),
+                WHERE w.repo=? AND NOT EXISTS (
+                    SELECT 1 FROM quality_evidence_seen s WHERE s.repo=w.repo
+                    AND s.evidence_id='pr:'||e.root_id||':'||e.pr_number||':'||e.at)""",
+                (repo,),
             )["n"]
-            if force or due or pr_count >= settings["after_agent_prs"]:
-                results.append(self._quality_observe(repo, actor))
+            if (force or due or pr_count >= settings["after_agent_prs"]) and (
+                force or self._quality_retry_ready(repo, "observer", now)
+            ):
+                try:
+                    results.append(self._quality_observe(repo, actor))
+                except Exception as exc:
+                    results.append(
+                        {
+                            "repo": repo,
+                            "kind": "observer",
+                            "state": "failed",
+                            "error": str(exc)[:300],
+                        }
+                    )
             last_pattern = self._quality_last(repo, "patterns")
             pattern_due = (
                 not last_pattern
@@ -242,8 +278,22 @@ class QualityMixin(ControllerCore):
             count = self.store.one(
                 "SELECT COUNT(*) n FROM quality_observations WHERE repo=?", (repo,)
             )["n"]
-            if count >= 2 and (force or pattern_due):
-                results.append(self._quality_patterns(repo, actor))
+            if (
+                count >= 2
+                and (force or pattern_due)
+                and (force or self._quality_retry_ready(repo, "patterns", now))
+            ):
+                try:
+                    results.append(self._quality_patterns(repo, actor))
+                except Exception as exc:
+                    results.append(
+                        {
+                            "repo": repo,
+                            "kind": "patterns",
+                            "state": "failed",
+                            "error": str(exc)[:300],
+                        }
+                    )
         return {"runs": results}
 
     def _quality_input(self, fixed, records_key, records):
@@ -291,6 +341,8 @@ class QualityMixin(ControllerCore):
         except sqlite3.IntegrityError:
             return None
         command = self.cfg.commands[settings["command"]]
+        model = ""
+        cost = 0
         try:
             result = self.runner.run_json(
                 command.command,
@@ -322,8 +374,9 @@ class QualityMixin(ControllerCore):
             return run_id, output, model, cost
         except Exception as exc:
             self.store.execute(
-                "UPDATE quality_runs SET status='failed',ended_at=?,error=? WHERE id=?",
-                (now_iso(), str(exc)[:500], run_id),
+                """UPDATE quality_runs SET status='failed',ended_at=?,error=?,
+                model=?,cost_cents=? WHERE id=?""",
+                (now_iso(), str(exc)[:500], model, cost, run_id),
             )
             self.store.audit(
                 actor,
@@ -334,7 +387,7 @@ class QualityMixin(ControllerCore):
 
     def _quality_observe(self, repo, actor):
         since = self._quality_last(repo, "observer")
-        evidence, inaccessible = self._quality_evidence(repo, since)
+        evidence, inaccessible = self._quality_evidence(repo)
         existing = [
             {
                 "id": row["id"],
@@ -400,7 +453,8 @@ class QualityMixin(ControllerCore):
         if called is None:
             return {"repo": repo, "kind": "observer", "state": "already_running"}
         run_id, output, model, cost = called
-        known = {item["id"]: item for item in evidence}
+        sent = state["evidence"]
+        known = {item["id"]: item for item in sent}
         added = duplicates = 0
         for item in output.get("observations", []):
             if not isinstance(item, dict):
@@ -475,19 +529,26 @@ class QualityMixin(ControllerCore):
                 ]
             )
         )
-        self.store.execute(
-            """UPDATE quality_runs SET status='complete',ended_at=?,new_count=?,duplicate_count=?,
-            inaccessible_json=?,model=?,cost_cents=? WHERE id=?""",
-            (
-                now_iso(),
-                added,
-                duplicates,
-                json.dumps(inaccessible),
-                model,
-                cost,
-                run_id,
-            ),
-        )
+        with self.store.transaction():
+            self.store.execute(
+                """UPDATE quality_runs SET status='complete',ended_at=?,new_count=?,duplicate_count=?,
+                inaccessible_json=?,model=?,cost_cents=? WHERE id=?""",
+                (
+                    now_iso(),
+                    added,
+                    duplicates,
+                    json.dumps(inaccessible),
+                    model,
+                    cost,
+                    run_id,
+                ),
+            )
+            for evidence_item in sent:
+                self.store.execute(
+                    """INSERT OR IGNORE INTO quality_evidence_seen
+                    (repo,evidence_id,seen_at,run_id) VALUES (?,?,?,?)""",
+                    (repo, evidence_item["id"], now_iso(), run_id),
+                )
         self._write_quality_queue(repo)
         self.store.audit(
             actor,
@@ -511,12 +572,21 @@ class QualityMixin(ControllerCore):
         observations = [
             dict(row)
             for row in self.store.query(
-                "SELECT * FROM quality_observations WHERE repo=? ORDER BY created_at",
+                "SELECT * FROM quality_observations WHERE repo=? ORDER BY created_at DESC",
                 (repo,),
             )
         ]
         state, omitted = self._quality_input(
-            {},
+            {
+                "existing_patterns": [
+                    dict(row)
+                    for row in self.store.query(
+                        """SELECT id,name,supporting_json,root_cause,prevention_layer
+                        FROM quality_patterns WHERE repo=? ORDER BY analyzed_at DESC LIMIT 50""",
+                        (repo,),
+                    )
+                ]
+            },
             "observations",
             [
                 {

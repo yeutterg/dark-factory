@@ -189,8 +189,13 @@ class ExternalWorkMixin(ControllerCore):
             raise ControllerError(
                 f"nothing to submit to (status: {root['status']}); get the plan approved"
             )
+        if self.store.one(
+            "SELECT 1 FROM external_submissions WHERE root_id=? AND consumed=0", (wid,)
+        ):
+            raise ControllerError("a candidate is already waiting to be checked")
         ext = self._external_row(wid)
         bundle_tree = None
+        temporary = None
         if bundle is not None:
             import base64
             import binascii
@@ -227,10 +232,6 @@ class ExternalWorkMixin(ControllerCore):
                 raise
         elif not ext["worktree"] or not Path(ext["worktree"]).is_dir():
             raise ControllerError("run work-checkout first or submit a git bundle")
-        if self.store.one(
-            "SELECT 1 FROM external_submissions WHERE root_id=? AND consumed=0", (wid,)
-        ):
-            raise ControllerError("a candidate is already waiting to be checked")
         seq = (
             self.store.one(
                 "SELECT COALESCE(MAX(seq),0) n FROM external_submissions WHERE root_id=?",
@@ -240,12 +241,16 @@ class ExternalWorkMixin(ControllerCore):
         )
         captured = self.cfg.state_dir / SUBMISSION_DIR / wid / str(seq)
         captured.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(
-            bundle_tree or Path(ext["worktree"]),
-            captured,
-            symlinks=True,
-            ignore=shutil.ignore_patterns(".git"),
-        )
+        try:
+            shutil.copytree(
+                bundle_tree or Path(ext["worktree"]),
+                captured,
+                symlinks=True,
+                ignore=shutil.ignore_patterns(".git"),
+            )
+        finally:
+            if temporary is not None:
+                shutil.rmtree(temporary, ignore_errors=True)
         snapshot = json.loads(root["snapshot_json"])
         self.store.execute(
             "INSERT INTO external_submissions(root_id,seq,path,digest,plan_digest,base,created_at)"

@@ -48,7 +48,7 @@ def capture(controller, work_item_id: str, label: str) -> dict:
     return {"path": str(target), "case": case["id"]}
 
 
-def run(controller, suite: str, route_id: str | None = None) -> dict:
+def run(controller, suite: str) -> dict:
     root = controller.cfg.source_path.parent / "evals" / suite
     if suite != "reviewer" or not root.is_dir():
         raise ValueError("reviewer eval suite not found")
@@ -56,7 +56,7 @@ def run(controller, suite: str, route_id: str | None = None) -> dict:
     controller.store.execute(
         """INSERT INTO eval_runs(id,suite,route_id,status,started_at)
         VALUES (?,?,?,?,?)""",
-        (run_id, suite, route_id, "running", now_iso()),
+        (run_id, suite, None, "running", now_iso()),
     )
     outcomes = []
     for path in sorted(root.glob("*.yaml")):

@@ -98,7 +98,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_eval_run = sub.add_parser("eval-run")
     p_eval_run.add_argument("--suite", default="reviewer")
-    p_eval_run.add_argument("--route")
     p_eval_report = sub.add_parser("eval-report")
     p_eval_report.add_argument("--run-id")
     p_intake = sub.add_parser("intake")
@@ -590,7 +589,7 @@ def _dispatch(args: argparse.Namespace) -> int:
             if args.cmd == "eval-capture":
                 result = capture(ctrl, args.work_item_id, args.label)
             elif args.cmd == "eval-run":
-                result = run(ctrl, args.suite, args.route)
+                result = run(ctrl, args.suite)
             else:
                 result = report(ctrl, args.run_id)
             print(json.dumps(result, indent=2))

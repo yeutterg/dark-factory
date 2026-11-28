@@ -110,6 +110,8 @@ class ExecutionService:
             self.ctrl.completeness_tick()
         with self.store.transaction():
             caps = self._capabilities(worker)
+            if not self._capacity_available(worker, capacity):
+                return None
             # An authenticated worker polling for work is online even when no
             # assignment is eligible. Preserve busy while an active lease owns
             # it; _claim changes the flag atomically when it assigns work.
@@ -130,8 +132,6 @@ class ExecutionService:
                     raise ControllerError("replayed assignment is fenced")
                 path = self.store.state_dir / "dispatch" / previous / "assignment.json"
                 return json.loads(path.read_text())
-            if not self._capacity_available(worker, capacity):
-                return None
             claimed = self.ctrl.claim_job(worker, caps)
             if claimed is None:
                 return None

@@ -209,6 +209,57 @@ def test_rejects_observation_without_supplied_evidence(tmp_path):
     store.close()
 
 
+def test_overflow_evidence_remains_eligible_for_the_next_batch(tmp_path):
+    controller, store, _ = quality_controller(tmp_path)
+    for index in range(3):
+        evidence_id = add_failed_attempt(store, f"overflow_{index}")
+        store.execute(
+            "UPDATE attempts SET error=? WHERE id=?",
+            ("failure detail " * 400, evidence_id.removeprefix("attempt:")),
+        )
+
+    sent_batches = []
+
+    def fake_run(command, operation, state, request_id, timeout):
+        ids = [item["id"] for item in state["evidence"]]
+        sent_batches.append(ids)
+        return result({"observations": [], "inaccessible_evidence": []})
+
+    controller.runner.run_json = fake_run
+    controller._quality_observe(controller.cfg.repositories[0], "test")
+    first_seen = {
+        row["evidence_id"] for row in store.query("SELECT * FROM quality_evidence_seen")
+    }
+    assert first_seen == set(sent_batches[0])
+    assert len(first_seen) < 3
+
+    controller._quality_observe(controller.cfg.repositories[0], "test")
+    assert set(sent_batches[1]).isdisjoint(first_seen)
+    assert store.one("SELECT COUNT(*) n FROM quality_evidence_seen")["n"] > len(
+        first_seen
+    )
+    store.close()
+
+
+def test_failed_provider_call_is_accounted_and_backed_off(tmp_path):
+    controller, store, _ = quality_controller(tmp_path)
+    add_failed_attempt(store, "provider_failure")
+
+    def wrong_model(command, operation, state, request_id, timeout):
+        response = result({"observations": [], "inaccessible_evidence": []})
+        response["evidence"]["model"] = "unexpected-model"
+        return response
+
+    controller.runner.run_json = wrong_model
+    failed = controller.quality_tick(force=True)["runs"][0]
+    assert failed["state"] == "failed"
+    run = store.one("SELECT * FROM quality_runs")
+    assert run["status"] == "failed" and run["cost_cents"] == 1
+    assert controller.quality_tick()["runs"] == []
+    assert store.one("SELECT COUNT(*) n FROM quality_evidence_seen")["n"] == 0
+    store.close()
+
+
 def test_adapter_uses_strict_schema_and_refuses_an_unsafe_budget():
     request = make_request(
         "observe_quality",

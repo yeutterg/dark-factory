@@ -821,27 +821,7 @@ def _normalize_sources(
         if not source.get("allowed_paths"):
             raise ConfigError("source needs explicit allowed_paths")
         if not source.get("checks"):
-            pipeline_has_checks = bool(remote)
-            if not remote:
-                try:
-                    from dark_factory.pipeline import read_pipeline
-
-                    pipeline, _ = read_pipeline(
-                        path, source.get("pipeline_ref", "main")
-                    )
-                    pipeline_has_checks = bool(
-                        pipeline
-                        and any(
-                            pipeline.change[name].applicable
-                            for name in ("build", "test")
-                        )
-                    )
-                except Exception:
-                    pipeline_has_checks = False
-            if not pipeline_has_checks:
-                raise ConfigError(
-                    "source needs canonical checks or pipeline build/test steps"
-                )
+            raise ConfigError("source needs canonical checks")
         for cid in source["checks"]:
             if cid not in commands:
                 raise ConfigError(f"unknown verification command {cid}")
