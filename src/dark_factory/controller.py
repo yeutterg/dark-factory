@@ -23,6 +23,7 @@ from dark_factory.control.improvement import ImprovementMixin
 from dark_factory.control.interruptions import InterruptionMixin
 from dark_factory.control.planning import PlanningMixin
 from dark_factory.control.policy import PolicyMixin
+from dark_factory.control.quality import QualityMixin
 from dark_factory.control.release import ReleaseMixin
 from dark_factory.control.resources import ResourcesMixin
 from dark_factory.control.results import ResultsMixin
@@ -58,6 +59,7 @@ class Controller(
     ExternalWorkMixin,
     GateMixin,
     InterruptionMixin,
+    QualityMixin,
     ImprovementMixin,
     ReleaseMixin,
     ResourcesMixin,
@@ -109,6 +111,7 @@ class Controller(
         sync_all(cfg)
         self._save_config()
         self.scrub_retired_credentials()
+        self.recover_quality()
         self.recover_completeness()
 
     def jobs(self, wid):

@@ -41,6 +41,8 @@ DEFAULT_DECIDER_CONFIDENCE = 0.8
 DEFAULT_TASK_SUPERVISOR_REQUESTS = 20
 DEFAULT_TASK_SUPERVISOR_INPUT_TOKENS = 4000
 DEFAULT_TASK_SUPERVISOR_OUTPUT_TOKENS = 800
+DEFAULT_QUALITY_INPUT_TOKENS = 16000
+DEFAULT_QUALITY_OUTPUT_TOKENS = 2000
 DEFAULT_MAX_SECONDS = 7200
 DEFAULT_LEASE_SECONDS = 30
 BLOCKED_REGIONS = {"CN", "CHINA", "PRC"}
@@ -272,6 +274,34 @@ class FactoryConfig:
         }
 
     @property
+    def quality_observer(self) -> dict[str, Any]:
+        """Read-only evidence observer and recurring-pattern analysis cadence."""
+        table = self._table("quality_observer")
+        if not table or not table.get("enabled", True):
+            return {"enabled": False}
+        return {
+            "enabled": table.get("enabled", True),
+            "command": table.get("command", "quality-observer"),
+            "repositories": list(table.get("repositories", self.repositories)),
+            "observer_interval_seconds": table.get("observer_interval_seconds", 86400),
+            "pattern_interval_seconds": table.get(
+                "pattern_interval_seconds", 3 * 86400
+            ),
+            "after_agent_prs": table.get("after_agent_prs", 5),
+            "model": table["model"],
+            "provider": table["provider"],
+            "region": table["region"],
+            "pricing_evidence": table["pricing_evidence"],
+            "budget_cents": table.get("budget_cents", 25),
+            "max_input_tokens": table.get(
+                "max_input_tokens", DEFAULT_QUALITY_INPUT_TOKENS
+            ),
+            "max_output_tokens": table.get(
+                "max_output_tokens", DEFAULT_QUALITY_OUTPUT_TOKENS
+            ),
+        }
+
+    @property
     def max_seconds(self) -> int:
         return self.execution.get("max_seconds", DEFAULT_MAX_SECONDS)
 
@@ -494,6 +524,58 @@ def _parse_routes(
             ("max_output_tokens", DEFAULT_TASK_SUPERVISOR_OUTPUT_TOKENS, 1),
         ):
             _integer(task_supervisor, key, default, minimum)
+
+    quality = raw.get("quality_observer", {})
+    if not isinstance(quality, dict):
+        raise ConfigError("quality_observer must be a table")
+    _fields(
+        quality,
+        {
+            "enabled",
+            "command",
+            "repositories",
+            "observer_interval_seconds",
+            "pattern_interval_seconds",
+            "after_agent_prs",
+            "model",
+            "provider",
+            "region",
+            "pricing_evidence",
+            "budget_cents",
+            "max_input_tokens",
+            "max_output_tokens",
+        },
+        "quality_observer",
+    )
+    if quality:
+        if "enabled" in quality and type(quality["enabled"]) is not bool:
+            raise ConfigError("quality_observer.enabled must be a boolean")
+    if quality and quality.get("enabled", True):
+        for key in ("model", "provider", "region", "pricing_evidence"):
+            if not isinstance(quality.get(key), str) or not quality[key].strip():
+                raise ConfigError(f"quality_observer.{key} is required")
+        if quality["region"].upper() in blocked:
+            raise ConfigError("quality observer region is blocked by geography policy")
+        repos = quality.get("repositories", raw.get("repositories", []))
+        if (
+            not isinstance(repos, list)
+            or not repos
+            or any(repo not in raw.get("repositories", []) for repo in repos)
+        ):
+            raise ConfigError(
+                "quality_observer.repositories must name configured repositories"
+            )
+        for key, default, minimum in (
+            ("observer_interval_seconds", 86400, 3600),
+            ("pattern_interval_seconds", 3 * 86400, 86400),
+            ("after_agent_prs", 5, 1),
+            ("budget_cents", 25, 1),
+            ("max_input_tokens", DEFAULT_QUALITY_INPUT_TOKENS, 4000),
+            ("max_output_tokens", DEFAULT_QUALITY_OUTPUT_TOKENS, 200),
+        ):
+            _integer(quality, key, default, minimum)
+        if quality.get("max_output_tokens", DEFAULT_QUALITY_OUTPUT_TOKENS) > 8192:
+            raise ConfigError("quality_observer.max_output_tokens must be <= 8192")
 
     for rid, item in routes_raw.items():
         if not isinstance(item, dict):
@@ -894,6 +976,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             "workers",
             "decider",
             "task_supervisor",
+            "quality_observer",
             "definition",
             "improvement",
             "disk",
@@ -1107,6 +1190,13 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         and supervisor_table.get("command", "task-supervisor") not in commands
     ):
         raise ConfigError("task_supervisor.command must name a configured command")
+    quality_table = raw.get("quality_observer", {})
+    if (
+        quality_table
+        and quality_table.get("enabled", True)
+        and quality_table.get("command", "quality-observer") not in commands
+    ):
+        raise ConfigError("quality_observer.command must name a configured command")
 
     prompts_raw = raw.get("prompts", {})
     if not isinstance(prompts_raw, dict):

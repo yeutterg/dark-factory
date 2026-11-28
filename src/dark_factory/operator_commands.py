@@ -303,6 +303,24 @@ COMMANDS: dict[str, OperatorCommand] = {
             lambda c, p, a: c.completeness_report(),
             render=_pretty,
         ),
+        OperatorCommand(
+            "quality-run",
+            lambda c, p, a: c.quality_tick(a, force=True, only_repo=p.get("repo")),
+            ("repo",),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "quality-status",
+            lambda c, p, a: c.quality_status(p.get("repo")),
+            ("repo",),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "quality-pattern-approve",
+            lambda c, p, a: c.quality_pattern_approve(p["pattern_id"], a),
+            ("pattern_id",),
+            render=_pretty,
+        ),
         OperatorCommand("disk", lambda c, p, a: c.disk_usage(), render=_pretty),
         OperatorCommand("gc", lambda c, p, a: c.sweep_resources(a), render=_pretty),
         OperatorCommand(

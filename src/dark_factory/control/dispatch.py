@@ -676,6 +676,10 @@ class DispatchMixin(ControllerCore):
         except Exception as exc:  # Publishing must never stop recovery.
             self.store.audit("controller", "external.error", {"error": str(exc)[:500]})
         try:
+            self.quality_tick()
+        except Exception as exc:  # Observation must never stop recovery.
+            self.store.audit("controller", "quality.error", {"error": str(exc)[:500]})
+        try:
             self.improvement_tick()
         except Exception as exc:  # The loop must never stop recovery.
             self.store.audit(

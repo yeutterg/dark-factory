@@ -242,6 +242,21 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "completeness-report", help="Compare shadow completeness advice with reviews"
     )
+    p_quality_run = sub.add_parser(
+        "quality-run", help="Run the evidence observer and due pattern analysis"
+    )
+    p_quality_run.add_argument("--repo")
+    p_quality_run.add_argument("--actor", default="operator")
+    p_quality_status = sub.add_parser(
+        "quality-status", help="Show per-repository quality memory"
+    )
+    p_quality_status.add_argument("--repo")
+    p_quality_approve = sub.add_parser(
+        "quality-pattern-approve",
+        help="Approve a recommendation; instruction patterns may enter improvement",
+    )
+    p_quality_approve.add_argument("pattern_id")
+    p_quality_approve.add_argument("--actor", required=True)
     sub.add_parser("disk", help="Show disk use by area and by root")
     sub.add_parser("gc", help="Remove resources whose owners are finished")
     p_abandon = sub.add_parser(
@@ -313,6 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
             "github-codehost",
             "jev-decision",
             "task-supervisor",
+            "quality-observer",
         ],
     )
     p_adapter.add_argument(
@@ -459,6 +475,13 @@ def _dispatch(args: argparse.Namespace) -> int:
             )
 
             supervisor_main(args.adapter_args)
+            return 0
+        if args.name == "quality-observer":
+            from dark_factory.adapters.decision.quality_observer import (
+                main as quality_main,
+            )
+
+            quality_main(args.adapter_args)
             return 0
         if args.name == "github-codehost":
             from dark_factory.adapters.git.github import main as git_main

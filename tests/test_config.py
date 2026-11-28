@@ -73,6 +73,39 @@ def test_continuation_can_be_configured_on_the_simulation_example():
     assert all(r.harness == "fake" for r in cfg.routes.values())
 
 
+def test_quality_observer_requires_explicit_model_evidence_when_enabled():
+    path = Path("examples/factory.toml").resolve()
+    base = path.read_text(encoding="utf-8")
+    disabled = parse_toml_bytes(
+        (base + "\n[quality_observer]\nenabled = false\n").encode(), path
+    )
+    assert disabled.quality_observer == {"enabled": False}
+
+    command = """
+[commands.quality-observer]
+argv = ["dark-factory", "adapter", "quality-observer"]
+
+[quality_observer]
+model = "small-observer-v1"
+provider = "fixture"
+region = "US"
+pricing_evidence = "fixture pricing"
+budget_cents = 5
+max_input_tokens = 4000
+max_output_tokens = 500
+"""
+    configured = parse_toml_bytes((base + command).encode(), path)
+    assert configured.quality_observer["model"] == "small-observer-v1"
+
+    with pytest.raises(ConfigError, match="pricing_evidence"):
+        parse_toml_bytes(
+            (
+                base + command.replace('pricing_evidence = "fixture pricing"\n', "")
+            ).encode(),
+            path,
+        )
+
+
 def test_compose_live_example_has_only_live_routes(monkeypatch) -> None:
     path = Path("examples/compose/factory-live.toml").resolve()
     text = path.read_text(encoding="utf-8")

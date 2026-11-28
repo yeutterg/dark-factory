@@ -140,13 +140,14 @@ def new_id(prefix: str) -> str:
 # Version 5 unifies release/worker execution state. Version 6 adds deterministic
 # metrics and offline evaluation history. The idempotent schema below creates
 # the same shape for both new and upgraded stores.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 MIN_SCHEMA_VERSION = 2
 MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     3: lambda conn: None,
     4: lambda conn: None,
     5: lambda conn: None,
     6: lambda conn: None,
+    7: lambda conn: None,
 }
 
 _OWNERS: dict[str, tuple[int, Any, int]] = {}
@@ -404,6 +405,32 @@ class Store:
             detail_json TEXT NOT NULL DEFAULT '{}',
             PRIMARY KEY(run_id,case_id),
             FOREIGN KEY(run_id) REFERENCES eval_runs(id));
+        CREATE TABLE IF NOT EXISTS quality_observations (
+            id TEXT PRIMARY KEY, repo TEXT NOT NULL, fingerprint TEXT NOT NULL,
+            observed_at TEXT NOT NULL, title TEXT NOT NULL,
+            evidence_json TEXT NOT NULL, root_ids_json TEXT NOT NULL DEFAULT '[]',
+            what_happened TEXT NOT NULL, why_it_matters TEXT NOT NULL,
+            category TEXT NOT NULL, similar_json TEXT NOT NULL DEFAULT '[]',
+            confidence TEXT NOT NULL, created_at TEXT NOT NULL,
+            UNIQUE(repo,fingerprint));
+        CREATE TABLE IF NOT EXISTS quality_patterns (
+            id TEXT PRIMARY KEY, repo TEXT NOT NULL, fingerprint TEXT NOT NULL,
+            analyzed_at TEXT NOT NULL, name TEXT NOT NULL,
+            supporting_json TEXT NOT NULL, root_cause TEXT NOT NULL,
+            repetition_reason TEXT NOT NULL, prevention_layer TEXT NOT NULL,
+            systemic_change TEXT NOT NULL, verification TEXT NOT NULL,
+            confidence TEXT NOT NULL, uncertainty TEXT NOT NULL,
+            approved_by TEXT, approved_at TEXT, improvement_root_id TEXT,
+            UNIQUE(repo,fingerprint));
+        CREATE TABLE IF NOT EXISTS quality_runs (
+            id TEXT PRIMARY KEY, repo TEXT NOT NULL, kind TEXT NOT NULL,
+            status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT,
+            evidence_count INTEGER NOT NULL DEFAULT 0,
+            new_count INTEGER NOT NULL DEFAULT 0,
+            duplicate_count INTEGER NOT NULL DEFAULT 0,
+            inaccessible_json TEXT NOT NULL DEFAULT '[]',
+            model TEXT, cost_cents INTEGER NOT NULL DEFAULT 0,
+            error TEXT);
         """)
         release_columns = {
             "version": "TEXT",
@@ -427,6 +454,13 @@ class Store:
         ):
             if column.split()[0] not in present:
                 self.conn.execute(f"ALTER TABLE supervisor_calls ADD COLUMN {column}")
+        pattern_columns = {
+            row[1] for row in self.conn.execute("PRAGMA table_info(quality_patterns)")
+        }
+        if "improvement_root_id" not in pattern_columns:
+            self.conn.execute(
+                "ALTER TABLE quality_patterns ADD COLUMN improvement_root_id TEXT"
+            )
         # Jobs created before these columns existed carry the same facts in spec_json
         # and a numeric position prefix in their identifier.
         self.conn.execute(
@@ -453,6 +487,12 @@ class Store:
             ON attempt_checkpoints(job_id, sequence, created_at);
         CREATE INDEX IF NOT EXISTS release_items_work ON release_items(work_item_id);
         CREATE INDEX IF NOT EXISTS commit_metrics_commit ON commit_metrics(repo,commit_sha);
+        CREATE INDEX IF NOT EXISTS quality_observations_repo
+            ON quality_observations(repo,created_at);
+        CREATE INDEX IF NOT EXISTS quality_patterns_repo
+            ON quality_patterns(repo,analyzed_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS quality_one_running_kind
+            ON quality_runs(repo,kind) WHERE status='running';
         """)
         recorded = self.conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'"
