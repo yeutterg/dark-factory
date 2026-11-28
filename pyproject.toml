@@ -14,7 +14,7 @@ dependencies = ["PyYAML>=6.0,<7"]
 
 [project.optional-dependencies]
 tui = ["textual>=8.2,<9"]
-dev = ["textual>=8.2,<9", "pytest>=9.1", "pytest-xdist==3.8.0", "ruff==0.17.5", "mypy==2.4.1", "jsonschema>=4.23"]
+dev = ["textual>=8.2,<9", "pytest>=9.1", "pytest-xdist==3.8.0", "ruff==0.17.6", "mypy==2.4.1", "jsonschema>=4.23"]
 
 [project.scripts]
 dark-factory = "dark_factory.cli:main"
