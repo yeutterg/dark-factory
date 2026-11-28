@@ -119,12 +119,29 @@ def make_handler(controller: Controller) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header(
                 "Content-Security-Policy",
-                "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'",
+                "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
             )
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+
+        def _asset(self, name: str) -> None:
+            from dark_factory.ui.web import static_asset
+
+            body = static_asset(name)
+            content_type = (
+                "text/css; charset=utf-8"
+                if name.endswith(".css")
+                else "text/javascript; charset=utf-8"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "public, max-age=300")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
             return
@@ -156,6 +173,9 @@ def make_handler(controller: Controller) -> type[BaseHTTPRequestHandler]:
 
                 self._html(200, LOGIN_HTML)
                 return
+            if path.startswith("/operator/static/"):
+                self._asset(path.rsplit("/", 1)[-1])
+                return
             if path == "/operator/dashboard":
                 session = self._session()
                 if not session:
@@ -165,7 +185,38 @@ def make_handler(controller: Controller) -> type[BaseHTTPRequestHandler]:
                     return
                 from dark_factory.ui.web import dashboard_html
 
-                self._html(200, dashboard_html(session["csrf"], session["actor"]))
+                self._html(200, dashboard_html())
+                return
+            if path == "/operator/session":
+                session = self._session()
+                if not session:
+                    self._send(401, {"ok": False, "error": "unauthorized"})
+                    return
+                self._send(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "actor": session["actor"],
+                            "csrf": session["csrf"],
+                        },
+                    },
+                )
+                return
+            if path == "/operator/events":
+                if not self._operator_auth():
+                    self._send(401, {"ok": False, "error": "unauthorized"})
+                    return
+                row = controller.store.one("SELECT MAX(rowid) tick FROM audit")
+                tick = row["tick"] if row else 0
+                body = f"retry: 3000\ndata: {tick or 0}\n\n".encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("X-Accel-Buffering", "no")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
                 return
             if path == "/operator/view":
                 if not self._operator_auth():
@@ -175,11 +226,14 @@ def make_handler(controller: Controller) -> type[BaseHTTPRequestHandler]:
 
                 query = parse_qs(urlparse(self.path).query)
                 detail_id = query.get("work_item_id", [None])[0]
+                release_id = query.get("release_id", [None])[0]
                 self._send(
                     200,
                     {
                         "ok": True,
-                        "result": controller_projection(controller, detail_id),
+                        "result": controller_projection(
+                            controller, detail_id, release_id
+                        ),
                     },
                 )
                 return
@@ -190,6 +244,23 @@ def make_handler(controller: Controller) -> type[BaseHTTPRequestHandler]:
 
         def _post(self) -> None:
             path = urlparse(self.path).path
+            if path == "/operator/logout":
+                session = self._session()
+                if not session or not self._session_mutation_allowed(session):
+                    self._send(403, {"ok": False, "error": "invalid browser request"})
+                    return
+                cookie = SimpleCookie(self.headers.get("Cookie", ""))
+                morsel = cookie.get("dark_factory_session")
+                if morsel:
+                    sessions.pop(morsel.value, None)
+                self._send(
+                    200,
+                    {"ok": True, "result": {}},
+                    {
+                        "Set-Cookie": "dark_factory_session=; HttpOnly; SameSite=Strict; Path=/operator; Max-Age=0"
+                    },
+                )
+                return
             if path == "/operator/session":
                 source = self.client_address[0]
                 if throttled(source):
@@ -254,7 +325,9 @@ def make_handler(controller: Controller) -> type[BaseHTTPRequestHandler]:
                 if operation == "preflight":
                     result = service.preflight(worker)
                 elif operation == "claim":
-                    result = service.claim(worker, data["request_id"])
+                    result = service.claim(
+                        worker, data["request_id"], data.get("capacity")
+                    )
                 elif operation == "heartbeat":
                     result = service.heartbeat(worker, data["attempt_id"])
                 elif operation == "start":

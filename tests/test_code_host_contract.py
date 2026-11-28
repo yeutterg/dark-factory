@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import subprocess
+import zipfile
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -229,6 +232,31 @@ def test_a_hosted_run_is_dispatched_found_by_request_and_read(host):
     state = call(handle, "get_run", run_id=run_id)
     assert state["status"] == "completed" and state["conclusion"] == "success"
     assert call(handle, "list_run_artifacts", run_id=run_id)["artifacts"] == []
+
+
+def test_artifact_download_streams_beyond_command_output_limit(tmp_path, monkeypatch):
+    fixture = tmp_path / "artifact.zip"
+    with zipfile.ZipFile(fixture, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("package.bin", os.urandom(3_000_000))
+    binary = tmp_path / "gh"
+    binary.write_text(
+        '#!/bin/sh\nexec python3 -c "import os,sys; '
+        "sys.stdout.buffer.write(open(os.environ['ARTIFACT_FIXTURE'],'rb').read())\"\n"
+    )
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("ARTIFACT_FIXTURE", str(fixture))
+    destination = tmp_path / "download"
+    evidence = github.download_artifact(
+        REPO,
+        {
+            "artifact_id": 7,
+            "expected_digest": hashlib.sha256(fixture.read_bytes()).hexdigest(),
+            "destination_path": str(destination),
+        },
+    )
+    assert evidence["files"][0]["size"] == 3_000_000
+    assert (destination / "package.bin").stat().st_size == 3_000_000
 
 
 def test_every_operation_core_uses_is_implemented(host):

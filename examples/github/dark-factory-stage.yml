@@ -14,16 +14,35 @@ on:
       commit: {required: true, type: string}
       steps_json: {required: true, type: string}
       runs_on: {required: true, type: string}
+      package_run_id: {required: false, type: string}
+      package_artifact_id: {required: false, type: string}
+      package_digest: {required: false, type: string}
+      gh_environment: {required: false, type: string}
 permissions:
   contents: read
+  actions: read
 jobs:
   stage:
     runs-on: ${{ inputs.runs_on }}
+    environment: ${{ inputs.gh_environment }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.commit }}
+      - name: Download the exact package
+        if: inputs.package_artifact_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ inputs.package_artifact_id }}
+          EXPECTED_DIGEST: ${{ inputs.package_digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/factory-package"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$RUNNER_TEMP/package.zip"
+          echo "${EXPECTED_DIGEST#sha256:}  $RUNNER_TEMP/package.zip" | sha256sum --check --strict
+          unzip -q "$RUNNER_TEMP/package.zip" -d "$RUNNER_TEMP/factory-package"
+          echo "FACTORY_PACKAGE=$RUNNER_TEMP/factory-package" >> "$GITHUB_ENV"
+          echo "FACTORY_PACKAGE_DIGEST=${EXPECTED_DIGEST#sha256:}" >> "$GITHUB_ENV"
       - name: Run the stage's steps
         env:
           FACTORY_STAGE: ${{ inputs.stage }}

@@ -59,6 +59,9 @@ STAGE_FIELDS = {
     "secrets",
     "manual",
     "not_applicable",
+    "poll_interval_seconds",
+    "max_wait_seconds",
+    "min_soak_seconds",
 }
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
 
@@ -81,6 +84,9 @@ class Stage:
     secrets: list[str] = field(default_factory=list)
     manual: list[str] = field(default_factory=list)
     not_applicable: str = ""
+    poll_interval_seconds: int = 0
+    max_wait_seconds: int = 0
+    min_soak_seconds: int = 0
 
     @property
     def applicable(self) -> bool:
@@ -100,12 +106,14 @@ class Pipeline:
     change: dict[str, Stage] = field(default_factory=dict)
     releases: dict[str, Release] = field(default_factory=dict)
     digest: str = ""
+    budgets: dict[str, dict[str, float]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "digest": self.digest,
             "change": {k: asdict(v) for k, v in self.change.items()},
             "releases": {k: asdict(v) for k, v in self.releases.items()},
+            "budgets": self.budgets,
         }
 
     @classmethod
@@ -122,6 +130,7 @@ class Pipeline:
                 for k, v in data["releases"].items()
             },
             digest=data["digest"],
+            budgets=data.get("budgets", {}),
         )
 
 
@@ -160,6 +169,16 @@ def _stage(name: str, raw: Any, label: str) -> Stage:
         raise PipelineError(f"{label} timeout_seconds must be 1 to 86400")
     if "network" in raw and type(raw["network"]) is not bool:
         raise PipelineError(f"{label} network must be a boolean")
+    polling = {}
+    for key in ("poll_interval_seconds", "max_wait_seconds", "min_soak_seconds"):
+        value = raw.get(key, 0)
+        if type(value) is not int or value < 0:
+            raise PipelineError(f"{label} {key} must be a non-negative integer")
+        polling[key] = value
+    if any(polling.values()) and name != "verify":
+        raise PipelineError(f"{label} polling is supported only for verify")
+    if polling["poll_interval_seconds"] and not polling["max_wait_seconds"]:
+        raise PipelineError(f"{label} polling requires max_wait_seconds")
     secrets = _strings(raw.get("secrets", []), f"{label} secrets")
     caches = _strings(raw.get("caches", []), f"{label} caches")
     for item in [*secrets, *caches]:
@@ -177,6 +196,9 @@ def _stage(name: str, raw: Any, label: str) -> Stage:
         caches=caches,
         secrets=secrets,
         manual=_strings(raw.get("manual", []), f"{label} manual"),
+        poll_interval_seconds=polling["poll_interval_seconds"],
+        max_wait_seconds=polling["max_wait_seconds"],
+        min_soak_seconds=polling["min_soak_seconds"],
     )
 
 
@@ -189,7 +211,7 @@ def parse_pipeline(text: str) -> Pipeline:
         raise PipelineError("the pipeline must be a YAML object")
     if raw.get("schemaVersion") != SCHEMA_VERSION:
         raise PipelineError(f"schemaVersion must be {SCHEMA_VERSION}")
-    extra = sorted(set(raw) - {"schemaVersion", "change", "release"})
+    extra = sorted(set(raw) - {"schemaVersion", "change", "release", "budgets"})
     if extra:
         raise PipelineError(f"unknown pipeline fields: {', '.join(extra)}")
     change_raw = raw.get("change")
@@ -200,6 +222,18 @@ def parse_pipeline(text: str) -> Pipeline:
             f"change must configure exactly: {', '.join(CHANGE_STAGES)}"
         )
     change = {n: _stage(n, change_raw[n], f"change.{n}") for n in CHANGE_STAGES}
+    budgets_raw = raw.get("budgets", {})
+    if not isinstance(budgets_raw, dict):
+        raise PipelineError("budgets must be an object")
+    budgets = {}
+    for metric, limits in budgets_raw.items():
+        if not NAME.fullmatch(str(metric)) or not isinstance(limits, dict):
+            raise PipelineError(f"metric budget {metric!r} is invalid")
+        if set(limits) - {"max", "max_delta"} or not limits:
+            raise PipelineError("metric budgets support max and max_delta")
+        if not all(type(value) in {int, float} for value in limits.values()):
+            raise PipelineError("metric budget limits must be numeric")
+        budgets[str(metric)] = {key: float(value) for key, value in limits.items()}
     releases: dict[str, Release] = {}
     release_raw = raw.get("release", {})
     if not isinstance(release_raw, dict):
@@ -229,7 +263,7 @@ def parse_pipeline(text: str) -> Pipeline:
             )
         releases[kind] = Release(kind=kind, branch=branch, keep=keep, stages=stages)
     digest = hashlib.sha256(text.encode()).hexdigest()
-    return Pipeline(change=change, releases=releases, digest=digest)
+    return Pipeline(change=change, releases=releases, digest=digest, budgets=budgets)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -255,6 +289,39 @@ def read_pipeline(
     if not listing:
         return None, commit
     return parse_pipeline(_git(repo, "show", f"{commit}:{path}")), commit
+
+
+def read_rubrics(repo: Path, commit: str) -> list[dict[str, Any]]:
+    """Read inert, main-pinned scorer markdown without executing repository code."""
+    paths = _git(
+        repo, "ls-tree", "-r", "--name-only", commit, "--", "factory/scorers"
+    ).splitlines()
+    rubrics = []
+    for path in paths:
+        if not path.endswith(("/scorer.md", ".md")):
+            continue
+        body = _git(repo, "show", f"{commit}:{path}")
+        mode = "shadow"
+        rule_id = Path(path).parent.name
+        if body.startswith("---\n") and "\n---\n" in body[4:]:
+            header, body = body[4:].split("\n---\n", 1)
+            metadata = yaml.safe_load(header) or {}
+            if not isinstance(metadata, dict):
+                raise PipelineError(f"rubric metadata in {path} must be an object")
+            mode = metadata.get("mode", "shadow")
+            rule_id = metadata.get("id", rule_id)
+        if mode not in {"shadow", "blocking"} or not NAME.fullmatch(str(rule_id)):
+            raise PipelineError(f"rubric {path} has invalid id or mode")
+        rubrics.append(
+            {
+                "id": str(rule_id),
+                "mode": mode,
+                "path": path,
+                "body": body,
+                "digest": hashlib.sha256(body.encode()).hexdigest(),
+            }
+        )
+    return rubrics
 
 
 # Tools that run files from the repository without naming them on the command line.
@@ -404,4 +471,14 @@ def init_repository(repository: Path) -> list[str]:
     if "Working through Dark Factory" not in text:
         agents.write_text(text.rstrip() + "\n" + AGENT_NOTE)
         written.append("AGENTS.md")
+    skill = repository / ".factory-skill" / "SKILL.md"
+    if not skill.exists():
+        skill.parent.mkdir(parents=True, exist_ok=True)
+        skill.write_text(
+            "# Dark Factory contributor\n\n"
+            "Use `work-start`, `work-plan`, `work-checkout`, `work-submit`, and "
+            "`work-status` in that order. Never approve, accept, merge, or widen "
+            "the approved paths. Treat the returned base commit and allowed paths "
+            "as immutable authority.\n"
+        )
     return written

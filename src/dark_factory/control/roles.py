@@ -81,6 +81,25 @@ def parse_role(kind, output, snapshot, proposal=None):
         ):
             raise ValueError("review needs passed, findings and summary")
     if kind == "review":
+        for finding in parsed["findings"]:
+            if isinstance(finding, str):
+                continue
+            if not isinstance(finding, dict) or finding.get("severity") not in {
+                "blocking",
+                "warning",
+                "nit",
+            }:
+                raise ValueError("review findings need a valid severity")
+            for key in ("rule_id", "file", "message", "evidence"):
+                if not isinstance(finding.get(key), str):
+                    raise ValueError(f"review finding {key} must be a string")
+            if finding.get("line") is not None and type(finding["line"]) is not int:
+                raise ValueError("review finding line must be an integer")
+        if parsed["passed"] and any(
+            isinstance(finding, dict) and finding.get("severity") == "blocking"
+            for finding in parsed["findings"]
+        ):
+            raise ValueError("a review with blocking findings cannot pass")
         expected = {c["id"]: c for c in (proposal or {}).get("acceptance", [])}
         assessments = parsed.get("criteria")
         if not expected or not isinstance(assessments, list):

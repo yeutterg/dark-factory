@@ -171,13 +171,16 @@ class ExternalWorkMixin(ControllerCore):
             "work_item_id": wid,
             "worktree": str(path),
             "base": snapshot["base"],
+            "base_commit": snapshot["base"],
+            "repo_url": snapshot["source"].get("remote", ""),
+            "branch_suggestion": f"dark-factory/contrib/{wid}/1",
             "allowed_paths": snapshot["source"]["allowed_paths"],
             "protected_paths": snapshot["source"].get("protected_paths", []),
             "contributor": ext["actor"],
         }
 
     @atomic
-    def work_submit(self, wid, actor):
+    def work_submit(self, wid, actor, bundle=None):
         """Capture the worktree as an immutable submission. Edits made afterwards, by
         the agent or anyone, cannot change what the factory builds and reviews."""
         self._owned(wid, actor)
@@ -186,13 +189,49 @@ class ExternalWorkMixin(ControllerCore):
             raise ControllerError(
                 f"nothing to submit to (status: {root['status']}); get the plan approved"
             )
-        ext = self._external_row(wid)
-        if not ext["worktree"] or not Path(ext["worktree"]).is_dir():
-            raise ControllerError("run work-checkout first")
         if self.store.one(
             "SELECT 1 FROM external_submissions WHERE root_id=? AND consumed=0", (wid,)
         ):
             raise ControllerError("a candidate is already waiting to be checked")
+        ext = self._external_row(wid)
+        bundle_tree = None
+        temporary = None
+        if bundle is not None:
+            import base64
+            import binascii
+            import tempfile
+
+            from dark_factory.execution.packages import MAX_BYTES
+
+            try:
+                raw = base64.b64decode(bundle, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ControllerError("submission bundle is not valid base64") from exc
+            if not raw or len(raw) > MAX_BYTES:
+                raise ControllerError("submission bundle exceeds the transport limit")
+            temporary = Path(
+                tempfile.mkdtemp(prefix="submission-", dir=self.cfg.state_dir)
+            )
+            bundle_path = temporary / "candidate.bundle"
+            bundle_path.write_bytes(raw)
+            snapshot = json.loads(root["snapshot_json"])
+            try:
+                bundle_tree = temporary / "tree"
+                clone(Path(snapshot["input_repo"]), bundle_tree, snapshot["base"])
+                git(bundle_tree, "bundle", "verify", str(bundle_path))
+                git(bundle_tree, "fetch", str(bundle_path), "HEAD")
+                git(bundle_tree, "checkout", "--detach", "FETCH_HEAD")
+                if not self._contained_submission_base(
+                    bundle_tree, snapshot["base"], "FETCH_HEAD"
+                ):
+                    raise ControllerError(
+                        "submission bundle does not descend from the approved base"
+                    )
+            except BaseException:
+                shutil.rmtree(temporary, ignore_errors=True)
+                raise
+        elif not ext["worktree"] or not Path(ext["worktree"]).is_dir():
+            raise ControllerError("run work-checkout first or submit a git bundle")
         seq = (
             self.store.one(
                 "SELECT COALESCE(MAX(seq),0) n FROM external_submissions WHERE root_id=?",
@@ -202,12 +241,16 @@ class ExternalWorkMixin(ControllerCore):
         )
         captured = self.cfg.state_dir / SUBMISSION_DIR / wid / str(seq)
         captured.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(
-            ext["worktree"],
-            captured,
-            symlinks=True,
-            ignore=shutil.ignore_patterns(".git"),
-        )
+        try:
+            shutil.copytree(
+                bundle_tree or Path(ext["worktree"]),
+                captured,
+                symlinks=True,
+                ignore=shutil.ignore_patterns(".git"),
+            )
+        finally:
+            if temporary is not None:
+                shutil.rmtree(temporary, ignore_errors=True)
         snapshot = json.loads(root["snapshot_json"])
         self.store.execute(
             "INSERT INTO external_submissions(root_id,seq,path,digest,plan_digest,base,created_at)"
@@ -223,7 +266,17 @@ class ExternalWorkMixin(ControllerCore):
             ),
         )
         self.store.audit(actor, "work.submit", {"root": wid, "seq": seq})
+        if bundle_tree:
+            shutil.rmtree(bundle_tree.parent, ignore_errors=True)
         return self.work_status(wid, actor)
+
+    @staticmethod
+    def _contained_submission_base(repository, base, head):
+        try:
+            git(repository, "merge-base", "--is-ancestor", base, head)
+            return True
+        except Exception:
+            return False
 
     def work_status(self, wid, actor=None):
         root = self.store.one("SELECT * FROM work_items WHERE id=?", (wid,))
@@ -290,7 +343,7 @@ class ExternalWorkMixin(ControllerCore):
                 "base": snapshot.get("target_branch") or "main",
                 "head_sha": candidate["commit"],
                 "title": title,
-                "body": body,
+                "body": body.rstrip() + f"\n\nDark-Factory-Root: {root['id']}\n",
             },
             actor,
         )

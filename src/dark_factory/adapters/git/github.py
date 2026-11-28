@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
+import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
@@ -31,6 +36,122 @@ def api(path, method="GET", payload=None):
             f"GitHub request failed ({code}): {err.decode(errors='replace')[-1000:]}"
         )
     return json.loads(out) if out.strip() else {}
+
+
+def download_artifact(repo, payload):
+    import os
+
+    from dark_factory.execution.packages import MAX_BYTES
+
+    artifact_id = payload.get("artifact_id")
+    expected = str(payload.get("expected_digest", "")).removeprefix("sha256:")
+    destination = Path(str(payload.get("destination_path", "")))
+    if type(artifact_id) is not int or artifact_id <= 0:
+        raise ContractError("positive artifact id required")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ContractError("artifact SHA-256 digest required")
+    if not destination.is_absolute() or destination.exists():
+        raise ContractError("destination must be a new absolute path")
+    argv = [
+        "gh",
+        "api",
+        f"repos/{repo}/actions/artifacts/{artifact_id}/zip",
+        "-H",
+        "Accept: application/vnd.github+json",
+    ]
+
+    def limit_file_size():
+        import resource
+
+        resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_BYTES, MAX_BYTES))
+
+    with tempfile.TemporaryFile() as archive, tempfile.TemporaryFile() as errors:
+        process = subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=archive,
+            stderr=errors,
+            cwd=Path.cwd(),
+            env=dict(os.environ),
+            start_new_session=True,
+            preexec_fn=limit_file_size,
+        )
+        try:
+            code = process.wait(timeout=120)
+        except subprocess.TimeoutExpired as exc:
+            process.kill()
+            process.wait()
+            raise ContractError("GitHub artifact download timed out") from exc
+        errors.seek(0, 2)
+        error_size = errors.tell()
+        errors.seek(max(0, error_size - 500))
+        error = errors.read().decode(errors="replace")
+        archive.seek(0, 2)
+        size = archive.tell()
+        if code or not size or size > MAX_BYTES:
+            raise ContractError("GitHub artifact download failed: " + error)
+        archive.seek(0)
+        digest = hashlib.sha256()
+        while chunk := archive.read(1024 * 1024):
+            digest.update(chunk)
+        if digest.hexdigest() != expected:
+            raise ContractError("downloaded artifact digest did not match code host")
+        archive.seek(0)
+        files = []
+        total = 0
+        names = set()
+        try:
+            destination.mkdir(parents=True, mode=0o700)
+            with zipfile.ZipFile(archive) as bundle:
+                if len(bundle.infolist()) > 100000:
+                    raise ContractError("artifact contains too many files")
+                for member in bundle.infolist():
+                    relative = Path(member.filename)
+                    mode = member.external_attr >> 16
+                    if member.is_dir():
+                        continue
+                    if (
+                        relative.is_absolute()
+                        or ".." in relative.parts
+                        or not relative.parts
+                        or relative.as_posix() in names
+                        or mode & 0o170000 == 0o120000
+                        or member.flag_bits & 0x1
+                    ):
+                        raise ContractError(
+                            "artifact contains an unsafe, duplicate, or encrypted file"
+                        )
+                    names.add(relative.as_posix())
+                    total += member.file_size
+                    if total > MAX_BYTES:
+                        raise ContractError("expanded artifact exceeds the size limit")
+                    target = destination / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    item_digest = hashlib.sha256()
+                    written = 0
+                    with bundle.open(member) as source, target.open("xb") as output:
+                        while chunk := source.read(1024 * 1024):
+                            written += len(chunk)
+                            if written > member.file_size or written > MAX_BYTES:
+                                raise ContractError(
+                                    "expanded artifact exceeds its declared size"
+                                )
+                            item_digest.update(chunk)
+                            output.write(chunk)
+                    files.append(
+                        {
+                            "name": f"{destination.name}/{relative.as_posix()}",
+                            "size": written,
+                            "sha256": item_digest.hexdigest(),
+                        }
+                    )
+        except BaseException:
+            shutil.rmtree(destination, ignore_errors=True)
+            raise
+    if not files:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise ContractError("artifact archive was empty")
+    return {"files": files, "archive_sha256": expected}
 
 
 BRANCH = re.compile(r"dark-factory/[a-z0-9][a-z0-9._/-]{2,100}")
@@ -153,7 +274,9 @@ def handle(request):
         "operation": op,
         "ok": True,
     }
-    if op == "inspect_pr":
+    if op == "download_run_artifact":
+        result["evidence"] = download_artifact(repo, payload)
+    elif op == "inspect_pr":
         number = payload.get("number")
         if type(number) is not int or number <= 0:
             raise ContractError("positive PR number required")
@@ -180,6 +303,8 @@ def handle(request):
             "base_ref": pr["base"]["ref"],
             "state": pr["state"],
             "merged": pr["merged"],
+            "merge_commit_sha": pr.get("merge_commit_sha"),
+            "merged_at": pr.get("merged_at"),
             "mergeable": pr["mergeable"],
             "checks": checks["check_runs"],
             "statuses": statuses["statuses"],

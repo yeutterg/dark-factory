@@ -228,8 +228,8 @@ COMMANDS: dict[str, OperatorCommand] = {
         ),
         OperatorCommand(
             "work-submit",
-            lambda c, p, a: c.work_submit(p["work_item_id"], a),
-            ("work_item_id",),
+            lambda c, p, a: c.work_submit(p["work_item_id"], a, p.get("bundle")),
+            ("work_item_id", "bundle"),
             render=_pretty,
             contributor=True,
         ),
@@ -242,8 +242,10 @@ COMMANDS: dict[str, OperatorCommand] = {
         ),
         OperatorCommand(
             "release-start",
-            lambda c, p, a: c.release_start(p["repo"], p["kind"], a, p.get("ref")),
-            ("repo", "kind", "ref"),
+            lambda c, p, a: c.release_start(
+                p["repo"], p["kind"], a, p.get("ref"), p.get("version")
+            ),
+            ("repo", "kind", "ref", "version"),
             render=_pretty,
         ),
         OperatorCommand(
@@ -254,7 +256,9 @@ COMMANDS: dict[str, OperatorCommand] = {
         ),
         OperatorCommand(
             "release-approve",
-            lambda c, p, a: c.release_approve(p["release_id"], p["gate"], a),
+            lambda c, p, a: c.release_approve(
+                p["release_id"], p["gate"], a, asynchronous=True
+            ),
             ("release_id", "gate"),
             render=_pretty,
         ),
@@ -297,6 +301,24 @@ COMMANDS: dict[str, OperatorCommand] = {
         OperatorCommand(
             "completeness-report",
             lambda c, p, a: c.completeness_report(),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "quality-run",
+            lambda c, p, a: c.quality_tick(a, force=True, only_repo=p.get("repo")),
+            ("repo",),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "quality-status",
+            lambda c, p, a: c.quality_status(p.get("repo")),
+            ("repo",),
+            render=_pretty,
+        ),
+        OperatorCommand(
+            "quality-pattern-approve",
+            lambda c, p, a: c.quality_pattern_approve(p["pattern_id"], a),
+            ("pattern_id",),
             render=_pretty,
         ),
         OperatorCommand("disk", lambda c, p, a: c.disk_usage(), render=_pretty),
@@ -369,7 +391,12 @@ LOCAL_ONLY = frozenset(
         "pipeline-validate",  # Reads a repository's pipeline from git without state.
         "init-repo",  # Writes files into a local repository.
         "improve",  # Reads local evidence; performs no external action.
+        "eval-capture",  # Exports a local verified history fixture.
+        "eval-run",  # Runs an offline local golden suite.
+        "eval-report",  # Reads local eval history.
         "execution-worker",  # Separate outbound worker process.
+        "runner",  # Ergonomic alias for the outbound worker process.
+        "mcp",  # Contributor-scoped stdio bridge to the operator API.
         "adapter",  # JSON command adapters invoked by the controller.
         "restore",  # Writes a new state directory.
         "backup",  # Copies the owned state directory.

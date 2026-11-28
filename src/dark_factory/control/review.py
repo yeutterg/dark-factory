@@ -610,4 +610,5 @@ class ReviewMixin(ControllerCore):
             ],
             "improvements": stored_improvements(self.store, self.cfg),
             "improvement_loop": self.improvement_status(),
+            "quality_observer": self.quality_status(),
         }

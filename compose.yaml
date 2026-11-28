@@ -21,6 +21,7 @@ services:
     <<: *runtime
     build:
       context: .
+      target: runtime
     command: ["--config", "/config/factory.toml", "serve"]
     environment:
       COMPOSE_OPERATOR_TOKEN: ${COMPOSE_OPERATOR_TOKEN:?Run ./scripts/compose-init}

@@ -21,6 +21,7 @@ SCHEMA_VERSION = 1
 DEFAULT_DISK = {
     "min_free_gb": 2,
     "max_state_gb": 0,
+    "max_cache_gb": 0,
     "keep_finished_days": 7,
     "keep_audit_days": 90,
 }
@@ -40,6 +41,8 @@ DEFAULT_DECIDER_CONFIDENCE = 0.8
 DEFAULT_TASK_SUPERVISOR_REQUESTS = 20
 DEFAULT_TASK_SUPERVISOR_INPUT_TOKENS = 4000
 DEFAULT_TASK_SUPERVISOR_OUTPUT_TOKENS = 800
+DEFAULT_QUALITY_INPUT_TOKENS = 16000
+DEFAULT_QUALITY_OUTPUT_TOKENS = 2000
 DEFAULT_MAX_SECONDS = 7200
 DEFAULT_LEASE_SECONDS = 30
 BLOCKED_REGIONS = {"CN", "CHINA", "PRC"}
@@ -209,6 +212,7 @@ class FactoryConfig:
         return {
             "min_free_gb": table.get("min_free_gb", DEFAULT_DISK["min_free_gb"]),
             "max_state_gb": table.get("max_state_gb", DEFAULT_DISK["max_state_gb"]),
+            "max_cache_gb": table.get("max_cache_gb", DEFAULT_DISK["max_cache_gb"]),
             "keep_finished_days": table.get(
                 "keep_finished_days", DEFAULT_DISK["keep_finished_days"]
             ),
@@ -266,6 +270,34 @@ class FactoryConfig:
             ),
             "max_output_tokens": table.get(
                 "max_output_tokens", DEFAULT_TASK_SUPERVISOR_OUTPUT_TOKENS
+            ),
+        }
+
+    @property
+    def quality_observer(self) -> dict[str, Any]:
+        """Read-only evidence observer and recurring-pattern analysis cadence."""
+        table = self._table("quality_observer")
+        if not table or not table.get("enabled", True):
+            return {"enabled": False}
+        return {
+            "enabled": table.get("enabled", True),
+            "command": table.get("command", "quality-observer"),
+            "repositories": list(table.get("repositories", self.repositories)),
+            "observer_interval_seconds": table.get("observer_interval_seconds", 86400),
+            "pattern_interval_seconds": table.get(
+                "pattern_interval_seconds", 3 * 86400
+            ),
+            "after_agent_prs": table.get("after_agent_prs", 5),
+            "model": table["model"],
+            "provider": table["provider"],
+            "region": table["region"],
+            "pricing_evidence": table["pricing_evidence"],
+            "budget_cents": table.get("budget_cents", 25),
+            "max_input_tokens": table.get(
+                "max_input_tokens", DEFAULT_QUALITY_INPUT_TOKENS
+            ),
+            "max_output_tokens": table.get(
+                "max_output_tokens", DEFAULT_QUALITY_OUTPUT_TOKENS
             ),
         }
 
@@ -493,6 +525,58 @@ def _parse_routes(
         ):
             _integer(task_supervisor, key, default, minimum)
 
+    quality = raw.get("quality_observer", {})
+    if not isinstance(quality, dict):
+        raise ConfigError("quality_observer must be a table")
+    _fields(
+        quality,
+        {
+            "enabled",
+            "command",
+            "repositories",
+            "observer_interval_seconds",
+            "pattern_interval_seconds",
+            "after_agent_prs",
+            "model",
+            "provider",
+            "region",
+            "pricing_evidence",
+            "budget_cents",
+            "max_input_tokens",
+            "max_output_tokens",
+        },
+        "quality_observer",
+    )
+    if quality:
+        if "enabled" in quality and type(quality["enabled"]) is not bool:
+            raise ConfigError("quality_observer.enabled must be a boolean")
+    if quality and quality.get("enabled", True):
+        for key in ("model", "provider", "region", "pricing_evidence"):
+            if not isinstance(quality.get(key), str) or not quality[key].strip():
+                raise ConfigError(f"quality_observer.{key} is required")
+        if quality["region"].upper() in blocked:
+            raise ConfigError("quality observer region is blocked by geography policy")
+        repos = quality.get("repositories", raw.get("repositories", []))
+        if (
+            not isinstance(repos, list)
+            or not repos
+            or any(repo not in raw.get("repositories", []) for repo in repos)
+        ):
+            raise ConfigError(
+                "quality_observer.repositories must name configured repositories"
+            )
+        for key, default, minimum in (
+            ("observer_interval_seconds", 86400, 3600),
+            ("pattern_interval_seconds", 3 * 86400, 86400),
+            ("after_agent_prs", 5, 1),
+            ("budget_cents", 25, 1),
+            ("max_input_tokens", DEFAULT_QUALITY_INPUT_TOKENS, 4000),
+            ("max_output_tokens", DEFAULT_QUALITY_OUTPUT_TOKENS, 200),
+        ):
+            _integer(quality, key, default, minimum)
+        if quality.get("max_output_tokens", DEFAULT_QUALITY_OUTPUT_TOKENS) > 8192:
+            raise ConfigError("quality_observer.max_output_tokens must be <= 8192")
+
     for rid, item in routes_raw.items():
         if not isinstance(item, dict):
             raise ConfigError(f"route {rid!r} must be a table")
@@ -655,6 +739,8 @@ def _normalize_sources(
             source,
             {
                 "path",
+                "remote",
+                "trusted_adoption_commit",
                 "revision",
                 "checks",
                 "allowed_paths",
@@ -673,8 +759,37 @@ def _normalize_sources(
             raise ConfigError("source target_branch must be a branch name")
         if "require_live_evidence" in source:
             _require(source, "require_live_evidence", bool)
-        path = Path(_resolve(source_path.parent, _require(source, "path", str)))
-        if not path.is_dir():
+        remote = source.get("remote")
+        local_path = source.get("path")
+        if bool(remote) == bool(local_path):
+            raise ConfigError("source requires exactly one of path or remote")
+        if remote:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(remote)
+            if (
+                not isinstance(remote, str)
+                or parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ConfigError("source remote must be an HTTPS repository URL")
+            safe = repo.replace("/", "__").replace(".", "_")
+            state_dir = Path(_resolve(source_path.parent, raw["project"]["state_dir"]))
+            path = state_dir / "mirrors" / f"{safe}.git"
+            trusted = source.get("trusted_adoption_commit")
+            if trusted is not None and (
+                not isinstance(trusted, str)
+                or not re.fullmatch(r"[a-fA-F0-9]{40,64}", trusted)
+            ):
+                raise ConfigError("trusted_adoption_commit must be a full commit id")
+        else:
+            assert isinstance(local_path, str)
+            path = Path(_resolve(source_path.parent, local_path))
+        if not remote and not path.is_dir():
             raise ConfigError(f"source repository does not exist: {path}")
         revision = _require(source, "revision", str)
         if not revision or revision.startswith("-"):
@@ -703,10 +818,10 @@ def _normalize_sources(
             raise ConfigError(
                 "sources must explicitly pin protected verification definitions"
             )
-        if not source.get("checks") or not source.get("allowed_paths"):
-            raise ConfigError(
-                "source needs canonical checks and explicit allowed_paths"
-            )
+        if not source.get("allowed_paths"):
+            raise ConfigError("source needs explicit allowed_paths")
+        if not source.get("checks"):
+            raise ConfigError("source needs canonical checks")
         for cid in source["checks"]:
             if cid not in commands:
                 raise ConfigError(f"unknown verification command {cid}")
@@ -841,6 +956,7 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
             "workers",
             "decider",
             "task_supervisor",
+            "quality_observer",
             "definition",
             "improvement",
             "disk",
@@ -883,7 +999,18 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
     operators = raw.get("operators", {})
     if not isinstance(operators, dict):
         raise ConfigError("operators must be a table")
-    _fields(operators, {"humans"}, "operators")
+    _fields(
+        operators,
+        {
+            "humans",
+            "require_distinct_approvers",
+            "require_distinct_reviewer_model",
+        },
+        "operators",
+    )
+    for key in ("require_distinct_approvers", "require_distinct_reviewer_model"):
+        if key in operators and type(operators[key]) is not bool:
+            raise ConfigError(f"operators.{key} must be a boolean")
     humans = operators.get("humans", [])
     if (
         not isinstance(humans, list)
@@ -1043,6 +1170,13 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         and supervisor_table.get("command", "task-supervisor") not in commands
     ):
         raise ConfigError("task_supervisor.command must name a configured command")
+    quality_table = raw.get("quality_observer", {})
+    if (
+        quality_table
+        and quality_table.get("enabled", True)
+        and quality_table.get("command", "quality-observer") not in commands
+    ):
+        raise ConfigError("quality_observer.command must name a configured command")
 
     prompts_raw = raw.get("prompts", {})
     if not isinstance(prompts_raw, dict):
@@ -1120,11 +1254,18 @@ def validate_raw(raw: dict[str, Any], source_path: Path, digest: str) -> Factory
         raise ConfigError("disk must be a table")
     _fields(
         disk,
-        {"min_free_gb", "max_state_gb", "keep_finished_days", "keep_audit_days"},
+        {
+            "min_free_gb",
+            "max_state_gb",
+            "max_cache_gb",
+            "keep_finished_days",
+            "keep_audit_days",
+        },
         "disk",
     )
     _integer(disk, "min_free_gb", DEFAULT_DISK["min_free_gb"], 0)
     _integer(disk, "max_state_gb", DEFAULT_DISK["max_state_gb"], 0)
+    _integer(disk, "max_cache_gb", DEFAULT_DISK["max_cache_gb"], 0)
     _integer(disk, "keep_finished_days", DEFAULT_DISK["keep_finished_days"], 1)
     _integer(disk, "keep_audit_days", DEFAULT_DISK["keep_audit_days"], 1)
     _validate_improvement(raw, repositories, normalized_sources, state_dir)

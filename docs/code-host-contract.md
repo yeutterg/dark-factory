@@ -22,6 +22,7 @@ GitHub's API; a test enforces it.
 | `find_run` | `repo`, `request_id` | `run_id` or null | Null unless exactly one run matches. |
 | `get_run` | `repo`, `run_id` | `status`, `conclusion`, `url`, `head_sha` | Read only. |
 | `list_run_artifacts` | `repo`, `run_id` | `artifacts[]`: `name`, `size`, `digest`, `id` | Only the run's own artifacts, with the digest the host computed. |
+| `download_run_artifact` | `repo`, `run_id`, `artifact_id`, `expected_digest`, `destination_path` | `files[]`: `name`, `size`, `sha256` | Downloads the exact artifact, verifies its host digest, and rejects traversal and symlinks while extracting. |
 
 Every request carries `contract_version`, `request_id`, `operation` and `input`; every result carries
 `ok`, `operation`, `evidence` and echoes the request id. Operations the adapter does not know fail with

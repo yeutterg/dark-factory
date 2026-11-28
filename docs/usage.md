@@ -179,6 +179,66 @@ No supervisor calls occur on polling, heartbeats or idle refreshes. Failures lea
 events visible and pending. Unknown failed-call usage consumes the per-call
 reservation; there is no automatic larger-model fallback.
 
+### Evidence-driven quality observer
+
+The optional per-repository quality observer turns agent history into a bounded
+feedback loop. Once a day, or after evidence from several agent pull requests,
+it records only evidence-backed observations. Every three days it asks for
+recurring causes, requiring two observations and two distinct evidence records
+before persisting a pattern. Diffs, failed attempts, external reviews, task
+events and recorded human corrections are considered when available; the run
+reports sources it could not access.
+
+The observer is deliberately separate from the JEV decision adapter. JEV answers
+bounded choices in the execution path; this job extracts structured qualitative
+records and can run on a small inexpensive model. Code validates evidence IDs,
+deduplicates records, enforces cadence and cost, and rejects invented support.
+There is no larger-model fallback.
+
+```toml
+[quality_observer]
+enabled = true
+command = "quality-observer"
+repositories = ["owner/repository"]
+provider = "your-provider"
+model = "your-small-observer-model"
+region = "US"
+pricing_evidence = "provider price page and verification date"
+observer_interval_seconds = 86400
+pattern_interval_seconds = 259200
+after_agent_prs = 5
+budget_cents = 25
+max_input_tokens = 16000
+max_output_tokens = 2000
+
+[commands.quality-observer]
+argv = ["dark-factory", "adapter", "quality-observer",
+  "--endpoint", "https://provider.example/v1/chat/completions",
+  "--model", "your-small-observer-model",
+  "--api-key-env", "QUALITY_OBSERVER_API_KEY",
+  "--input-price-per-million", "0.30",
+  "--output-price-per-million", "1.20"]
+timeout_seconds = 45
+```
+
+The controller keeps the requested Markdown views under
+`<state_dir>/quality/<repository>/.agent-observations/`, rather than dirtying a
+live source checkout. `quality-run` forces a run, and `quality-status` reports
+the queue and report paths. Pattern approval is an explicit human operation:
+
+```bash
+dark-factory --config factory.toml quality-run --repo owner/repository
+dark-factory --config factory.toml quality-status --repo owner/repository
+dark-factory --config factory.toml quality-pattern-approve <pattern-id> --actor greg
+```
+
+Approval records the recommendation. Architecture, API, deterministic-check and
+verification-workflow patterns remain inert for a person to implement. Only an
+`agent instruction` pattern can enter the existing self-improvement pipeline,
+which is still restricted to prompts and skills, uses a separate checkout, and
+ends at a draft pull request. Merge, acceptance and installation remain human
+decisions.
+
 To connect from a different host or override the configured loopback endpoint:
 
 ```bash

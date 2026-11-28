@@ -34,14 +34,32 @@ class PolicyMixin(ControllerCore):
 
         try:
             candidate = load_config(self.cfg.source_path)
+            from dark_factory.mirrors import sync_all
+
+            sync_all(candidate)
             if candidate.state_dir != self.cfg.state_dir:
                 raise ConfigError("reload cannot move controller state")
             if (
                 candidate.project_id != self.cfg.project_id
                 or candidate.project_name != self.cfg.project_name
-                or candidate.repositories != self.cfg.repositories
             ):
                 raise ConfigError("reload cannot change project ownership")
+            removed = set(self.cfg.repositories) - set(candidate.repositories)
+            for repo in removed:
+                active_work = self.store.one(
+                    """SELECT 1 FROM work_items WHERE repo=? AND status NOT IN
+                    ('accepted','failed','cancelled','rejected') LIMIT 1""",
+                    (repo,),
+                )
+                active_release = self.store.one(
+                    """SELECT 1 FROM releases WHERE repo=? AND status NOT IN
+                    ('released','rolled_back','cancelled','failed') LIMIT 1""",
+                    (repo,),
+                )
+                if active_work or active_release:
+                    raise ConfigError(
+                        f"reload cannot remove {repo} while its work is non-terminal"
+                    )
         except (ConfigError, OSError) as exc:
             self.store.audit(actor, "config.reload_failed", {"error": str(exc)})
             return False
@@ -68,15 +86,17 @@ class PolicyMixin(ControllerCore):
         finally:
             scope.depth -= 1
             if not scope.depth:
-                scope.policy = None
+                scope.policies = None
 
-    def _policy(self) -> dict:
+    def _policy(self, repo=None) -> dict:
         scope = self._decision_scope
         if not getattr(scope, "depth", 0):
-            return self._evaluate_policy()
-        if getattr(scope, "policy", None) is None:
-            scope.policy = self._evaluate_policy()
-        return scope.policy
+            return self._evaluate_policy(repo)
+        if getattr(scope, "policies", None) is None:
+            scope.policies = {}
+        if repo not in scope.policies:
+            scope.policies[repo] = self._evaluate_policy(repo)
+        return scope.policies[repo]
 
     def _approval_current(self, row) -> bool:
         """Whether the recorded approval still covers the current inputs."""
@@ -84,7 +104,7 @@ class PolicyMixin(ControllerCore):
             self._approval_payload(row["id"])
         )
 
-    def _evaluate_policy(self) -> dict:
+    def _evaluate_policy(self, repo=None) -> dict:
         # Availability can narrow at any time; the approved execution authority stays fixed.
 
         package = {
@@ -99,7 +119,9 @@ class PolicyMixin(ControllerCore):
                 "routes": {k: vars(v) for k, v in self.cfg.routes.items()},
                 "commands": self._bindings(),
                 "assets": self._assets(),
-                "sources": self.cfg.sources,
+                "sources": (
+                    {repo: self.cfg.sources.get(repo)} if repo else self.cfg.sources
+                ),
                 "execution": self.cfg.execution,
                 "operators": self.cfg.raw.get("operators", {}),
                 "continuation": {
@@ -216,5 +238,5 @@ class PolicyMixin(ControllerCore):
                 for j in self.jobs(wid)
             ],
             "ceiling": row["spending_ceiling_cents"],
-            "policy": self._policy(),
+            "policy": self._policy(row["repo"]),
         }

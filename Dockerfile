@@ -90,6 +90,11 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENTRYPOINT ["dark-factory"]
 CMD ["--config", "/config/factory.toml", "serve"]
 
+# Outbound-only runner image. Mount runner.toml and its state directory at run time.
+FROM runtime AS runner
+ENTRYPOINT ["dark-factory", "runner"]
+CMD ["--profile", "/config/runner.toml"]
+
 # This image contains the supervisor/operator client and exactly pinned Pi, Claude
 # Code and Codex harnesses. It never bakes in inference
 # credentials. Live workers receive project-scoped credentials at runtime and run

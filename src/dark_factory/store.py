@@ -137,13 +137,17 @@ def new_id(prefix: str) -> str:
 
 # State schema version. Each version above MIN_SCHEMA_VERSION has one step in
 # MIGRATIONS, run in order inside a transaction; a step must be safe to repeat.
-# Version 4 added milestone checkpoints and advisory completeness assessments;
-# the idempotent schema below creates both for existing stores.
-SCHEMA_VERSION = 4
+# Version 5 unifies release/worker execution state. Version 6 adds deterministic
+# metrics and offline evaluation history. The idempotent schema below creates
+# the same shape for both new and upgraded stores.
+SCHEMA_VERSION = 7
 MIN_SCHEMA_VERSION = 2
 MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     3: lambda conn: None,
     4: lambda conn: None,
+    5: lambda conn: None,
+    6: lambda conn: None,
+    7: lambda conn: None,
 }
 
 _OWNERS: dict[str, tuple[int, Any, int]] = {}
@@ -232,6 +236,8 @@ class Store:
                 "created_at": "TEXT",
                 "accepted_at": "TEXT",
                 "origin": "TEXT NOT NULL DEFAULT 'tracker'",
+                "merge_commit_sha": "TEXT",
+                "merged_at": "TEXT",
             },
             "jobs": {
                 "plan_version": "INTEGER",
@@ -247,6 +253,11 @@ class Store:
                 "pid_identity": "TEXT",
                 "cleanup_status": "TEXT",
                 "credentials_scrubbed": "INTEGER NOT NULL DEFAULT 0",
+                "release_id": "TEXT",
+                "release_stage": "TEXT",
+            },
+            "workers": {
+                "telemetry_json": "TEXT NOT NULL DEFAULT '{}'",
             },
         }.items():
             present = {
@@ -370,7 +381,73 @@ class Store:
             reserved_cents INTEGER NOT NULL DEFAULT 0,
             UNIQUE(root_id,input_digest),
             FOREIGN KEY(root_id) REFERENCES work_items(id));
+        CREATE TABLE IF NOT EXISTS release_items (
+            release_id TEXT NOT NULL, work_item_id TEXT NOT NULL,
+            commit_sha TEXT NOT NULL, included INTEGER NOT NULL DEFAULT 1,
+            added_by TEXT NOT NULL, added_at TEXT NOT NULL,
+            PRIMARY KEY(release_id,work_item_id),
+            FOREIGN KEY(release_id) REFERENCES releases(id),
+            FOREIGN KEY(work_item_id) REFERENCES work_items(id));
+        CREATE TABLE IF NOT EXISTS commit_metrics (
+            repo TEXT NOT NULL, commit_sha TEXT NOT NULL, stage TEXT NOT NULL,
+            name TEXT NOT NULL, value REAL NOT NULL, attempt_id TEXT,
+            recorded_at TEXT NOT NULL,
+            PRIMARY KEY(repo,commit_sha,stage,name));
+        CREATE TABLE IF NOT EXISTS eval_runs (
+            id TEXT PRIMARY KEY, suite TEXT NOT NULL, route_id TEXT,
+            rubric_digest TEXT, baseline_id TEXT, status TEXT NOT NULL,
+            started_at TEXT NOT NULL, ended_at TEXT, cost_cents INTEGER NOT NULL DEFAULT 0,
+            report_json TEXT NOT NULL DEFAULT '{}');
+        CREATE TABLE IF NOT EXISTS eval_case_results (
+            run_id TEXT NOT NULL, case_id TEXT NOT NULL, status TEXT NOT NULL,
+            should_block INTEGER, blocked INTEGER, rules_json TEXT NOT NULL DEFAULT '[]',
+            cost_cents INTEGER NOT NULL DEFAULT 0, latency_seconds REAL,
+            detail_json TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY(run_id,case_id),
+            FOREIGN KEY(run_id) REFERENCES eval_runs(id));
+        CREATE TABLE IF NOT EXISTS quality_observations (
+            id TEXT PRIMARY KEY, repo TEXT NOT NULL, fingerprint TEXT NOT NULL,
+            observed_at TEXT NOT NULL, title TEXT NOT NULL,
+            evidence_json TEXT NOT NULL, root_ids_json TEXT NOT NULL DEFAULT '[]',
+            what_happened TEXT NOT NULL, why_it_matters TEXT NOT NULL,
+            category TEXT NOT NULL, similar_json TEXT NOT NULL DEFAULT '[]',
+            confidence TEXT NOT NULL, created_at TEXT NOT NULL,
+            UNIQUE(repo,fingerprint));
+        CREATE TABLE IF NOT EXISTS quality_patterns (
+            id TEXT PRIMARY KEY, repo TEXT NOT NULL, fingerprint TEXT NOT NULL,
+            analyzed_at TEXT NOT NULL, name TEXT NOT NULL,
+            supporting_json TEXT NOT NULL, root_cause TEXT NOT NULL,
+            repetition_reason TEXT NOT NULL, prevention_layer TEXT NOT NULL,
+            systemic_change TEXT NOT NULL, verification TEXT NOT NULL,
+            confidence TEXT NOT NULL, uncertainty TEXT NOT NULL,
+            approved_by TEXT, approved_at TEXT, improvement_root_id TEXT,
+            UNIQUE(repo,fingerprint));
+        CREATE TABLE IF NOT EXISTS quality_runs (
+            id TEXT PRIMARY KEY, repo TEXT NOT NULL, kind TEXT NOT NULL,
+            status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT,
+            evidence_count INTEGER NOT NULL DEFAULT 0,
+            new_count INTEGER NOT NULL DEFAULT 0,
+            duplicate_count INTEGER NOT NULL DEFAULT 0,
+            inaccessible_json TEXT NOT NULL DEFAULT '[]',
+            model TEXT, cost_cents INTEGER NOT NULL DEFAULT 0,
+            error TEXT);
+        CREATE TABLE IF NOT EXISTS quality_evidence_seen (
+            repo TEXT NOT NULL, evidence_id TEXT NOT NULL, seen_at TEXT NOT NULL,
+            run_id TEXT NOT NULL, PRIMARY KEY(repo,evidence_id));
         """)
+        release_columns = {
+            "version": "TEXT",
+            "bundle_mode": "TEXT NOT NULL DEFAULT 'train'",
+            "base_commit": "TEXT",
+            "manifest_json": "TEXT NOT NULL DEFAULT '{}'",
+            "unattributed_commits_json": "TEXT NOT NULL DEFAULT '[]'",
+            "verify_next_poll_at": "TEXT",
+            "verify_started_at": "TEXT",
+        }
+        present = {row[1] for row in self.conn.execute("PRAGMA table_info(releases)")}
+        for column, kind in release_columns.items():
+            if column not in present:
+                self.conn.execute(f"ALTER TABLE releases ADD COLUMN {column} {kind}")
         present = {
             row[1] for row in self.conn.execute("PRAGMA table_info(supervisor_calls)")
         }
@@ -380,6 +457,13 @@ class Store:
         ):
             if column.split()[0] not in present:
                 self.conn.execute(f"ALTER TABLE supervisor_calls ADD COLUMN {column}")
+        pattern_columns = {
+            row[1] for row in self.conn.execute("PRAGMA table_info(quality_patterns)")
+        }
+        if "improvement_root_id" not in pattern_columns:
+            self.conn.execute(
+                "ALTER TABLE quality_patterns ADD COLUMN improvement_root_id TEXT"
+            )
         # Jobs created before these columns existed carry the same facts in spec_json
         # and a numeric position prefix in their identifier.
         self.conn.execute(
@@ -394,6 +478,7 @@ class Store:
         CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status);
         CREATE INDEX IF NOT EXISTS attempts_job ON attempts(job_id);
         CREATE INDEX IF NOT EXISTS attempts_status ON attempts(status);
+        CREATE INDEX IF NOT EXISTS attempts_release ON attempts(release_id, release_stage);
         CREATE INDEX IF NOT EXISTS evidence_attempt ON evidence(attempt_id);
         CREATE INDEX IF NOT EXISTS audit_action ON audit(action, at);
         CREATE INDEX IF NOT EXISTS costs_root ON costs(root_id);
@@ -403,6 +488,14 @@ class Store:
         CREATE INDEX IF NOT EXISTS task_instructions_attempt ON task_instructions(attempt_id, state);
         CREATE INDEX IF NOT EXISTS attempt_checkpoints_job
             ON attempt_checkpoints(job_id, sequence, created_at);
+        CREATE INDEX IF NOT EXISTS release_items_work ON release_items(work_item_id);
+        CREATE INDEX IF NOT EXISTS commit_metrics_commit ON commit_metrics(repo,commit_sha);
+        CREATE INDEX IF NOT EXISTS quality_observations_repo
+            ON quality_observations(repo,created_at);
+        CREATE INDEX IF NOT EXISTS quality_patterns_repo
+            ON quality_patterns(repo,analyzed_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS quality_one_running_kind
+            ON quality_runs(repo,kind) WHERE status='running';
         """)
         recorded = self.conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'"

@@ -23,6 +23,7 @@ CODE_HOST_OPERATIONS = (
     "find_run",
     "get_run",
     "list_run_artifacts",
+    "download_run_artifact",
 )
 
 

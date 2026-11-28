@@ -47,13 +47,12 @@ class ExecutionService:
         return row
 
     def _capabilities(self, worker):
+        settings = self.cfg.workers[worker]
         return [
             "native",
             *sorted({r.harness for r in self.cfg.routes.values()}),
-            *sorted(
-                "environment:" + name
-                for name in self.cfg.workers[worker]["environments"]
-            ),
+            *sorted("environment:" + name for name in settings["environments"]),
+            *("label:" + label for label in settings.get("labels", [])),
         ]
 
     def preflight(self, worker):
@@ -67,9 +66,39 @@ class ExecutionService:
             "routes": [
                 vars(r) for r in self.cfg.routes.values() if r.environment in choices
             ],
+            "worker": {
+                key: self.cfg.workers[worker].get(key, default)
+                for key, default in {
+                    "labels": [],
+                    "exclusive_labels": [],
+                    "max_parallel": 1,
+                    "max_load": 0.8,
+                    "min_free_gb": 2,
+                }.items()
+            },
         }
 
-    def claim(self, worker, request_id):
+    def _capacity_available(self, worker, capacity):
+        settings = self.cfg.workers[worker]
+        # Direct in-process callers and pre-capacity protocol clients retain the
+        # controller-side slot guard. New runner clients always report pressure.
+        if capacity is None:
+            return True
+        if not isinstance(capacity, dict):
+            return False
+        try:
+            load = float(capacity["load"])
+            free_gb = float(capacity["free_gb"])
+            slots = int(capacity["slots"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        return (
+            0 <= load <= settings.get("max_load", 0.8)
+            and free_gb >= settings.get("min_free_gb", 2)
+            and 1 <= slots <= settings.get("max_parallel", 1)
+        )
+
+    def claim(self, worker, request_id, capacity=None):
         if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
             raise ValueError("bounded request_id required")
         key = "dispatch:" + worker + ":" + request_id
@@ -81,15 +110,18 @@ class ExecutionService:
             self.ctrl.completeness_tick()
         with self.store.transaction():
             caps = self._capabilities(worker)
+            if not self._capacity_available(worker, capacity):
+                return None
             # An authenticated worker polling for work is online even when no
             # assignment is eligible. Preserve busy while an active lease owns
             # it; _claim changes the flag atomically when it assigns work.
             self.store.execute(
-                """INSERT INTO workers(id,capabilities,last_heartbeat,busy)
-                VALUES (?,?,?,0) ON CONFLICT(id) DO UPDATE SET
+                """INSERT INTO workers(id,capabilities,last_heartbeat,busy,telemetry_json)
+                VALUES (?,?,?,0,?) ON CONFLICT(id) DO UPDATE SET
                 capabilities=excluded.capabilities,
-                last_heartbeat=excluded.last_heartbeat""",
-                (worker, json.dumps(caps), now_iso()),
+                last_heartbeat=excluded.last_heartbeat,
+                telemetry_json=excluded.telemetry_json""",
+                (worker, json.dumps(caps), now_iso(), json.dumps(capacity or {})),
             )
             previous = self.store.get_op(key, "")
             if previous:
@@ -224,7 +256,7 @@ class ExecutionService:
             snapshot = json.loads(root["snapshot_json"])
             self.ctrl._require_root_scope(root)
             if (
-                snapshot["policy"] != self.ctrl._policy()
+                snapshot["policy"] != self.ctrl._policy(root["repo"])
                 or job["kind"] not in {"plan", "critique"}
                 and not self.ctrl._approval_current(root)
             ):

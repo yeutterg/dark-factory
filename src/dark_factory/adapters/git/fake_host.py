@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+from pathlib import Path
 from typing import Any
 
 from dark_factory.contracts import ContractError, validate_request
@@ -127,6 +129,9 @@ class FakeCodeHost:
             "statuses": [s for s in self.statuses if s["sha"] == pr["head_sha"]],
             "reviews": [],
             "review_comments": [],
+            "merged": pr.get("merged", False),
+            "merge_commit_sha": pr.get("merge_commit_sha"),
+            "merged_at": pr.get("merged_at"),
         }
 
     def op_list_open_prs(self, repo, p, rid):
@@ -191,3 +196,25 @@ class FakeCodeHost:
 
     def op_list_run_artifacts(self, repo, p, rid):
         return {"artifacts": []}
+
+    def op_download_run_artifact(self, repo, p, rid):
+        expected = str(p.get("expected_digest", "")).removeprefix("sha256:")
+        data = b"fake hosted artifact"
+        if hashlib.sha256(data).hexdigest() != expected:
+            raise ContractError("downloaded artifact digest did not match code host")
+        destination = Path(str(p.get("destination_path", "")))
+        if not destination.is_absolute() or destination.exists():
+            raise ContractError("destination must be a new absolute path")
+        destination.mkdir(parents=True)
+        target = destination / "package.bin"
+        target.write_bytes(data)
+        return {
+            "files": [
+                {
+                    "name": f"{destination.name}/package.bin",
+                    "size": len(data),
+                    "sha256": expected,
+                }
+            ],
+            "archive_sha256": expected,
+        }

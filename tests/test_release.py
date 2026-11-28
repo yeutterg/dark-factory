@@ -128,6 +128,30 @@ def test_two_human_decisions_and_the_manual_items_gate_production(world):
     assert rid in notes
 
 
+def test_explicit_release_run_consumes_a_queued_promotion_once(world, monkeypatch):
+    cfg, store, ctrl, repo, name = world
+    rid = ctrl.release_start(name, "prod", "operator")["release"]
+    run_automatic(ctrl, rid)
+    ctrl.release_approve(rid, "package", "greg")
+    run_automatic(ctrl, rid)
+    ctrl.release_confirm(rid, "Confirm on a lamp", "ada")
+    queued = ctrl.release_approve(rid, "promote", "ada", asynchronous=True)
+    assert queued["status"] == "promotion_approved"
+
+    calls = 0
+    original = ctrl._execute
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(ctrl, "_execute", counted)
+    assert ctrl.release_run_stage(rid)["status"] == "released"
+    assert ctrl._run_promote(rid)["status"] == "released"
+    assert calls == 1
+
+
 def test_a_changed_package_voids_the_approval(world):
     cfg, store, ctrl, repo, name = world
     rid = ctrl.release_start(name, "prod", "operator")["release"]
